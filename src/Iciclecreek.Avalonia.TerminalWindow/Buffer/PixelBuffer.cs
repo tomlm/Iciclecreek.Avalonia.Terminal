@@ -49,6 +49,14 @@ namespace Iciclecreek.Avalonia.TerminalWindow.Buffer
             set => _buffer[x, y] = value;
         }
 
+
+        [JsonIgnore]
+        public Pixel this[int x, int y]
+        {
+            get => _buffer[x, y];
+            set => _buffer[x, y] = value;
+        }
+
         [JsonIgnore]
         public Pixel this[PixelPoint point]
         {
@@ -84,7 +92,7 @@ namespace Iciclecreek.Avalonia.TerminalWindow.Buffer
                     }
                     else if (pixel.Width > 0)
                     {
-                        stringBuilder.Append(pixel.Foreground.Symbol.GetText());
+                        stringBuilder.Append(pixel.Symbol.GetText());
                         i += pixel.Width;
                     }
                     else

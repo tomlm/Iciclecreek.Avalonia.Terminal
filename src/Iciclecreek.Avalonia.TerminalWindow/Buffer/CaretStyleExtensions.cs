@@ -17,9 +17,5 @@ namespace Iciclecreek.Avalonia.TerminalWindow.Buffer
             return caretStyle != CaretStyle.None;
         }
 
-        public static bool IsCaret(this Pixel pixel)
-        {
-            return pixel.CaretStyle.IsCaret();
-        }
     }
 }
