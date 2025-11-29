@@ -405,7 +405,7 @@ namespace Iciclecreek.Avalonia.Terminal
                     y++;
                     if (y >= _pixels.Height)
                     {
-                        _pixels.ScrollUp(); // requires new PixelBuffer implementation with ScrollUp
+                        _pixels.ScrollUp(); 
                         y = _pixels.Height - 1;
                     }
                     continue;
@@ -598,23 +598,6 @@ namespace Iciclecreek.Avalonia.Terminal
                     context.FillRectangle(localSelectionBrush, selRect);
                 }
             }
-        }
-
-        private bool IsInSelection(int x, int y, (int X, int Y) selStart, (int X, int Y) selEnd)
-        {
-            if (y < selStart.Y || y > selEnd.Y)
-                return false;
-
-            if (y == selStart.Y && y == selEnd.Y)
-                return x >= selStart.X && x <= selEnd.X;
-
-            if (y == selStart.Y)
-                return x >= selStart.X;
-
-            if (y == selEnd.Y)
-                return x <= selEnd.X;
-
-            return true;
         }
     }
 }
