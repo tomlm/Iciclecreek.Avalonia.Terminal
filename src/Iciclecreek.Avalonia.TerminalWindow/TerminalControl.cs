@@ -23,7 +23,7 @@ namespace Iciclecreek.Avalonia.Terminal
         private Point? _selectionEnd;
         private bool _isSelecting;
 
-        // Backing field for direct property
+        // Buffer size backing
         private PixelSize _bufferSize = new PixelSize(80, 25);
 
         public static readonly DirectProperty<TerminalControl, PixelSize> BufferSizeProperty =
