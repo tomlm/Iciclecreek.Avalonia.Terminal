@@ -501,6 +501,37 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+        {
+            base.OnPointerWheelChanged(e);
+
+            // Number of lines to scroll per wheel notch
+            const int scrollLines = 3;
+
+            // Delta.Y is positive when scrolling up (towards user), negative when scrolling down
+            var delta = e.Delta.Y;
+
+            if (delta != 0)
+            {
+                // Scroll up (negative delta to ViewportY) when wheel scrolls up (positive delta)
+                // Scroll down (positive delta to ViewportY) when wheel scrolls down (negative delta)
+                int linesToScroll = (int)(-delta * scrollLines);
+
+                // Calculate new viewport position
+                int newViewportY = Math.Clamp(
+                    ViewportY + linesToScroll,
+                    0,
+                    MaxScrollback);
+
+                if (newViewportY != ViewportY)
+                {
+                    ViewportY = newViewportY;
+                }
+
+                e.Handled = true;
+            }
+        }
+
         protected override void OnGotFocus(GotFocusEventArgs e)
         {
             base.OnGotFocus(e);
