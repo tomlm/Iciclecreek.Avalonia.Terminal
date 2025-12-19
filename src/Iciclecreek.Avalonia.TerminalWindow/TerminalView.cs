@@ -26,6 +26,7 @@ namespace Iciclecreek.Terminal
         private double _charWidth;
         private double _charHeight;
         private int _bufferSize = 1000;
+        private bool _isAlternateBuffer;
 
         // Process management
         private IPtyConnection _ptyConnection;
@@ -34,6 +35,11 @@ namespace Iciclecreek.Terminal
         // Cursor blinking
         private DispatcherTimer _cursorBlinkTimer;
         private bool _cursorBlinkOn = true;  // Tracks blink state (on/off phase)
+
+        public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
+            AvaloniaProperty.RegisterDirect<TerminalView, bool>(
+                nameof(IsAlternateBuffer),
+                o => o.IsAlternateBuffer);
 
         public static readonly DirectProperty<TerminalView, int> BufferSizeProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, int>(
@@ -161,16 +167,16 @@ namespace Iciclecreek.Terminal
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
 
-            // Set initial scrollback
             _terminal = new XT.Terminal(new XT.Options.TerminalOptions()
             {
                 Cols = 80,
                 Rows = 24,
                 Scrollback = BufferSize,
             });
+            _isAlternateBuffer = _terminal.IsAlternateBufferActive;
 
-            // Subscribe to terminal data event - this is fired when terminal wants to send data (user input)
             _terminal.DataReceived += OnTerminalDataReceived;
+            _terminal.BufferChanged += OnTerminalBufferChanged;
 
             // Setup cursor blink timer
             _cursorBlinkTimer = new DispatcherTimer
@@ -179,6 +185,8 @@ namespace Iciclecreek.Terminal
             };
             _cursorBlinkTimer.Tick += OnCursorBlinkTick;
         }
+
+        public bool IsAlternateBuffer => _isAlternateBuffer;
 
         public int BufferSize
         {
@@ -367,6 +375,7 @@ namespace Iciclecreek.Terminal
         {
             _cursorBlinkTimer.Stop();
             _terminal.DataReceived -= OnTerminalDataReceived;
+            _terminal.BufferChanged -= OnTerminalBufferChanged;
             CleanupProcess();
         }
 
@@ -572,6 +581,22 @@ namespace Iciclecreek.Terminal
                 }
             }
 
+            InvalidateVisual();
+        }
+
+        private void OnTerminalBufferChanged(object? sender, XT.Events.TerminalEvents.BufferChangedEventArgs e)
+        {
+            var oldValue = _isAlternateBuffer;
+            _isAlternateBuffer = e.Buffer == XT.Common.BufferType.Alternate;
+
+            if (oldValue != _isAlternateBuffer)
+            {
+                RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
+            }
+
+            RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
+            RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
+            RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
             InvalidateVisual();
         }
 

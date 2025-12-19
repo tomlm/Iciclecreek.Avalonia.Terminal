@@ -108,7 +108,8 @@ namespace Iciclecreek.Terminal
         {
             if (e.Property == TerminalView.MaxScrollbackProperty ||
                 e.Property == TerminalView.ViewportLinesProperty ||
-                e.Property == TerminalView.ViewportYProperty)
+                e.Property == TerminalView.ViewportYProperty ||
+                e.Property == TerminalView.IsAlternateBufferProperty)
             {
                 UpdateScrollBar();
             }
@@ -118,6 +119,13 @@ namespace Iciclecreek.Terminal
         {
             if (_scrollBar == null || _terminalView == null)
                 return;
+
+            if (_terminalView.IsAlternateBuffer)
+            {
+                _scrollBar.IsVisible = false;
+                _scrollBar.Value = 0;
+                return;
+            }
 
             var maxScrollback = _terminalView.MaxScrollback;
             var viewportLines = _terminalView.ViewportLines;
