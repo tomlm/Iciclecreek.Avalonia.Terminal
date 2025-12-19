@@ -35,6 +35,7 @@ namespace Iciclecreek.Terminal
         // Cursor blinking
         private DispatcherTimer _cursorBlinkTimer;
         private bool _cursorBlinkOn = true;  // Tracks blink state (on/off phase)
+        private bool _suppressNextTextInput;
 
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
@@ -403,12 +404,10 @@ namespace Iciclecreek.Terminal
 
                 string sequence;
 
-                // Handle printable characters
-                if (!string.IsNullOrEmpty(e.KeySymbol) && e.KeySymbol.Length == 1 &&
-                    !char.IsControl(e.KeySymbol[0]) && xtermKey == null)
+                // Handle printable characters (prefer KeySymbol but fall back to key mapping so Alt+<char> works)
+                if (TryGetPrintableChar(e, out var keyChar) && xtermKey == null)
                 {
-                    // Regular character input
-                    sequence = _terminal.GenerateCharInput(e.KeySymbol[0], modifiers);
+                    sequence = _terminal.GenerateCharInput(keyChar, modifiers);
                 }
                 else if (xtermKey != null)
                 {
@@ -423,6 +422,7 @@ namespace Iciclecreek.Terminal
                 if (!string.IsNullOrEmpty(sequence))
                 {
                     SendToPty(sequence);
+                    _suppressNextTextInput = true; // We already sent the modifier-aware sequence
                     e.Handled = true;
                 }
             }
@@ -439,6 +439,13 @@ namespace Iciclecreek.Terminal
             if (_ptyConnection == null || string.IsNullOrEmpty(e.Text))
                 return;
 
+            if (_suppressNextTextInput)
+            {
+                _suppressNextTextInput = false;
+                e.Handled = true;
+                return;
+            }
+            
             try
             {
                 // For text input, send it directly (handles composition, IME, etc.)
@@ -681,6 +688,47 @@ namespace Iciclecreek.Terminal
                 return XT.Input.MouseButton.Right;
 
             return XT.Input.MouseButton.None;
+        }
+
+        private bool TryGetPrintableChar(KeyEventArgs e, out char character)
+        {
+            // Prefer the symbol provided by Avalonia (already respects layout)
+            if (!string.IsNullOrEmpty(e.KeySymbol) && e.KeySymbol.Length == 1 && !char.IsControl(e.KeySymbol[0]))
+            {
+                character = e.KeySymbol[0];
+                return true;
+            }
+
+            // Fallback mapping for cases where KeySymbol is empty (e.g., Alt+<char> on some platforms)
+            return TryMapKeyToChar(e.Key, e.KeyModifiers, out character);
+        }
+        
+        private bool TryMapKeyToChar(Key key, KeyModifiers modifiers, out char character)
+        {
+            character = default;
+
+            if (key >= Key.A && key <= Key.Z)
+            {
+                var offset = key - Key.A;
+                var isUpper = modifiers.HasFlag(KeyModifiers.Shift);
+                character = (char)((isUpper ? 'A' : 'a') + offset);
+                return true;
+            }
+
+            if (key >= Key.D0 && key <= Key.D9 && !modifiers.HasFlag(KeyModifiers.Shift))
+            {
+                var offset = key - Key.D0;
+                character = (char)('0' + offset);
+                return true;
+            }
+
+            if (key == Key.Space)
+            {
+                character = ' ';
+                return true;
+            }
+
+            return false;
         }
 
         private async void LaunchProcess()
