@@ -31,6 +31,8 @@ namespace Iciclecreek.Terminal
         // Process management
         private IPtyConnection _ptyConnection;
         private CancellationTokenSource _processCts;
+        private readonly object _ptyWriteLock = new();
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
         // Cursor blinking
         private DispatcherTimer _cursorBlinkTimer;
@@ -689,9 +691,12 @@ namespace Iciclecreek.Terminal
             try
             {
                 Debug.WriteLine(data);
-                var bytes = Encoding.UTF8.GetBytes(data);
-                _ptyConnection.WriterStream.Write(bytes, 0, bytes.Length);
-                _ptyConnection.WriterStream.Flush();
+                var bytes = Utf8NoBom.GetBytes(data);
+                lock (_ptyWriteLock)
+                {
+                    _ptyConnection.WriterStream.Write(bytes, 0, bytes.Length);
+                    _ptyConnection.WriterStream.Flush();
+                }
             }
             catch (Exception ex)
             {
