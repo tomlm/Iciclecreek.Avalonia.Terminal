@@ -504,7 +504,7 @@ namespace Iciclecreek.Terminal
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
 
-                var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties);
+                var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties, e.InitialPressMouseButton);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
 
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Up, modifiers);
@@ -519,6 +519,38 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            base.OnPointerMoved(e);
+
+            if (_ptyConnection == null)
+                return;
+
+            try
+            {
+                var point = e.GetPosition(this);
+                var col = (int)(point.X / _charWidth);
+                var row = (int)(point.Y / _charHeight);
+                var props = e.GetCurrentPoint(this).Properties;
+
+                var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
+                var button = ConvertPointerButton(props);
+                var eventType = (props.IsLeftButtonPressed || props.IsMiddleButtonPressed || props.IsRightButtonPressed)
+                    ? XT.Input.MouseEventType.Drag
+                    : XT.Input.MouseEventType.Move;
+
+                var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
+                if (!string.IsNullOrEmpty(sequence))
+                {
+                    SendToPty(sequence);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error handling mouse move: {ex.Message}");
+            }
+        }
+
         protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
         {
             base.OnPointerWheelChanged(e);
@@ -528,6 +560,25 @@ namespace Iciclecreek.Terminal
 
             // Delta.Y is positive when scrolling up (towards user), negative when scrolling down
             var delta = e.Delta.Y;
+
+            if (_ptyConnection != null && _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None)
+            {
+                var point = e.GetPosition(this);
+                var col = (int)(point.X / _charWidth);
+                var row = (int)(point.Y / _charHeight);
+                var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
+
+                var button = delta > 0 ? XT.Input.MouseButton.WheelUp : XT.Input.MouseButton.WheelDown;
+                var eventType = delta > 0 ? XT.Input.MouseEventType.WheelUp : XT.Input.MouseEventType.WheelDown;
+
+                var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
+                if (!string.IsNullOrEmpty(sequence))
+                {
+                    SendToPty(sequence);
+                    e.Handled = true;
+                    return;
+                }
+            }
 
             if (delta != 0)
             {
@@ -637,6 +688,7 @@ namespace Iciclecreek.Terminal
 
             try
             {
+                Debug.WriteLine(data);
                 var bytes = Encoding.UTF8.GetBytes(data);
                 _ptyConnection.WriterStream.Write(bytes, 0, bytes.Length);
                 _ptyConnection.WriterStream.Flush();
@@ -695,7 +747,7 @@ namespace Iciclecreek.Terminal
             return result;
         }
 
-        private XT.Input.MouseButton ConvertPointerButton(PointerPointProperties props)
+        private XT.Input.MouseButton ConvertPointerButton(PointerPointProperties props, MouseButton? releasedButton = null)
         {
             if (props.IsLeftButtonPressed)
                 return XT.Input.MouseButton.Left;
@@ -703,6 +755,17 @@ namespace Iciclecreek.Terminal
                 return XT.Input.MouseButton.Middle;
             if (props.IsRightButtonPressed)
                 return XT.Input.MouseButton.Right;
+
+            if (releasedButton.HasValue)
+            {
+                return releasedButton.Value switch
+                {
+                    MouseButton.Left => XT.Input.MouseButton.Left,
+                    MouseButton.Middle => XT.Input.MouseButton.Middle,
+                    MouseButton.Right => XT.Input.MouseButton.Right,
+                    _ => XT.Input.MouseButton.None
+                };
+            }
 
             return XT.Input.MouseButton.None;
         }
