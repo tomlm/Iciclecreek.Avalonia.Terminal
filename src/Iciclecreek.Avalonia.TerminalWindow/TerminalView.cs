@@ -1011,6 +1011,9 @@ namespace Iciclecreek.Terminal
                         typeface,
                         FontSize,
                         cell.GetForegroundBrush(this.Foreground));
+                    var td = cell.GetTextDecorations();
+                    if (td != null)
+                        formattedText.SetTextDecorations(td);
                     context.DrawText(formattedText, new Point(startX, startY));
                     x += text.Length;
                     Debug.Assert(text.Length > 0);

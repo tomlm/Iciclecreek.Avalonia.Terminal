@@ -20,6 +20,18 @@ namespace Iciclecreek.Avalonia.Terminal
             return FontStyle.Normal;
         }
 
+        public static TextDecorationCollection? GetTextDecorations(this BufferCell cell)
+        {
+            var decorations = new TextDecorationCollection();
+            if (cell.Attributes.IsUnderline())
+                return TextDecorations.Underline;
+            if (cell.Attributes.IsStrikethrough())
+                return TextDecorations.Strikethrough;
+            if (cell.Attributes.IsOverline())
+                return TextDecorations.Overline;
+            return null;
+        }
+
         /// <summary>
         /// Gets the background color as RGB values.
         /// Returns null if using default color or palette mode.
