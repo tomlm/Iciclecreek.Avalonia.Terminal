@@ -212,7 +212,7 @@ namespace Iciclecreek.Terminal
             {
                 var oldValue = _terminal.Buffer.ViewportY;
                 _terminal.Buffer.ViewportY = value;
-                
+
                 if (oldValue != _terminal.Buffer.ViewportY)
                 {
                     RaisePropertyChanged(ViewportYProperty, oldValue, _terminal.Buffer.ViewportY);
@@ -335,7 +335,7 @@ namespace Iciclecreek.Terminal
             {
                 var blink = (bool)change.NewValue!;
                 _terminal.Options.CursorBlink = blink;
-                
+
                 if (blink && IsFocused)
                 {
                     _cursorBlinkTimer.Start();
@@ -776,7 +776,7 @@ namespace Iciclecreek.Terminal
             // Fallback mapping for cases where KeySymbol is empty (e.g., Alt+<char> on some platforms)
             return TryMapKeyToChar(e.Key, e.KeyModifiers, out character);
         }
-        
+
         private bool TryMapKeyToChar(Key key, KeyModifiers modifiers, out char character)
         {
             character = default;
@@ -868,7 +868,7 @@ namespace Iciclecreek.Terminal
                     }
 
                     var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    
+
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
                         _terminal.Write(output);
@@ -974,7 +974,7 @@ namespace Iciclecreek.Terminal
             // Use the terminal buffer's ViewportY to determine what to render
             int viewportY = _terminal.Buffer.ViewportY;
             int viewportLines = _terminal.Rows;
-            
+
             int startLine = viewportY;
             int endLine = Math.Min(_terminal.Buffer.Length, startLine + viewportLines);
             for (int y = startLine; y < endLine; y++)
@@ -985,21 +985,61 @@ namespace Iciclecreek.Terminal
 
                 for (int x = 0; x < _terminal.Cols;)
                 {
-                    if (x >= line.Length) 
+                    if (x >= line.Length)
                         break;
                     var cell = line[x];
 
-                    var text = String.Join(String.Empty, line.Skip(x)
-                        .TakeWhile(cell2 => cell.Attributes == cell2.Attributes)
-                        .Select(cell2 => cell2.Content).ToArray());
+                    string text = String.Empty;
+                    int cellCount = 0;
+                    int runStartX =0;
 
-                    var startX = Snap(x * _charWidth, scale);
-                    var endX = Snap((x + text.Length) * _charWidth, scale);
+                    // Skip placeholder cells (width 0) that follow wide characters
+                    if (cell.Width == 0)
+                    {
+                        x++;
+                        continue;
+                    }
+                    else if (cell.Width == 1)
+                    {
+                        // Collect consecutive cells with same attributes
+                        var textBuilder = new StringBuilder();
+                        cellCount = 0;  // Total cell positions consumed (including wide char placeholders)
+                        runStartX = x;
+
+                        while (x < line.Length && x < _terminal.Cols)
+                        {
+                            var currentCell = line[x];
+
+                            // Stop if we hit a different attribute or a placeholder cell mid-run
+                            if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
+                                break;
+
+                            textBuilder.Append(currentCell.Content);
+                            cellCount += currentCell.Width;  // Wide chars add 2, normal chars add 1
+
+                            // Skip the placeholder cell that follows a wide character
+                            x += currentCell.Width;
+                        }
+                        text = textBuilder.ToString();
+                    }
+                    else if (cell.Width == 2)
+                    {
+                        text = cell.Content;
+                        cellCount = cell.Width;
+                        runStartX = x;
+                        x += cell.Width;  // Move past wide character and its placeholder
+                    }
+
+                    if (string.IsNullOrEmpty(text))
+                        continue;
+
+                    var startX = Snap(runStartX * _charWidth, scale);
+                    var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                     var startY = Snap((y - startLine) * _charHeight, scale);
                     var endY = Snap((y - startLine + 1) * _charHeight, scale);
                     var rect = new Rect(startX, startY, Math.Max(0, endX - startX), Math.Max(0, endY - startY));
 
-                    // draw rectangle for line
+                    // draw rectangle for line segment
                     context.FillRectangle(cell.GetBackgroundBrush(this.Background), rect);
 
                     // draw text
@@ -1015,8 +1055,6 @@ namespace Iciclecreek.Terminal
                     if (td != null)
                         formattedText.SetTextDecorations(td);
                     context.DrawText(formattedText, new Point(startX, startY));
-                    x += text.Length;
-                    Debug.Assert(text.Length > 0);
                 }
             }
 
@@ -1041,7 +1079,7 @@ namespace Iciclecreek.Terminal
             // The cursor Y is relative to the active screen area, need to check if it's visible
             // when scrolled. Cursor is at absolute position: Buffer.YBase + Buffer.Y
             int absoluteCursorY = _terminal.Buffer.YBase + cursorY;
-            
+
             // Check if cursor is visible in current viewport
             if (absoluteCursorY < viewportY || absoluteCursorY >= viewportY + _terminal.Rows)
                 return;
