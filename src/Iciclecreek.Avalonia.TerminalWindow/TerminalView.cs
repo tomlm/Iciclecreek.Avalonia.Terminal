@@ -142,6 +142,56 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
+        /// <summary>
+        /// Event raised when the terminal title changes.
+        /// </summary>
+        public event EventHandler<TitleChangedEventArgs>? TitleChanged;
+
+        /// <summary>
+        /// Event raised when a window move command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowMovedEventArgs>? WindowMoved;
+
+        /// <summary>
+        /// Event raised when a window resize command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowResizedEventArgs>? WindowResized;
+
+        /// <summary>
+        /// Event raised when a window minimize command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowMinimized;
+
+        /// <summary>
+        /// Event raised when a window maximize command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowMaximized;
+
+        /// <summary>
+        /// Event raised when a window restore command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowRestored;
+
+        /// <summary>
+        /// Event raised when a window raise command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowRaised;
+
+        /// <summary>
+        /// Event raised when a window lower command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowLowered;
+
+        /// <summary>
+        /// Event raised when a window fullscreen command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowFullscreened;
+
+        /// <summary>
+        /// Event raised when the terminal bell is activated.
+        /// </summary>
+        public event EventHandler? BellRang;
+
 
         static TerminalView()
         {
@@ -187,6 +237,16 @@ namespace Iciclecreek.Terminal
             _terminal.DataReceived += OnTerminalDataReceived;
             _terminal.BufferChanged += OnTerminalBufferChanged;
             _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
+            _terminal.TitleChanged += OnTerminalTitleChanged;
+            _terminal.WindowMoved += OnTerminalWindowMoved;
+            _terminal.WindowResized += OnTerminalWindowResized;
+            _terminal.WindowMinimized += OnTerminalWindowMinimized;
+            _terminal.WindowMaximized += OnTerminalWindowMaximized;
+            _terminal.WindowRestored += OnTerminalWindowRestored;
+            _terminal.WindowRaised += OnTerminalWindowRaised;
+            _terminal.WindowLowered += OnTerminalWindowLowered;
+            _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
+            _terminal.BellRang += OnTerminalBellRang;
 
             // Setup cursor blink timer
             _cursorBlinkTimer = new DispatcherTimer
@@ -387,6 +447,16 @@ namespace Iciclecreek.Terminal
             _terminal.DataReceived -= OnTerminalDataReceived;
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
+            _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.WindowMoved -= OnTerminalWindowMoved;
+            _terminal.WindowResized -= OnTerminalWindowResized;
+            _terminal.WindowMinimized -= OnTerminalWindowMinimized;
+            _terminal.WindowMaximized -= OnTerminalWindowMaximized;
+            _terminal.WindowRestored -= OnTerminalWindowRestored;
+            _terminal.WindowRaised -= OnTerminalWindowRaised;
+            _terminal.WindowLowered -= OnTerminalWindowLowered;
+            _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
+            _terminal.BellRang -= OnTerminalBellRang;
             CleanupProcess();
         }
 
@@ -718,6 +788,56 @@ namespace Iciclecreek.Terminal
             }
 
             InvalidateVisual();
+        }
+
+        private void OnTerminalTitleChanged(object? sender, XT.Events.TerminalEvents.TitleChangeEventArgs e)
+        {
+            TitleChanged?.Invoke(this, new TitleChangedEventArgs(e.Title));
+        }
+
+        private void OnTerminalWindowMoved(object? sender, XT.Events.TerminalEvents.WindowMovedEventArgs e)
+        {
+            WindowMoved?.Invoke(this, new WindowMovedEventArgs(e.X, e.Y));
+        }
+
+        private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
+        {
+            WindowResized?.Invoke(this, new WindowResizedEventArgs(e.Width, e.Height));
+        }
+
+        private void OnTerminalWindowMinimized(object? sender, EventArgs e)
+        {
+            WindowMinimized?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalWindowMaximized(object? sender, EventArgs e)
+        {
+            WindowMaximized?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalWindowRestored(object? sender, EventArgs e)
+        {
+            WindowRestored?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalWindowRaised(object? sender, EventArgs e)
+        {
+            WindowRaised?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalWindowLowered(object? sender, EventArgs e)
+        {
+            WindowLowered?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalWindowFullscreened(object? sender, EventArgs e)
+        {
+            WindowFullscreened?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalBellRang(object? sender, EventArgs e)
+        {
+            BellRang?.Invoke(this, EventArgs.Empty);
         }
 
         private async void OnTerminalDataReceived(object? sender, XT.Events.TerminalEvents.DataEventArgs e)
@@ -1468,6 +1588,49 @@ namespace Iciclecreek.Terminal
         public ProcessExitedEventArgs(int exitCode)
         {
             ExitCode = exitCode;
+        }
+    }
+
+    /// <summary>
+    /// EventArgs for the TitleChanged event.
+    /// </summary>
+    public class TitleChangedEventArgs : EventArgs
+    {
+        public string Title { get; }
+
+        public TitleChangedEventArgs(string title)
+        {
+            Title = title;
+        }
+    }
+
+    /// <summary>
+    /// EventArgs for the WindowMoved event.
+    /// </summary>
+    public class WindowMovedEventArgs : EventArgs
+    {
+        public int X { get; }
+        public int Y { get; }
+
+        public WindowMovedEventArgs(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
+    }
+
+    /// <summary>
+    /// EventArgs for the WindowResized event.
+    /// </summary>
+    public class WindowResizedEventArgs : EventArgs
+    {
+        public int Width { get; }
+        public int Height { get; }
+
+        public WindowResizedEventArgs(int width, int height)
+        {
+            Width = width;
+            Height = height;
         }
     }
 }

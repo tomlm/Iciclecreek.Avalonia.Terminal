@@ -1,0 +1,319 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
+using Avalonia.Media;
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+namespace Iciclecreek.Terminal
+{
+    /// <summary>
+    /// A Window that contains a TerminalControl and automatically handles window events
+    /// from the terminal (title changes, window manipulation commands, etc.).
+    /// </summary>
+    public class TerminalWindow : Window
+    {
+        private TerminalControl? _terminalControl;
+
+        /// <summary>
+        /// Event raised when the PTY process exits.
+        /// </summary>
+        public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+
+        /// <summary>
+        /// Event raised when the terminal title changes.
+        /// </summary>
+        public event EventHandler<TitleChangedEventArgs>? TitleChanged;
+
+        /// <summary>
+        /// Event raised when a window move command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowMovedEventArgs>? WindowMoved;
+
+        /// <summary>
+        /// Event raised when a window resize command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowResizedEventArgs>? WindowResized;
+
+        /// <summary>
+        /// Event raised when the terminal bell is activated.
+        /// </summary>
+        public event EventHandler? BellRang;
+
+        public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
+            AvaloniaProperty.Register<TerminalWindow, TextDecorationLocation?>(
+                nameof(TextDecorations),
+                defaultValue: null);
+
+        public static readonly StyledProperty<IBrush> SelectionBrushProperty =
+            AvaloniaProperty.Register<TerminalWindow, IBrush>(
+                nameof(SelectionBrush),
+                defaultValue: new SolidColorBrush(Color.FromArgb(128, 0, 120, 215)));
+
+        public static readonly StyledProperty<string> ProcessProperty =
+            AvaloniaProperty.Register<TerminalWindow, string>(
+                nameof(Process),
+                defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "sh");
+
+        public static readonly StyledProperty<IList<string>> ArgsProperty =
+            AvaloniaProperty.Register<TerminalWindow, IList<string>>(
+                nameof(Args),
+                defaultValue: Array.Empty<string>());
+
+        public static readonly StyledProperty<int> BufferSizeProperty =
+            AvaloniaProperty.Register<TerminalWindow, int>(
+                nameof(BufferSize),
+                defaultValue: 1000);
+
+        public static readonly StyledProperty<bool> CloseOnProcessExitProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(CloseOnProcessExit),
+                defaultValue: true);
+
+        public static readonly StyledProperty<bool> UpdateTitleFromTerminalProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(UpdateTitleFromTerminal),
+                defaultValue: true);
+
+        public static readonly StyledProperty<bool> HandleWindowCommandsProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(HandleWindowCommands),
+                defaultValue: true);
+
+        /// <summary>
+        /// Gets or sets the text decorations for the terminal.
+        /// </summary>
+        public TextDecorationLocation? TextDecorations
+        {
+            get => GetValue(TextDecorationsProperty);
+            set => SetValue(TextDecorationsProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the selection brush for the terminal.
+        /// </summary>
+        public IBrush SelectionBrush
+        {
+            get => GetValue(SelectionBrushProperty);
+            set => SetValue(SelectionBrushProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the process to launch in the terminal.
+        /// </summary>
+        public string Process
+        {
+            get => GetValue(ProcessProperty);
+            set => SetValue(ProcessProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the arguments for the process.
+        /// </summary>
+        public IList<string> Args
+        {
+            get => GetValue(ArgsProperty);
+            set => SetValue(ArgsProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the scrollback buffer size.
+        /// </summary>
+        public int BufferSize
+        {
+            get => GetValue(BufferSizeProperty);
+            set => SetValue(BufferSizeProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets whether the window should close when the process exits.
+        /// </summary>
+        public bool CloseOnProcessExit
+        {
+            get => GetValue(CloseOnProcessExitProperty);
+            set => SetValue(CloseOnProcessExitProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets whether the window title should be updated from terminal escape sequences.
+        /// </summary>
+        public bool UpdateTitleFromTerminal
+        {
+            get => GetValue(UpdateTitleFromTerminalProperty);
+            set => SetValue(UpdateTitleFromTerminalProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets whether window manipulation commands from the terminal should be handled.
+        /// </summary>
+        public bool HandleWindowCommands
+        {
+            get => GetValue(HandleWindowCommandsProperty);
+            set => SetValue(HandleWindowCommandsProperty, value);
+        }
+
+        static TerminalWindow()
+        {
+            BackgroundProperty.OverrideDefaultValue<TerminalWindow>(Brushes.Black);
+            ForegroundProperty.OverrideDefaultValue<TerminalWindow>(Brushes.White);
+        }
+
+        public TerminalWindow()
+        {
+            // Create the terminal control as content
+            _terminalControl = new TerminalControl();
+            Content = _terminalControl;
+
+            // Wire up events
+            _terminalControl.ProcessExited += OnTerminalControlProcessExited;
+            _terminalControl.TitleChanged += OnTerminalControlTitleChanged;
+            _terminalControl.WindowMoved += OnTerminalControlWindowMoved;
+            _terminalControl.WindowResized += OnTerminalControlWindowResized;
+            _terminalControl.WindowMinimized += OnTerminalControlWindowMinimized;
+            _terminalControl.WindowMaximized += OnTerminalControlWindowMaximized;
+            _terminalControl.WindowRestored += OnTerminalControlWindowRestored;
+            _terminalControl.WindowRaised += OnTerminalControlWindowRaised;
+            _terminalControl.WindowLowered += OnTerminalControlWindowLowered;
+            _terminalControl.WindowFullscreened += OnTerminalControlWindowFullscreened;
+            _terminalControl.BellRang += OnTerminalControlBellRang;
+
+            // Bind properties from Window to TerminalControl
+            _terminalControl.Bind(TerminalControl.FontFamilyProperty, this.GetObservable(FontFamilyProperty));
+            _terminalControl.Bind(TerminalControl.FontSizeProperty, this.GetObservable(FontSizeProperty));
+            _terminalControl.Bind(TerminalControl.FontStyleProperty, this.GetObservable(FontStyleProperty));
+            _terminalControl.Bind(TerminalControl.FontWeightProperty, this.GetObservable(FontWeightProperty));
+            _terminalControl.Bind(TemplatedControl.ForegroundProperty, this.GetObservable(ForegroundProperty));
+            _terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
+            _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
+            _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
+            _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
+            _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
+            _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
+        }
+
+        protected override void OnUnloaded(RoutedEventArgs e)
+        {
+            base.OnUnloaded(e);
+
+            if (_terminalControl != null)
+            {
+                _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
+                _terminalControl.TitleChanged -= OnTerminalControlTitleChanged;
+                _terminalControl.WindowMoved -= OnTerminalControlWindowMoved;
+                _terminalControl.WindowResized -= OnTerminalControlWindowResized;
+                _terminalControl.WindowMinimized -= OnTerminalControlWindowMinimized;
+                _terminalControl.WindowMaximized -= OnTerminalControlWindowMaximized;
+                _terminalControl.WindowRestored -= OnTerminalControlWindowRestored;
+                _terminalControl.WindowRaised -= OnTerminalControlWindowRaised;
+                _terminalControl.WindowLowered -= OnTerminalControlWindowLowered;
+                _terminalControl.WindowFullscreened -= OnTerminalControlWindowFullscreened;
+                _terminalControl.BellRang -= OnTerminalControlBellRang;
+            }
+        }
+
+        private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
+        {
+            ProcessExited?.Invoke(this, e);
+
+            if (CloseOnProcessExit)
+            {
+                Close();
+            }
+        }
+
+        private void OnTerminalControlTitleChanged(object? sender, TitleChangedEventArgs e)
+        {
+            TitleChanged?.Invoke(this, e);
+
+            if (UpdateTitleFromTerminal)
+            {
+                Title = e.Title;
+            }
+        }
+
+        private void OnTerminalControlWindowMoved(object? sender, WindowMovedEventArgs e)
+        {
+            WindowMoved?.Invoke(this, e);
+
+            if (HandleWindowCommands)
+            {
+                Position = new PixelPoint(e.X, e.Y);
+            }
+        }
+
+        private void OnTerminalControlWindowResized(object? sender, WindowResizedEventArgs e)
+        {
+            WindowResized?.Invoke(this, e);
+
+            if (HandleWindowCommands)
+            {
+                Width = e.Width;
+                Height = e.Height;
+            }
+        }
+
+        private void OnTerminalControlWindowMinimized(object? sender, EventArgs e)
+        {
+            if (HandleWindowCommands)
+            {
+                WindowState = WindowState.Minimized;
+            }
+        }
+
+        private void OnTerminalControlWindowMaximized(object? sender, EventArgs e)
+        {
+            if (HandleWindowCommands)
+            {
+                WindowState = WindowState.Maximized;
+            }
+        }
+
+        private void OnTerminalControlWindowRestored(object? sender, EventArgs e)
+        {
+            if (HandleWindowCommands)
+            {
+                WindowState = WindowState.Normal;
+            }
+        }
+
+        private void OnTerminalControlWindowRaised(object? sender, EventArgs e)
+        {
+            if (HandleWindowCommands)
+            {
+                Activate();
+            }
+        }
+
+        private void OnTerminalControlWindowLowered(object? sender, EventArgs e)
+        {
+            if (HandleWindowCommands)
+            {
+                // Avalonia doesn't have a direct "lower window" API, but we can try to deactivate
+                // This is a best-effort implementation
+                Topmost = false;
+            }
+        }
+
+        private void OnTerminalControlWindowFullscreened(object? sender, EventArgs e)
+        {
+            if (HandleWindowCommands)
+            {
+                WindowState = WindowState.FullScreen;
+            }
+        }
+
+        private void OnTerminalControlBellRang(object? sender, EventArgs e)
+        {
+            BellRang?.Invoke(this, EventArgs.Empty);
+            
+            // Default bell behavior - could flash the window or play a sound
+            // For now, just activate the window to get attention
+            if (!IsActive)
+            {
+                Activate();
+            }
+        }
+    }
+}

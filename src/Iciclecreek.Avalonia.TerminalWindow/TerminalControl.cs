@@ -18,6 +18,56 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
+        /// <summary>
+        /// Event raised when the terminal title changes.
+        /// </summary>
+        public event EventHandler<TitleChangedEventArgs>? TitleChanged;
+
+        /// <summary>
+        /// Event raised when a window move command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowMovedEventArgs>? WindowMoved;
+
+        /// <summary>
+        /// Event raised when a window resize command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowResizedEventArgs>? WindowResized;
+
+        /// <summary>
+        /// Event raised when a window minimize command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowMinimized;
+
+        /// <summary>
+        /// Event raised when a window maximize command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowMaximized;
+
+        /// <summary>
+        /// Event raised when a window restore command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowRestored;
+
+        /// <summary>
+        /// Event raised when a window raise command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowRaised;
+
+        /// <summary>
+        /// Event raised when a window lower command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowLowered;
+
+        /// <summary>
+        /// Event raised when a window fullscreen command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowFullscreened;
+
+        /// <summary>
+        /// Event raised when the terminal bell is activated.
+        /// </summary>
+        public event EventHandler? BellRang;
+
         public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
             AvaloniaProperty.Register<TerminalControl, TextDecorationLocation?>(
                 nameof(TextDecorations),
@@ -87,6 +137,16 @@ namespace Iciclecreek.Terminal
             {
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited -= OnTerminalViewProcessExited;
+                _terminalView.TitleChanged -= OnTerminalViewTitleChanged;
+                _terminalView.WindowMoved -= OnTerminalViewWindowMoved;
+                _terminalView.WindowResized -= OnTerminalViewWindowResized;
+                _terminalView.WindowMinimized -= OnTerminalViewWindowMinimized;
+                _terminalView.WindowMaximized -= OnTerminalViewWindowMaximized;
+                _terminalView.WindowRestored -= OnTerminalViewWindowRestored;
+                _terminalView.WindowRaised -= OnTerminalViewWindowRaised;
+                _terminalView.WindowLowered -= OnTerminalViewWindowLowered;
+                _terminalView.WindowFullscreened -= OnTerminalViewWindowFullscreened;
+                _terminalView.BellRang -= OnTerminalViewBellRang;
             }
 
             // Get template parts
@@ -99,6 +159,16 @@ namespace Iciclecreek.Terminal
                 _scrollBar.Scroll += OnScrollBarScroll;
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
+                _terminalView.TitleChanged += OnTerminalViewTitleChanged;
+                _terminalView.WindowMoved += OnTerminalViewWindowMoved;
+                _terminalView.WindowResized += OnTerminalViewWindowResized;
+                _terminalView.WindowMinimized += OnTerminalViewWindowMinimized;
+                _terminalView.WindowMaximized += OnTerminalViewWindowMaximized;
+                _terminalView.WindowRestored += OnTerminalViewWindowRestored;
+                _terminalView.WindowRaised += OnTerminalViewWindowRaised;
+                _terminalView.WindowLowered += OnTerminalViewWindowLowered;
+                _terminalView.WindowFullscreened += OnTerminalViewWindowFullscreened;
+                _terminalView.BellRang += OnTerminalViewBellRang;
                 UpdateScrollBar();
             }
         }
@@ -107,6 +177,56 @@ namespace Iciclecreek.Terminal
         {
             // Bubble up the event from TerminalView
             ProcessExited?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewTitleChanged(object? sender, TitleChangedEventArgs e)
+        {
+            TitleChanged?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewWindowMoved(object? sender, WindowMovedEventArgs e)
+        {
+            WindowMoved?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewWindowResized(object? sender, WindowResizedEventArgs e)
+        {
+            WindowResized?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewWindowMinimized(object? sender, EventArgs e)
+        {
+            WindowMinimized?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewWindowMaximized(object? sender, EventArgs e)
+        {
+            WindowMaximized?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewWindowRestored(object? sender, EventArgs e)
+        {
+            WindowRestored?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewWindowRaised(object? sender, EventArgs e)
+        {
+            WindowRaised?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewWindowLowered(object? sender, EventArgs e)
+        {
+            WindowLowered?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewWindowFullscreened(object? sender, EventArgs e)
+        {
+            WindowFullscreened?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewBellRang(object? sender, EventArgs e)
+        {
+            BellRang?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnScrollBarScroll(object? sender, ScrollEventArgs e)
