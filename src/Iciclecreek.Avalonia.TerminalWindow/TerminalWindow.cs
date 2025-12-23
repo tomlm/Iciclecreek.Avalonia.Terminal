@@ -42,6 +42,11 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler? BellRang;
 
+        /// <summary>
+        /// Event raised when window information is requested by the terminal.
+        /// </summary>
+        public event EventHandler<WindowInfoRequestedEventArgs>? WindowInfoRequested;
+
         public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
             AvaloniaProperty.Register<TerminalWindow, TextDecorationLocation?>(
                 nameof(TextDecorations),
@@ -178,6 +183,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.WindowLowered += OnTerminalControlWindowLowered;
             _terminalControl.WindowFullscreened += OnTerminalControlWindowFullscreened;
             _terminalControl.BellRang += OnTerminalControlBellRang;
+            _terminalControl.WindowInfoRequested += OnTerminalControlWindowInfoRequested;
 
             // Bind properties from Window to TerminalControl
             _terminalControl.Bind(TerminalControl.FontFamilyProperty, this.GetObservable(FontFamilyProperty));
@@ -210,6 +216,7 @@ namespace Iciclecreek.Terminal
                 _terminalControl.WindowLowered -= OnTerminalControlWindowLowered;
                 _terminalControl.WindowFullscreened -= OnTerminalControlWindowFullscreened;
                 _terminalControl.BellRang -= OnTerminalControlBellRang;
+                _terminalControl.WindowInfoRequested -= OnTerminalControlWindowInfoRequested;
             }
         }
 
@@ -313,6 +320,62 @@ namespace Iciclecreek.Terminal
             if (!IsActive)
             {
                 Activate();
+            }
+        }
+
+        private void OnTerminalControlWindowInfoRequested(object? sender, WindowInfoRequestedEventArgs e)
+        {
+            // Raise the event so external handlers can respond
+            WindowInfoRequested?.Invoke(this, e);
+            
+            // If not handled externally, provide default responses from the window
+            if (!e.Handled)
+            {
+                switch (e.Request)
+                {
+                    case XTerm.Common.WindowInfoRequest.State:
+                        e.IsIconified = WindowState == WindowState.Minimized;
+                        e.Handled = true;
+                        break;
+                        
+                    case XTerm.Common.WindowInfoRequest.Position:
+                        e.X = Position.X;
+                        e.Y = Position.Y;
+                        e.Handled = true;
+                        break;
+                        
+                    case XTerm.Common.WindowInfoRequest.SizePixels:
+                        e.WidthPixels = (int)Width;
+                        e.HeightPixels = (int)Height;
+                        e.Handled = true;
+                        break;
+                        
+                    case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
+                        // Get screen size from the current screen
+                        var screen = Screens.ScreenFromWindow(this);
+                        if (screen != null)
+                        {
+                            e.WidthPixels = (int)screen.Bounds.Width;
+                            e.HeightPixels = (int)screen.Bounds.Height;
+                            e.Handled = true;
+                        }
+                        break;
+                        
+                    case XTerm.Common.WindowInfoRequest.CellSizePixels:
+                        // Cell size is derived from font metrics in TerminalView
+                        // We need to expose this from the terminal control
+                        // For now, use reasonable defaults based on typical terminal fonts
+                        e.CellWidth = (int)(FontSize * 0.6);  // Approximate monospace width
+                        e.CellHeight = (int)(FontSize * 1.2); // Approximate line height
+                        e.Handled = true;
+                        break;
+                        
+                    case XTerm.Common.WindowInfoRequest.Title:
+                    case XTerm.Common.WindowInfoRequest.IconTitle:
+                        e.Title = Title;
+                        e.Handled = true;
+                        break;
+                }
             }
         }
     }

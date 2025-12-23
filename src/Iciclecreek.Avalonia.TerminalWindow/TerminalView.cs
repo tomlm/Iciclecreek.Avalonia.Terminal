@@ -192,6 +192,12 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler? BellRang;
 
+        /// <summary>
+        /// Event raised when window information is requested by the terminal.
+        /// The handler should set the response properties on the event args.
+        /// </summary>
+        public event EventHandler<WindowInfoRequestedEventArgs>? WindowInfoRequested;
+
 
         static TerminalView()
         {
@@ -247,6 +253,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowLowered += OnTerminalWindowLowered;
             _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
             _terminal.BellRang += OnTerminalBellRang;
+            _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
 
             // Setup cursor blink timer
             _cursorBlinkTimer = new DispatcherTimer
@@ -457,6 +464,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowLowered -= OnTerminalWindowLowered;
             _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
             _terminal.BellRang -= OnTerminalBellRang;
+            _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
             CleanupProcess();
         }
 
@@ -838,6 +846,27 @@ namespace Iciclecreek.Terminal
         private void OnTerminalBellRang(object? sender, EventArgs e)
         {
             BellRang?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
+        {
+            // Create our own event args and forward to subscribers
+            var args = new WindowInfoRequestedEventArgs(e.Request);
+            WindowInfoRequested?.Invoke(this, args);
+            
+            // Copy response data back to the terminal's event args
+            if (args.Handled)
+            {
+                e.Handled = true;
+                e.IsIconified = args.IsIconified;
+                e.X = args.X;
+                e.Y = args.Y;
+                e.WidthPixels = args.WidthPixels;
+                e.HeightPixels = args.HeightPixels;
+                e.CellWidth = args.CellWidth;
+                e.CellHeight = args.CellHeight;
+                e.Title = args.Title;
+            }
         }
 
         private async void OnTerminalDataReceived(object? sender, XT.Events.TerminalEvents.DataEventArgs e)
@@ -1631,6 +1660,68 @@ namespace Iciclecreek.Terminal
         {
             Width = width;
             Height = height;
+        }
+    }
+
+    /// <summary>
+    /// EventArgs for the WindowInfoRequested event.
+    /// The handler should set the appropriate response properties based on the Request type.
+    /// </summary>
+    public class WindowInfoRequestedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// The type of window information being requested.
+        /// </summary>
+        public XT.Common.WindowInfoRequest Request { get; }
+
+        /// <summary>
+        /// Set to true if the request was handled and a response should be sent.
+        /// </summary>
+        public bool Handled { get; set; }
+
+        /// <summary>
+        /// For State request: true if window is iconified (minimized), false otherwise.
+        /// </summary>
+        public bool IsIconified { get; set; }
+
+        /// <summary>
+        /// For Position request: X coordinate of window position in pixels.
+        /// </summary>
+        public int X { get; set; }
+
+        /// <summary>
+        /// For Position request: Y coordinate of window position in pixels.
+        /// </summary>
+        public int Y { get; set; }
+
+        /// <summary>
+        /// For SizePixels/ScreenSizePixels request: Width in pixels.
+        /// </summary>
+        public int WidthPixels { get; set; }
+
+        /// <summary>
+        /// For SizePixels/ScreenSizePixels request: Height in pixels.
+        /// </summary>
+        public int HeightPixels { get; set; }
+
+        /// <summary>
+        /// For CellSizePixels request: Cell width in pixels.
+        /// </summary>
+        public int CellWidth { get; set; }
+
+        /// <summary>
+        /// For CellSizePixels request: Cell height in pixels.
+        /// </summary>
+        public int CellHeight { get; set; }
+
+        /// <summary>
+        /// For Title/IconTitle request: The title string.
+        /// </summary>
+        public string? Title { get; set; }
+
+        public WindowInfoRequestedEventArgs(XT.Common.WindowInfoRequest request)
+        {
+            Request = request;
         }
     }
 }

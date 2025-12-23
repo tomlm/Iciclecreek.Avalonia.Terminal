@@ -68,6 +68,12 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler? BellRang;
 
+        /// <summary>
+        /// Event raised when window information is requested by the terminal.
+        /// The handler should set the response properties on the event args.
+        /// </summary>
+        public event EventHandler<WindowInfoRequestedEventArgs>? WindowInfoRequested;
+
         public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
             AvaloniaProperty.Register<TerminalControl, TextDecorationLocation?>(
                 nameof(TextDecorations),
@@ -147,6 +153,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.WindowLowered -= OnTerminalViewWindowLowered;
                 _terminalView.WindowFullscreened -= OnTerminalViewWindowFullscreened;
                 _terminalView.BellRang -= OnTerminalViewBellRang;
+                _terminalView.WindowInfoRequested -= OnTerminalViewWindowInfoRequested;
             }
 
             // Get template parts
@@ -169,6 +176,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.WindowLowered += OnTerminalViewWindowLowered;
                 _terminalView.WindowFullscreened += OnTerminalViewWindowFullscreened;
                 _terminalView.BellRang += OnTerminalViewBellRang;
+                _terminalView.WindowInfoRequested += OnTerminalViewWindowInfoRequested;
                 UpdateScrollBar();
             }
         }
@@ -227,6 +235,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewBellRang(object? sender, EventArgs e)
         {
             BellRang?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void OnTerminalViewWindowInfoRequested(object? sender, WindowInfoRequestedEventArgs e)
+        {
+            WindowInfoRequested?.Invoke(this, e);
         }
 
         private void OnScrollBarScroll(object? sender, ScrollEventArgs e)
