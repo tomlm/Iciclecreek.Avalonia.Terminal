@@ -1,9 +1,8 @@
 ﻿using Avalonia.Controls;
-using Iciclecreek.Terminal;
 
 namespace Demo.Views;
 
-public partial class MainWindow : TerminalWindow
+public partial class MainWindow : Window
 {
     public MainWindow()
     {
