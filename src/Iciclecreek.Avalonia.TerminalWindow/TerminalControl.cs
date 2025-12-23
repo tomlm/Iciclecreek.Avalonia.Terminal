@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
+using Avalonia.Styling;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -129,8 +130,41 @@ namespace Iciclecreek.Terminal
             set => SetValue(BufferSizeProperty, value);
         }
 
+        private static bool _stylesLoaded = false;
+
+        static TerminalControl()
+        {
+            // Automatically load the default theme styles
+            LoadDefaultStyles();
+        }
+
+        private static void LoadDefaultStyles()
+        {
+            if (_stylesLoaded || Application.Current == null)
+                return;
+
+            var uri = new Uri("avares://Iciclecreek.Avalonia.Terminal/Themes/Generic.axaml");
+
+            // Check if styles are already loaded to avoid duplicates
+            foreach (var style in Application.Current.Styles)
+            {
+                if (style is global::Avalonia.Markup.Xaml.Styling.StyleInclude include && include.Source == uri)
+                {
+                    _stylesLoaded = true;
+                    return;
+                }
+            }
+
+            var styles = (IStyle)new global::Avalonia.Markup.Xaml.Styling.StyleInclude(uri) { Source = uri };
+            Application.Current.Styles.Add(styles);
+            _stylesLoaded = true;
+        }
+
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
         {
+            // Ensure styles are loaded (handles case where static constructor ran before Application was ready)
+            LoadDefaultStyles();
+
             base.OnApplyTemplate(e);
 
             // Unsubscribe from old controls
