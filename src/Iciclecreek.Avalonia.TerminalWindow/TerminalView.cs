@@ -40,6 +40,9 @@ namespace Iciclecreek.Terminal
         private DispatcherTimer _cursorBlinkTimer;
         private bool _cursorBlinkOn = true;
 
+        // Unique identifier for this terminal instance (for debugging)
+        private readonly Guid _instanceId = Guid.NewGuid();
+
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
                 nameof(IsAlternateBuffer),
@@ -479,10 +482,25 @@ namespace Iciclecreek.Terminal
 
         protected override async void OnKeyDown(KeyEventArgs e)
         {
-            base.OnKeyDown(e);
-
-            if (_ptyConnection == null)
+            // Only process input if this terminal has focus
+            if (!IsFocused)
+            {
+                base.OnKeyDown(e);
                 return;
+            }
+
+            // Capture the connection reference locally
+            var ptyConnection = _ptyConnection;
+            if (ptyConnection == null)
+            {
+                base.OnKeyDown(e);
+                return;
+            }
+
+            // Mark as handled early to prevent other controls from processing
+            e.Handled = true;
+
+            Debug.WriteLine($"[{_instanceId}] OnKeyDown: Key={e.Key}, IsFocused={IsFocused}");
 
             try
             {
@@ -493,7 +511,6 @@ namespace Iciclecreek.Terminal
                     if (!string.IsNullOrEmpty(sequence))
                     {
                         await SendToPtyAsync(sequence);
-                        e.Handled = true;
                     }
                     return;
                 }
@@ -509,7 +526,6 @@ namespace Iciclecreek.Terminal
                     if (!string.IsNullOrEmpty(sequence))
                     {
                         await SendToPtyAsync(sequence);
-                        e.Handled = true;
                     }
                     return;
                 }
@@ -523,7 +539,6 @@ namespace Iciclecreek.Terminal
                         if (!string.IsNullOrEmpty(sequence))
                         {
                             await SendToPtyAsync(sequence);
-                            e.Handled = true;
                         }
                     }
                 }
@@ -531,16 +546,26 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error handling key input: {ex.Message}");
+                Debug.WriteLine($"[{_instanceId}] Error handling key input: {ex.Message}");
             }
         }
 
         protected override async void OnKeyUp(KeyEventArgs e)
         {
-            base.OnKeyUp(e);
-
-            if (_ptyConnection == null)
+            // Only process input if this terminal has focus
+            if (!IsFocused)
+            {
+                base.OnKeyUp(e);
                 return;
+            }
+
+            // Capture the connection reference locally
+            var ptyConnection = _ptyConnection;
+            if (ptyConnection == null)
+            {
+                base.OnKeyUp(e);
+                return;
+            }
 
             try
             {
@@ -557,20 +582,32 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error handling key up: {ex.Message}");
+                Debug.WriteLine($"[{_instanceId}] Error handling key up: {ex.Message}");
             }
         }
 
         protected override async void OnTextInput(TextInputEventArgs e)
         {
-            base.OnTextInput(e);
-
-            if (_ptyConnection == null || string.IsNullOrEmpty(e.Text))
+            // Only process input if this terminal has focus
+            if (!IsFocused)
+            {
+                base.OnTextInput(e);
                 return;
+            }
+
+            // Capture the connection reference locally
+            var ptyConnection = _ptyConnection;
+            if (ptyConnection == null || string.IsNullOrEmpty(e.Text))
+            {
+                base.OnTextInput(e);
+                return;
+            }
 
             // In Win32 Input Mode, text input is handled via KeyDown/KeyUp events
             if (_terminal.Win32InputMode)
                 return;
+
+            Debug.WriteLine($"[{_instanceId}] OnTextInput: Text='{e.Text}', IsFocused={IsFocused}");
 
             try
             {
@@ -579,7 +616,7 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error handling text input: {ex.Message}");
+                Debug.WriteLine($"[{_instanceId}] Error handling text input: {ex.Message}");
             }
         }
 
@@ -728,6 +765,8 @@ namespace Iciclecreek.Terminal
         {
             base.OnGotFocus(e);
 
+            Debug.WriteLine($"[{_instanceId}] OnGotFocus");
+
             // Reset blink state to visible when focused
             _cursorBlinkOn = true;
             if (CursorBlink)
@@ -750,6 +789,8 @@ namespace Iciclecreek.Terminal
         protected override async void OnLostFocus(RoutedEventArgs e)
         {
             base.OnLostFocus(e);
+
+            Debug.WriteLine($"[{_instanceId}] OnLostFocus");
 
             // Stop blinking when not focused, but keep cursor visible (hollow block)
             _cursorBlinkTimer.Stop();
@@ -877,22 +918,20 @@ namespace Iciclecreek.Terminal
 
         private async Task SendToPtyAsync(string data)
         {
-            if (_ptyConnection == null || string.IsNullOrEmpty(data))
+            // Capture the connection reference locally to avoid any potential race conditions
+            var ptyConnection = _ptyConnection;
+            if (ptyConnection == null || string.IsNullOrEmpty(data))
                 return;
 
             try
             {
                 var bytes = Utf8NoBom.GetBytes(data);
-                await _ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length);
-                // write could fail which causes _ptyConnection to go away.
-                if (_ptyConnection != null)
-                {
-                    await _ptyConnection.WriterStream.FlushAsync();
-                }
+                await ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length);
+                await ptyConnection.WriterStream.FlushAsync();
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error writing to PTY: {ex.Message}");
+                Debug.WriteLine($"[{_instanceId}] Error writing to PTY: {ex.Message}");
             }
         }
 

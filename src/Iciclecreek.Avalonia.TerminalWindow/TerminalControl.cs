@@ -174,8 +174,18 @@ namespace Iciclecreek.Terminal
         {
             base.OnGotFocus(e);
 
-            // Defer until layout is ready, then focus the inner TerminalView
-            Dispatcher.UIThread.Post(() => _terminalView?.Focus(), DispatcherPriority.Input);
+            // Only focus the inner TerminalView if it doesn't already have focus
+            if (_terminalView != null && !_terminalView.IsFocused)
+            {
+                // Defer until layout is ready
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_terminalView != null && !_terminalView.IsFocused)
+                    {
+                        _terminalView.Focus();
+                    }
+                }, DispatcherPriority.Input);
+            }
         }
 
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)

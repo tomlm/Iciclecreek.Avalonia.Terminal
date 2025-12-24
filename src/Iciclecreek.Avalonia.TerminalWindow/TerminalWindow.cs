@@ -207,14 +207,27 @@ namespace Iciclecreek.Terminal
 
         private void OnOpened(object? sender, EventArgs e)
         {
-            // Defer focus until layout is ready
-            Dispatcher.UIThread.Post(() => _terminalControl?.Focus(), DispatcherPriority.Input);
+            // Defer focus until layout is ready, but only if this window is active
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (IsActive)
+                {
+                    _terminalControl?.Focus();
+                }
+            }, DispatcherPriority.Input);
         }
 
         private void OnActivated(object? sender, EventArgs e)
         {
             // Defer focus until layout is ready
-            Dispatcher.UIThread.Post(() => _terminalControl?.Focus(), DispatcherPriority.Input);
+            // Only focus the terminal if it doesn't already have focus
+            Dispatcher.UIThread.Post(() => 
+            {
+                if (_terminalControl != null && !_terminalControl.IsFocused)
+                {
+                    _terminalControl.Focus();
+                }
+            }, DispatcherPriority.Input);
         }
 
         protected override void OnUnloaded(RoutedEventArgs e)
@@ -308,7 +321,7 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalControlWindowRaised(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
+            if (HandleWindowCommands && !IsActive)
             {
                 Activate();
             }
@@ -337,11 +350,9 @@ namespace Iciclecreek.Terminal
             BellRang?.Invoke(this, EventArgs.Empty);
             
             // Default bell behavior - could flash the window or play a sound
-            // For now, just activate the window to get attention
-            if (!IsActive)
-            {
-                Activate();
-            }
+            // Note: We intentionally do NOT activate the window here as it would
+            // steal focus from other terminal windows and cause input routing issues.
+            // Applications can subscribe to BellRang event for custom behavior.
         }
 
         private void OnTerminalControlWindowInfoRequested(object? sender, WindowInfoRequestedEventArgs e)
