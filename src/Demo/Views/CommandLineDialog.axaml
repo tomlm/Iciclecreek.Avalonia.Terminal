@@ -11,7 +11,9 @@
         CanResize="False">
 	<Grid Margin="16" RowDefinitions="Auto,Auto,*,Auto">
 		<TextBlock Grid.Row="0" Text="Enter the command line to run:" Margin="0,0,0,8"/>
-		<TextBox Grid.Row="1" x:Name="CommandLineTextBox" Watermark="e.g., cmd.exe or /bin/bash"/>
+		<TextBox Grid.Row="1" 
+           x:Name="CommandLineTextBox" 
+           Watermark="e.g., cmd.exe or /bin/bash"/>
 		<StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
 			<Button Content="Start" Click="OnStartClicked" IsDefault="True" Width="80"/>
 			<Button Content="Cancel" Click="OnCancelClicked" IsCancel="True" Width="80"/>

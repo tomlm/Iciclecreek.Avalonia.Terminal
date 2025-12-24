@@ -10,6 +10,7 @@ public partial class CommandLineDialog : Window
     public CommandLineDialog()
     {
         InitializeComponent();
+        this.CommandLineTextBox.Focus();
     }
 
     private void OnStartClicked(object? sender, RoutedEventArgs e)
