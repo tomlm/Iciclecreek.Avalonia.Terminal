@@ -5,7 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Iciclecreek.Avalonia.Terminal;
-using Pty.Net;
+using Porta.Pty;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
