@@ -1,4 +1,4 @@
-sname: BuildAndRunTests
+name: BuildAndRunTests
 
 on:
   workflow_dispatch:
