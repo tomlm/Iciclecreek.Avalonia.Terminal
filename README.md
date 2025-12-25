@@ -4,6 +4,7 @@ A cross-platform XTerm terminal emulator control for [Avalonia UI](https://avalo
 
 ![NuGet](https://img.shields.io/nuget/v/Iciclecreek.Avalonia.Terminal)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Build Status](https://github.com/tomlm/Iciclecreek.Avalonia.TerminalWindow/actions/workflows/BuildAndRunTests.yml/badge.svg)
 
 ## Introduction
 
