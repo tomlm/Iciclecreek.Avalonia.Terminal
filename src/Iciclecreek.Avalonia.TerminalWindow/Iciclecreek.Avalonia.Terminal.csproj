@@ -36,7 +36,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.9" />
-    <PackageReference Include="Porta.Pty" Version="1.0.4" />
+    <PackageReference Include="Porta.Pty" Version="1.0.5" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
     <PackageReference Include="XTerm.NET" Version="1.0.5" />
