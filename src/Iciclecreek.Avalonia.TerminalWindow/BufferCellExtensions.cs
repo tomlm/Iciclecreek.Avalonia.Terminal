@@ -1,4 +1,5 @@
 ﻿using Avalonia.Media;
+using System;
 using XTerm.Buffer;
 
 namespace Iciclecreek.Avalonia.Terminal
@@ -10,6 +11,8 @@ namespace Iciclecreek.Avalonia.Terminal
         {
             if (cell.Attributes.IsBold())
                 return FontWeight.Bold;
+            if (cell.Attributes.IsDim())
+                return FontWeight.Thin;
             return FontWeight.Normal;
         }
 
@@ -44,14 +47,16 @@ namespace Iciclecreek.Avalonia.Terminal
 
             if (color == 257) return null;  // Default color
 
-            return ExtractColor(color, mode);
+            return cell.ExtractColor(color, mode);
         }
 
         public static IBrush GetBackgroundBrush(this BufferCell cell, IBrush defaultBrush)
         {
             var bgColor = cell.GetBackgroundColor();
             if (bgColor.HasValue)
+            {
                 return new SolidColorBrush(bgColor.Value);
+            }
             return defaultBrush;
         }
 
@@ -64,30 +69,57 @@ namespace Iciclecreek.Avalonia.Terminal
         {
             var color = cell.Attributes.GetFgColor();
             var mode = cell.Attributes.GetFgColorMode();
-            if (color == 256) 
+            if (color == 256)
                 return null;  // Default color
 
-            return ExtractColor(color, mode);
+            var realColor = cell.ExtractColor(color, mode);
+
+            if (cell.Attributes.IsBold())
+            {
+                // Increase brightness for bold text
+                var c = realColor.Value;
+                byte r = (byte)Math.Min(255, c.R + 85);
+                byte g = (byte)Math.Min(255, c.G + 85);
+                byte b = (byte)Math.Min(255, c.B + 85);
+                return Color.FromRgb(r, g, b);
+            }
+            else if (cell.Attributes.IsDim())
+            {
+                // Decrease brightness for dim text
+                var c = realColor.Value;
+                byte r = (byte)(c.R * 0.6);
+                byte g = (byte)(c.G * 0.6);
+                byte b = (byte)(c.B * 0.6);
+                return Color.FromRgb(r, g, b);
+            }
+            return realColor;
         }
 
         public static IBrush GetForegroundBrush(this BufferCell cell, IBrush defaultBrush)
         {
             var fgColor = cell.GetForegroundColor();
             if (fgColor.HasValue)
+            {
+                if (cell.Attributes.IsDim())
+                    return new SolidColorBrush(fgColor.Value, .4);
                 return new SolidColorBrush(fgColor.Value);
+            }
             return defaultBrush;
         }
-        private static Color? ExtractColor(int color, int mode)
+
+        private static Color? ExtractColor(this BufferCell cell, int color, int mode)
         {
+            Color? realColor;
             if (mode == 1)  // RGB mode
             {
                 int r = (color >> 16) & 0xFF;
                 int g = (color >> 8) & 0xFF;
                 int b = color & 0xFF;
-                return Color.FromRgb((byte)r, (byte)g, (byte)b);
+                realColor = Color.FromRgb((byte)r, (byte)g, (byte)b);
             }
-
-            return PalleteToColor(color);  // Palette mode
+            else
+                realColor = PalleteToColor(color);  // Palette mode
+            return realColor;
         }
 
         // XTerm 256 color palette
