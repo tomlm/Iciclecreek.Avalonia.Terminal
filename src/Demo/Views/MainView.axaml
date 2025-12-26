@@ -7,6 +7,7 @@
 			 xmlns:vm="clr-namespace:Demo.ViewModels"
 			 mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
 			 x:Class="Demo.Views.MainView"
+			 Background="Gray"
 			 x:DataType="vm:MainViewModel">
 	<Design.DataContext>
 		<!-- This only sets the DataContext for the previewer in an IDE,
@@ -31,10 +32,11 @@
 		<Border Grid.Row="1"
 				Margin="32"
 				CornerRadius="8"
-				BoxShadow="0 0 8 16 Gray"
+				Background="Black"
+				BoxShadow="0 0 8 16 Black"
 				ClipToBounds="False">
 			<terminal:TerminalControl x:Name="Terminal"
-									  FontFamily="Cascadia Mono"
+									  FontFamily="Cascadia Code, Consolas, Menlo, Monaco, Roboto Mono, DejaVu Sans Mono, $Default"
 									  FontSize="24"
 									  ProcessExited="OnProcessExited"/>
 		</Border>
