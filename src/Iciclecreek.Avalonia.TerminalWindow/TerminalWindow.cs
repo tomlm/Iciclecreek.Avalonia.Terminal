@@ -62,7 +62,7 @@ namespace Iciclecreek.Terminal
         public static readonly StyledProperty<string> ProcessProperty =
             AvaloniaProperty.Register<TerminalWindow, string>(
                 nameof(Process),
-                defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "sh");
+                defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash");
 
         public static readonly StyledProperty<IList<string>> ArgsProperty =
             AvaloniaProperty.Register<TerminalWindow, IList<string>>(

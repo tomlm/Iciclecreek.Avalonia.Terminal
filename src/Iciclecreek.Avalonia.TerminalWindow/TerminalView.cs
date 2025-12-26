@@ -113,7 +113,7 @@ namespace Iciclecreek.Terminal
         public static readonly StyledProperty<string> ProcessProperty =
             AvaloniaProperty.Register<TerminalView, string>(
                 nameof(Process),
-                defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "sh");
+                defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash");
 
         public static readonly StyledProperty<IList<string>> ArgsProperty =
             AvaloniaProperty.Register<TerminalView, IList<string>>(
@@ -1076,7 +1076,7 @@ namespace Iciclecreek.Terminal
                 string processToLaunch = Process;
                 if (string.IsNullOrEmpty(processToLaunch))
                 {
-                    processToLaunch = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "sh";
+                    processToLaunch = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash";
                 }
 
                 var options = new PtyOptions
