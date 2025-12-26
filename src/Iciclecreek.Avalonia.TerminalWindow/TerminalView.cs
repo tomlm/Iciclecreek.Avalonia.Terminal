@@ -1328,9 +1328,17 @@ namespace Iciclecreek.Terminal
                     var startY = Snap((y - startLine) * _charHeight, scale);
                     var endY = Snap((y - startLine + 1) * _charHeight, scale);
                     var rect = new Rect(startX, startY, Math.Max(0, endX - startX), Math.Max(0, endY - startY));
+                    var background = cell.GetBackgroundBrush(this.Background);
+                    var foreground = cell.GetForegroundBrush(this.Foreground);
+                    if (cell.Attributes.IsInverse())
+                    {
+                        var fg = foreground;
+                        foreground = background;
+                        background = fg;
+                    }
 
                     // draw rectangle for background of textrun
-                    context.FillRectangle(cell.GetBackgroundBrush(this.Background), rect);
+                    context.FillRectangle(background, rect);
 
                     // draw text
                     var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
@@ -1340,7 +1348,7 @@ namespace Iciclecreek.Terminal
                         FlowDirection.LeftToRight,
                         typeface,
                         FontSize,
-                        cell.GetForegroundBrush(this.Foreground));
+                        foreground);
                     var td = cell.GetTextDecorations();
                     if (td != null)
                         formattedText.SetTextDecorations(td);
