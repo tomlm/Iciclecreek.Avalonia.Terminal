@@ -43,6 +43,11 @@ namespace Iciclecreek.Terminal
         // Unique identifier for this terminal instance (for debugging)
         private readonly Guid _instanceId = Guid.NewGuid();
 
+        // FormattedText cache - key is absolute line index
+        private readonly Dictionary<int, List<CachedTextRun>> _lineCache = new();
+
+        private sealed record CachedTextRun(FormattedText Text, Point Position, Rect BackgroundRect, IBrush Background);
+
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
                 nameof(IsAlternateBuffer),
@@ -827,6 +832,9 @@ namespace Iciclecreek.Terminal
                 RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
             }
 
+            // Clear cache on buffer switch
+            _lineCache.Clear();
+
             RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
             RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
             RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
@@ -1146,11 +1154,13 @@ namespace Iciclecreek.Terminal
                         _terminal.Write(output);
                         // Auto-scroll to bottom when new content arrives
                         _terminal.Buffer.ScrollToBottom();
+                        _lineCache.Clear();
                         RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
                         RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
                         RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
                         InvalidateVisual();
                     });
+
                 }
             }
             catch (OperationCanceledException)
@@ -1266,7 +1276,6 @@ namespace Iciclecreek.Terminal
             // Use the terminal buffer's ViewportY to determine what to render
             int viewportY = _terminal.Buffer.ViewportY;
             int viewportLines = _terminal.Rows;
-
             int startLine = viewportY;
             int endLine = Math.Min(_terminal.Buffer.Length, startLine + viewportLines);
             for (int y = startLine; y < endLine; y++)
@@ -1275,12 +1284,27 @@ namespace Iciclecreek.Terminal
                 if (line == null)
                     continue;
 
+                int screenY = y - startLine;
+
+                // Try to use cached text runs for this line
+                if (_lineCache.TryGetValue(y, out var cachedRuns))
+                {
+                    foreach (var run in cachedRuns)
+                    {
+                        context.FillRectangle(run.Background, run.BackgroundRect);
+                        context.DrawText(run.Text, run.Position);
+                    }
+                    continue;
+                }
+
+                // Build and cache text runs for this line
+                var runs = new List<CachedTextRun>();
+
                 for (int x = 0; x < _terminal.Cols;)
                 {
                     if (x >= line.Length)
                         break;
                     var cell = line[x];
-
                     string text = String.Empty;
                     int cellCount = 0;
                     int runStartX = 0;
@@ -1298,7 +1322,6 @@ namespace Iciclecreek.Terminal
                         var textBuilder = new StringBuilder();
                         cellCount = 0;  // Total cell positions consumed (including wide char placeholders)
                         runStartX = x;
-
                         while (x < line.Length && x < _terminal.Cols)
                         {
                             var currentCell = line[x];
@@ -1306,7 +1329,6 @@ namespace Iciclecreek.Terminal
                             // Stop if we hit a different attribute or a placeholder cell mid-run
                             if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
                                 break;
-
                             textBuilder.Append(currentCell.Content);
                             cellCount += currentCell.Width;  // Wide chars add 2, normal chars add 1
 
@@ -1325,45 +1347,36 @@ namespace Iciclecreek.Terminal
 
                     var startX = Snap(runStartX * _charWidth, scale);
                     var endX = Snap((runStartX + cellCount) * _charWidth, scale);
-                    var startY = Snap((y - startLine) * _charHeight, scale);
-                    var endY = Snap((y - startLine + 1) * _charHeight, scale);
-                    var rect = new Rect(startX, startY, Math.Max(0, endX - startX), Math.Max(0, endY - startY));
+                    var startYPos = Snap(screenY * _charHeight, scale);
+                    var endYPos = Snap((screenY + 1) * _charHeight, scale);
+                    var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), Math.Max(0, endYPos - startYPos));
                     var background = cell.GetBackgroundBrush(this.Background);
                     var foreground = cell.GetForegroundBrush(this.Foreground);
                     if (cell.Attributes.IsInverse())
-                    {
-                        var fg = foreground;
-                        foreground = background;
-                        background = fg;
-                    }
+                        (foreground, background) = (background, foreground);
 
-                    // draw rectangle for background of textrun
-                    context.FillRectangle(background, rect);
-
-                    // draw text
                     var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
-                    var formattedText = new FormattedText(
-                        text,
-                        CultureInfo.CurrentCulture,
-                        FlowDirection.LeftToRight,
-                        typeface,
-                        FontSize,
-                        foreground);
+                    var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
                     var td = cell.GetTextDecorations();
                     if (td != null)
                         formattedText.SetTextDecorations(td);
-                    //Debug.WriteLine($"[{runStartX},{y - startLine}] '{text}' {text.Length}");
-                    context.DrawText(formattedText, new Point(startX, startY));
+
+                    var position = new Point(startX, startYPos);
+                    runs.Add(new CachedTextRun(formattedText, position, rect, background));
+
+                    context.FillRectangle(background, rect);
+                    context.DrawText(formattedText, position);
                 }
+
+                _lineCache[y] = runs;
             }
 
-            // Render the cursor
             RenderCursor(context, viewportY, scale);
         }
 
         private void RenderCursor(DrawingContext context, int viewportY, double scale)
         {
-            // Only show cursor if terminal says it's visible (controlled by escape sequences)
+            // Only show cursor if terminal wants it visible (controlled by escape sequences)
             if (!_terminal.CursorVisible)
                 return;
 
