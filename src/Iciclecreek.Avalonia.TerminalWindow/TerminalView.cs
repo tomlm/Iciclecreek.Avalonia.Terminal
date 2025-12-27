@@ -1490,8 +1490,9 @@ namespace Iciclecreek.Terminal
                         var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                         var background = cell.GetBackgroundBrush(this.Background);
                         var foreground = cell.GetForegroundBrush(this.Foreground);
-                        if (cell.Attributes.IsInverse() ||
-                            (cell.Attributes.IsBlink() && this.CursorBlink))
+                        if (cell.Attributes.IsInverse())
+                            (foreground, background) = (background, foreground);
+                        if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                             (foreground, background) = (background, foreground);
 
                         var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
