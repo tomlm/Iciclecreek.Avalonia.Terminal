@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
@@ -12,12 +12,12 @@
     <Authors>Tom Laird-McConnell</Authors>
     <Keyword>xterm;terminal;avalonia</Keyword>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/tomlm/Iciclecreek.Avalonia.TerminalWindow</PackageProjectUrl>
-    <PackageIconUrl>https://raw.githubusercontent.com/tomlm/Iciclecreek.Avalonia.TerminalWindow/master/icon.png</PackageIconUrl>
+    <PackageProjectUrl>https://github.com/tomlm/Iciclecreek.Avalonia.Terminal</PackageProjectUrl>
+    <PackageIconUrl>https://raw.githubusercontent.com/tomlm/Iciclecreek.Avalonia.Terminal/master/icon.png</PackageIconUrl>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <RepositoryUrl>https://github.com/tomlm/Iciclecreek.Avalonia.TerminalWindow</RepositoryUrl>
+    <RepositoryUrl>https://github.com/tomlm/Iciclecreek.Avalonia.Terminal</RepositoryUrl>
     <Copyright>Tom Laird-McConnell All Rights Reserved</Copyright>
     <RootNamespace>Iciclecreek.Avalonia.TerminalWindow</RootNamespace>
     <ContentTargetFolders>content</ContentTargetFolders>
@@ -36,13 +36,12 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.9" />
-    <PackageReference Include="Iciclecreek.Avalonia.WindowManager" Version="3.0.11" />
     <PackageReference Include="Porta.Pty" Version="1.0.5" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
-    <PackageReference Include="XTerm.NET" Version="1.0.8" />
   </ItemGroup>
-  <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">
+  <ItemGroup>
     <ProjectReference Include="..\..\..\XTerm.NET\src\XTerm.NET\XTerm.NET.csproj" />
+    <ProjectReference Include="..\..\..\Iciclecreek.Avalonia.WindowManager\source\Iciclecreek.Avalonia.WindowManager\Iciclecreek.Avalonia.WindowManager.csproj" />
   </ItemGroup>
 </Project>
