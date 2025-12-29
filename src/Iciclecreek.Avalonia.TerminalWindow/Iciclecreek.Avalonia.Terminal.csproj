@@ -5,8 +5,8 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <PropertyGroup>
-    <Version>1.0.1</Version>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <Version>1.0.2</Version>
+    <AssemblyVersion>1.0.2.0</AssemblyVersion>
     <Description>Avalonia terminal controls (TerminalControl/TerminalWindow) that provide an XTerm console for hosting console applications in Avalonia.</Description>
     <Company>Iciclecreek</Company>
     <Authors>Tom Laird-McConnell</Authors>
@@ -37,7 +37,7 @@
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.9" />
     <PackageReference Include="Iciclecreek.Avalonia.WindowManager" Version="3.0.13" />
-    <PackageReference Include="Porta.Pty" Version="1.0.5" />
+    <PackageReference Include="Porta.Pty" Version="1.0.6" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
     <PackageReference Include="XTerm.NET" Version="1.0.10" />
