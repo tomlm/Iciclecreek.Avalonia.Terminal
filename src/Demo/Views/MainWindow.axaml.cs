@@ -1,5 +1,6 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Markup.Xaml.MarkupExtensions;
 using Iciclecreek.Terminal;
 using System;
 using System.Collections.Generic;
@@ -12,6 +13,18 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
     }
+    private void OnNewClicked(object? sender, RoutedEventArgs e)
+    {
+        var terminalWindow = new ManagedTerminalWindow
+        {
+            Width = 80 * FontSize,
+            Height = 25 * FontSize,
+            FontFamily = "Cascadia Mono",
+            CloseOnProcessExit = true
+        };
+        terminalWindow.Show();
+    }
+
 
     private async void OnStartClicked(object? sender, RoutedEventArgs e)
     {
@@ -25,18 +38,24 @@ public partial class MainWindow : Window
             var process = parts.Count > 0 ? parts[0] : commandLine;
             var args = parts.Count > 1 ? parts.GetRange(1, parts.Count - 1) : [];
 
-            var terminalWindow = new TerminalWindow
+            var terminalWindow = new ManagedTerminalWindow
             {
                 Process = process,
                 Args = args,
                 Title = process,
-                Width = 800,
-                Height = 600,
+                Width = 80*FontSize,
+                Height = 25*FontSize,
                 FontFamily = "Cascadia Mono",
                 CloseOnProcessExit = true
             };
             terminalWindow.Show();
         }
+    }
+
+
+    private void OnExitClicked(object? sender, RoutedEventArgs e)
+    {
+        Close();
     }
 
     private static List<string> ParseCommandLine(string commandLine)
@@ -73,8 +92,4 @@ public partial class MainWindow : Window
         return args;
     }
 
-    private void OnExitClicked(object? sender, RoutedEventArgs e)
-    {
-        Close();
-    }
 }

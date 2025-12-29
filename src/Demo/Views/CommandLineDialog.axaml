@@ -1,22 +1,22 @@
-<Window xmlns="https://github.com/avaloniaui"
+<wm:ManagedWindow xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:console="https://github.com/consolonia"
+        xmlns:wm="using:Iciclecreek.Avalonia.WindowManager"
         mc:Ignorable="d" d:DesignWidth="400" d:DesignHeight="150"
         x:Class="Demo.Views.CommandLineDialog"
         Title="Start Process"
-        Width="450"
-        Height="150"
         WindowStartupLocation="CenterOwner"
         CanResize="False">
-	<Grid Margin="16" RowDefinitions="Auto,Auto,*,Auto">
-		<TextBlock Grid.Row="0" Text="Enter the command line to run:" Margin="0,0,0,8"/>
+	<Grid Margin="{console:OnPlatform Default='16', Console='1'}" RowDefinitions="Auto,Auto,*,Auto">
+		<TextBlock Grid.Row="0" Text="Enter the command line to run:" />
 		<TextBox Grid.Row="1" 
            x:Name="CommandLineTextBox" 
            Watermark="e.g., cmd.exe or /bin/bash"/>
-		<StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
-			<Button Content="Start" Click="OnStartClicked" IsDefault="True" Width="80"/>
-			<Button Content="Cancel" Click="OnCancelClicked" IsCancel="True" Width="80"/>
+		<StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="{console:OnPlatform Default='8',Console='1'}">
+			<Button Content="Start" Click="OnStartClicked" IsDefault="True" />
+			<Button Content="Cancel" Click="OnCancelClicked" IsCancel="True" />
 		</StackPanel>
 	</Grid>
-</Window>
+</wm:ManagedWindow>

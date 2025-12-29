@@ -1,10 +1,11 @@
 using System;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Iciclecreek.Avalonia.WindowManager;
 
 namespace Demo.Views;
 
-public partial class CommandLineDialog : Window
+public partial class CommandLineDialog : ManagedWindow
 {
     public string? CommandLine { get; private set; }
 

@@ -1,0 +1,9 @@
+<wm:ManagedWindow xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:wm="clr-namespace:Iciclecreek.Avalonia.WindowManager;assembly=Iciclecreek.Avalonia.WindowManager"
+        xmlns:console="https://github.com/consolonia"
+        x:Class="Demo.Views.ManagedTerminalWindow" 
+        Background="Black"
+        Foreground="White"
+        FontSize="{console:OnPlatform Default='14',Console='1'}">
+</wm:ManagedWindow>

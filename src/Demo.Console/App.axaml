@@ -1,9 +1,10 @@
 <Application xmlns="https://github.com/avaloniaui"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:console="https://github.com/jinek/consolonia"
-             x:Class="Demo.Console.App"
-             RequestedThemeVariant="Default">
-    <Application.Styles>
-        <console:ModernTheme />
-    </Application.Styles>
+			 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+			 xmlns:wm="clr-namespace:Iciclecreek.Avalonia.WindowManager;assembly=Iciclecreek.Avalonia.WindowManager"
+			 xmlns:console="https://github.com/jinek/consolonia"
+			 x:Class="Demo.Console.App"
+			 RequestedThemeVariant="Default">
+	<Application.Styles>
+		<console:ModernTheme />
+	</Application.Styles>
 </Application>

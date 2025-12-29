@@ -1,21 +1,24 @@
 <Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:views="clr-namespace:Demo.Views"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
-        x:Class="Demo.Views.MainWindow"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+		xmlns:views="clr-namespace:Demo.Views"
+		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+		xmlns:wm="clr-namespace:Iciclecreek.Avalonia.WindowManager;assembly=Iciclecreek.Avalonia.WindowManager"
+		x:Class="Demo.Views.MainWindow"
 		RequestedThemeVariant="Dark"
-        Icon="/Assets/avalonia-logo.ico"
-        Title="Avalonia XTerm Terminal">
-	<DockPanel>
-		<Menu DockPanel.Dock="Top">
-			<MenuItem Header="_Process">
-				<MenuItem Header="_Start" Click="OnStartClicked"/>
+		Icon="/Assets/avalonia-logo.ico"
+		Title="Avalonia XTerm Terminal">
+	<Grid RowDefinitions="Auto *">
+		<Menu Grid.Row="0">
+			<MenuItem Header="_Process" Grid.Row="0">
+				<MenuItem Header="_New" Click="OnNewClicked"/>
+				<MenuItem Header="_Run" Click="OnStartClicked"/>
 				<Separator/>
 				<MenuItem Header="E_xit" Click="OnExitClicked"/>
 			</MenuItem>
 		</Menu>
-		<views:MainView />
-	</DockPanel>
+
+		<wm:WindowsPanel Grid.Row="1"/>
+	</Grid>
 </Window>
