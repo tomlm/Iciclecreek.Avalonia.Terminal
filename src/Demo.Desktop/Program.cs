@@ -1,6 +1,7 @@
 ﻿using System;
 
 using Avalonia;
+using Fonts.Avalonia.CascadiaCode;
 
 namespace Demo.Desktop;
 
@@ -18,6 +19,7 @@ class Program
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
+            .WithCascadiaCodeFont()
             .LogToTrace();
 
 }

@@ -6,7 +6,6 @@
         <Setter Property="Background" Value="Black"/>
         <Setter Property="Foreground" Value="White"/>
         <Setter Property="FocusAdorner" Value="{x:Null}"/>
-        <Setter Property="FontFamily" Value="Cascadia Code, Consolas, Menlo, Monaco, Roboto Mono, DejaVu Sans Mono, $Default"/>
         <Setter Property="Template">
             <ControlTemplate>
                 <Grid ColumnDefinitions="*,Auto">

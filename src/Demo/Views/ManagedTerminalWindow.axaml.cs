@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -19,6 +20,7 @@ namespace Demo.Views
     public partial class ManagedTerminalWindow : ManagedWindow
     {
         private TerminalControl? _terminalControl;
+        private bool _restoringFocus;
 
         /// <summary>
         /// Event raised when the PTY process exits.
@@ -170,6 +172,23 @@ namespace Demo.Views
 
         public ManagedTerminalWindow()
         {
+            // Set focus to terminal when window opens or is activated
+            Opened += OnOpened;
+            Activated += OnActivated;
+            Deactivated += OnDeactivated;
+
+            // Clicking the native title bar/chrome can steal keyboard focus to a non-content element
+            // (especially on Linux/Wayland). Proactively restore focus on any pointer press.
+            // This runs only when we're active and doesn't try to fight activation.
+            // Use Bubble so we don't interfere with the system caption buttons (close/maximize/minimize).
+            AddHandler(PointerPressedEvent, OnAnyPointerPressed, RoutingStrategies.Bubble);
+
+        }
+
+        
+
+        private void OnOpened(object? sender, EventArgs e)
+        {
             // Create the terminal control as content
             _terminalControl = new TerminalControl()
             {
@@ -179,10 +198,6 @@ namespace Demo.Views
                 Background = this.Background,
             };
             Content = _terminalControl;
-
-            // Set focus to terminal when window opens or is activated
-            Opened += OnOpened;
-            Activated += OnActivated;
 
             // Wire up events
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
@@ -210,31 +225,57 @@ namespace Demo.Views
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
-        }
 
-        private void OnOpened(object? sender, EventArgs e)
-        {
-            // Defer focus until layout is ready, but only if this window is active
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (IsActive)
-                {
-                    _terminalControl?.Focus();
-                }
-            }, DispatcherPriority.Input);
+            RestoreTerminalFocus();
         }
 
         private void OnActivated(object? sender, EventArgs e)
         {
-            // Defer focus until layout is ready
-            // Only focus the terminal if it doesn't already have focus
-            Dispatcher.UIThread.Post(() => 
+            RestoreTerminalFocus();
+        }
+
+        private void OnDeactivated(object? sender, EventArgs e)
+        {
+            // Focus contract: for ManagedTerminalWindow we always want terminal focused.
+            // We don't need to "remember" any other element.
+        }
+
+        private void RestoreTerminalFocus()
+        {
+            if (_terminalControl == null)
+                return;
+
+            if (_restoringFocus)
+                return;
+
+            _restoringFocus = true;
+            try
             {
-                if (_terminalControl != null && !_terminalControl.IsFocused)
+                // Don't fight window activation. We'll be called again on Activated.
+                if (!IsActive)
+                    return;
+
+                // Post a few times: on Linux/Wayland/X11 focus/activation and layout settle
+                // across multiple ticks (especially after closing another window).
+                for (var i = 0; i < 1; i++)
                 {
-                    _terminalControl.Focus();
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (!IsActive || _terminalControl == null)
+                            return;
+
+                        if (!_terminalControl.IsKeyboardFocusWithin)
+                        {
+                            _terminalControl.Focus();
+                        }
+                    }, DispatcherPriority.Input);
                 }
-            }, DispatcherPriority.Input);
+            }
+            finally
+            {
+                // Allow subsequent activations to restore.
+                Dispatcher.UIThread.Post(() => _restoringFocus = false, DispatcherPriority.Background);
+            }
         }
 
         protected override void OnUnloaded(RoutedEventArgs e)
@@ -243,6 +284,9 @@ namespace Demo.Views
 
             Opened -= OnOpened;
             Activated -= OnActivated;
+            Deactivated -= OnDeactivated;
+
+            RemoveHandler(PointerPressedEvent, OnAnyPointerPressed);
 
             if (_terminalControl != null)
             {
@@ -259,6 +303,14 @@ namespace Demo.Views
                 _terminalControl.BellRang -= OnTerminalControlBellRang;
                 _terminalControl.WindowInfoRequested -= OnTerminalControlWindowInfoRequested;
             }
+        }
+
+        private void OnAnyPointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            // Capture focus *after* the click is processed by the target.
+            // This avoids breaking the window chrome buttons while still reliably restoring
+            // focus after clicking the title bar/background.
+            Dispatcher.UIThread.Post(RestoreTerminalFocus, DispatcherPriority.Background);
         }
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)

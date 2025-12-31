@@ -13,13 +13,14 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
     }
+    
+
     private void OnNewClicked(object? sender, RoutedEventArgs e)
     {
         var terminalWindow = new ManagedTerminalWindow
         {
             Width = 80 * FontSize,
             Height = 25 * FontSize,
-            FontFamily = "Cascadia Mono",
             CloseOnProcessExit = true
         };
         terminalWindow.Show(Windows);
@@ -45,7 +46,6 @@ public partial class MainWindow : Window
                 Title = process,
                 Width = 80*FontSize,
                 Height = 25*FontSize,
-                FontFamily = "Cascadia Mono",
                 CloseOnProcessExit = true
             };
             terminalWindow.Show(Windows);
