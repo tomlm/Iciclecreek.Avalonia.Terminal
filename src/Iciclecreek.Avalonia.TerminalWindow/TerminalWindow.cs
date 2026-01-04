@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -7,24 +8,20 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using XTerm;
 
 namespace Iciclecreek.Terminal
 {
     /// <summary>
-    /// A Window that contains a TerminalControl and automatically handles window events
+    /// A "native" Window that contains a TerminalControl and automatically handles window events
     /// from the terminal (title changes, window manipulation commands, etc.).
     /// </summary>
     public class TerminalWindow : Window
     {
         private TerminalControl? _terminalControl;
         private bool _restoringFocus;
-
-        /// <summary>
-        /// Event raised when the PTY process exits.
-        /// </summary>
-        public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
         public static readonly StyledProperty<IBrush> SelectionBrushProperty =
             AvaloniaProperty.Register<TerminalWindow, IBrush>(
@@ -274,58 +271,98 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
         {
-            ProcessExited?.Invoke(this, e);
-
             if (CloseOnProcessExit)
             {
                 Close();
+                e.Handled = true;
             }
         }
 
         private void OnTerminalTitleChanged(object? sender, TitleChangedEventArgs e)
         {
-            Title = e.Title;
+            if (!e.Handled)
+            {
+                Title = e.Title;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowMoved(object? sender, WindowMovedEventArgs e)
         {
-            Position = new PixelPoint(e.X, e.Y);
+            if (!e.Handled)
+            {
+                Position = new PixelPoint(e.X, e.Y);
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowResized(object? sender, WindowResizedEventArgs e)
         {
-            Width = e.Width;
-            Height = e.Height;
+            if (!e.Handled)
+            {
+                Width = e.Width;
+                Height = e.Height;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowMinimized(object? sender, RoutedEventArgs e)
         {
-            WindowState = WindowState.Minimized;
+            if (!e.Handled)
+            {
+                WindowState = WindowState.Minimized;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowMaximized(object? sender, RoutedEventArgs e)
         {
-            WindowState = WindowState.Maximized;
+            if (!e.Handled)
+            {
+                WindowState = WindowState.Maximized;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowRestored(object? sender, RoutedEventArgs e)
         {
-            WindowState = WindowState.Normal;
+            if (!e.Handled)
+            {
+                WindowState = WindowState.Normal;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowRaised(object? sender, RoutedEventArgs e)
         {
-            Activate();
+            if (!e.Handled)
+            {
+                this.Activate();
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowLowered(object? sender, RoutedEventArgs e)
         {
-            Topmost = false;
+            if (!e.Handled)
+            {
+                var lifetime = (IClassicDesktopStyleApplicationLifetime)Application.Current!.ApplicationLifetime!;
+                if (lifetime != null)
+                {
+                    lifetime.Windows.FirstOrDefault(win => win != this)?.Activate();
+                    e.Handled = true;
+                }
+            }
+
         }
 
         private void OnTerminalWindowFullscreened(object? sender, RoutedEventArgs e)
         {
-            WindowState = WindowState.FullScreen;
+            if (!e.Handled)
+            {
+                WindowState = WindowState.FullScreen;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalBellRang(object? sender, RoutedEventArgs e)
