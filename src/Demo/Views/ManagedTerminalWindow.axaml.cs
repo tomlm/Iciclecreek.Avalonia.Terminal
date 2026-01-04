@@ -9,6 +9,7 @@ using Iciclecreek.Avalonia.WindowManager;
 using Iciclecreek.Terminal;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Demo.Views
@@ -361,14 +362,18 @@ namespace Demo.Views
         {
             if (!e.Handled)
             {
-                Activate();
+                this.BringToTop();
                 e.Handled = true;
             }
         }
 
         private void OnTerminalWindowLowered(object? sender, RoutedEventArgs e)
         {
-            // best-effort no-op
+            if (!e.Handled)
+            {
+                this.NextWindow();
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowFullscreened(object? sender, RoutedEventArgs e)
