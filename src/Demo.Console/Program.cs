@@ -5,6 +5,7 @@ namespace Demo.Console
 {
     public static class Program
     {
+       [STAThread]
         private static void Main(string[] args)
         {
             BuildAvaloniaApp()

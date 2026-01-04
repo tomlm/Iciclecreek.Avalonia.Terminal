@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="11.3.9" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.0.4" />
     <PackageReference Include="Fonts.Avalonia.CascadiaCode" Version="0.14.0" />
   </ItemGroup>
 

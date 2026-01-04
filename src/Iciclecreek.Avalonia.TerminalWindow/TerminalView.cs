@@ -651,12 +651,9 @@ namespace Iciclecreek.Terminal
 
         protected override async void OnKeyDown(KeyEventArgs e)
         {
-            Debug.WriteLine($"[TerminalView] OnKeyDown: Key={e.Key}, IsFocused={IsFocused}, Source={e.Source?.GetType().Name}, KeySymbol='{e.KeySymbol}'");
-
             // Only process input if this terminal has focus
             if (!IsFocused)
             {
-                Debug.WriteLine($"[TerminalView] Not focused, passing to base");
                 base.OnKeyDown(e);
                 return;
             }
@@ -669,8 +666,6 @@ namespace Iciclecreek.Terminal
                 base.OnKeyDown(e);
                 return;
             }
-
-            Debug.WriteLine($"[TerminalView] Processing key: {e.Key}, Win32InputMode={_terminal.Win32InputMode}");
 
             try
             {
@@ -689,7 +684,6 @@ namespace Iciclecreek.Terminal
                     }
                     // If we couldn't generate a Win32 sequence, fall through to normal handling
                     // This can happen for keys that don't have a virtual key mapping
-                    Debug.WriteLine($"[TerminalView] Win32InputMode: No sequence generated for {e.Key}, falling back to normal handling");
                 }
 
                 // Convert Avalonia key to XTerm key
@@ -726,14 +720,12 @@ namespace Iciclecreek.Terminal
                 // This is critical for Consolonia where KeySymbol may be empty
                 if (TryGetPrintableChar(e, out var printableChar))
                 {
-                    Debug.WriteLine($"[TerminalView] Sending char '{printableChar}' to PTY");
                     e.Handled = true;
                     await SendToPtyAsync(printableChar.ToString());
                     return;
                 }
 
                 // If we couldn't handle it, let TextInput try (for desktop Avalonia)
-                Debug.WriteLine($"[TerminalView] Key not handled, deferring to TextInput");
             }
             catch (Exception ex)
             {
@@ -779,8 +771,6 @@ namespace Iciclecreek.Terminal
 
         protected override async void OnTextInput(TextInputEventArgs e)
         {
-            Debug.WriteLine($"[TerminalView] OnTextInput: Text='{e.Text}', IsFocused={IsFocused}");
-
             // Only process input if this terminal has focus
             if (!IsFocused)
             {
@@ -1257,13 +1247,11 @@ namespace Iciclecreek.Terminal
             if (!string.IsNullOrEmpty(e.KeySymbol) && e.KeySymbol.Length == 1 && !char.IsControl(e.KeySymbol[0]))
             {
                 character = e.KeySymbol[0];
-                Debug.WriteLine($"[TerminalView] TryGetPrintableChar: Got '{character}' from KeySymbol");
                 return true;
             }
 
             // Fallback mapping for cases where KeySymbol is empty (e.g., Consolonia, or Alt+<char> on some platforms)
             var result = TryMapKeyToChar(e.Key, e.KeyModifiers, out character);
-            Debug.WriteLine($"[TerminalView] TryGetPrintableChar: TryMapKeyToChar returned {result}, char='{character}', Key={e.Key}");
             return result;
         }
 
@@ -1426,8 +1414,6 @@ namespace Iciclecreek.Terminal
                         _terminal.Write(output);
                         // Auto-scroll to bottom when new content arrives
                         _terminal.Buffer.ScrollToBottom();
-                        RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
-                        RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
                         RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
                         InvalidateVisual();
                     });
@@ -1822,6 +1808,7 @@ namespace Iciclecreek.Terminal
             switch (CursorStyle)
             {
                 case XT.Common.CursorStyle.Block:
+                        // TODO Use ConsoleFontBrush
                     if (IsFocused)
                     {
                         // Filled block when focused
@@ -1939,8 +1926,6 @@ namespace Iciclecreek.Terminal
 
             // Repeat count (always 1 for our purposes)
             var repeatCount = 1;
-
-            Debug.WriteLine($"[TerminalView] Win32 sequence: Key={e.Key}, vk={vk}, uc={unicodeChar}, char='{(unicodeChar > 31 ? (char)unicodeChar : '?')}'");
 
             // Format: ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _
             return $"\u001b[{vk};{scanCode};{unicodeChar};{(isKeyDown ? 1 : 0)};{(int)controlKeyState};{repeatCount}_";

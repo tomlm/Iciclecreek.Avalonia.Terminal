@@ -20,6 +20,7 @@ class Program
             .UsePlatformDetect()
             .WithInterFont()
             .WithCascadiaCodeFont()
+            .WithDeveloperTools()
             .LogToTrace();
 
 }

@@ -214,23 +214,20 @@ namespace Iciclecreek.Terminal
                 if (!IsActive)
                     return;
 
-                for (var i = 0; i < 3; i++)
+                Dispatcher.UIThread.Post(() =>
                 {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        if (!IsActive || _terminalControl == null)
-                            return;
+                    if (!IsActive || _terminalControl == null)
+                        return;
 
-                        if (!_terminalControl.IsKeyboardFocusWithin)
-                        {
-                            _terminalControl.Focus();
-                        }
-                    }, DispatcherPriority.Input);
-                }
+                    if (!_terminalControl.IsKeyboardFocusWithin)
+                    {
+                        _terminalControl.Focus();
+                    }
+                }, DispatcherPriority.Input);
             }
             finally
             {
-                Dispatcher.UIThread.Post(() => _restoringFocus = false, DispatcherPriority.Background);
+                _restoringFocus = false;
             }
         }
 
@@ -266,7 +263,7 @@ namespace Iciclecreek.Terminal
             // Capture focus *after* the click is processed by the target.
             // This avoids breaking the window chrome buttons while still reliably restoring
             // focus after clicking the title bar/background.
-            Dispatcher.UIThread.Post(RestoreTerminalFocus, DispatcherPriority.Background);
+            Dispatcher.UIThread.Post(RestoreTerminalFocus, DispatcherPriority.Input);
         }
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
