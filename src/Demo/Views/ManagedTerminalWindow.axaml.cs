@@ -22,11 +22,6 @@ namespace Demo.Views
         private TerminalControl? _terminalControl;
         private bool _restoringFocus;
 
-        /// <summary>
-        /// Event raised when the PTY process exits.
-        /// </summary>
-        public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
-
         // Window-related events are now exposed by `TerminalView` as bubbling attached events.
 
         public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
@@ -181,10 +176,8 @@ namespace Demo.Views
                 Background = this.Background,
             };
 
-            // Process exit remains a CLR event on TerminalControl.
-            _terminalControl.ProcessExited += OnTerminalControlProcessExited;
-
             // Subscribe to TerminalView attached events bubbling from the inner TerminalView.
+            TerminalView.AddProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -278,8 +271,7 @@ namespace Demo.Views
 
             if (_terminalControl != null)
             {
-                _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
-
+                TerminalView.RemoveProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -304,8 +296,6 @@ namespace Demo.Views
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
         {
-            ProcessExited?.Invoke(this, e);
-
             if (CloseOnProcessExit)
             {
                 Close();
@@ -317,6 +307,7 @@ namespace Demo.Views
             if (!e.Handled)
             {
                 Title = e.Title;
+                e.Handled = true;
             }
         }
 
@@ -325,6 +316,7 @@ namespace Demo.Views
             if (!e.Handled)
             {
                 Position = new PixelPoint(e.X, e.Y);
+                e.Handled = true;
             }
         }
 
@@ -334,27 +326,44 @@ namespace Demo.Views
             {
                 this.Width = e.Width;
                 this.Height = e.Height;
+                e.Handled = true;
             }
         }
 
         private void OnTerminalWindowMinimized(object? sender, RoutedEventArgs e)
         {
-            this.MinimizeCommand.Execute();
+            if (!e.Handled)
+            {
+                this.WindowState = WindowState.Minimized;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowMaximized(object? sender, RoutedEventArgs e)
         {
-            this.MaximizeCommand.Execute();
+            if (!e.Handled)
+            {
+                this.WindowState = WindowState.Maximized;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowRestored(object? sender, RoutedEventArgs e)
         {
-            this.RestoreCommand.Execute();
+            if (!e.Handled)
+            {
+                this.WindowState = WindowState.Normal;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowRaised(object? sender, RoutedEventArgs e)
         {
-            Activate();
+            if (!e.Handled)
+            {
+                Activate();
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalWindowLowered(object? sender, RoutedEventArgs e)
@@ -364,7 +373,11 @@ namespace Demo.Views
 
         private void OnTerminalWindowFullscreened(object? sender, RoutedEventArgs e)
         {
-            WindowState = WindowState.FullScreen;
+            if (!e.Handled)
+            {
+                WindowState = WindowState.FullScreen;
+                e.Handled = true;
+            }
         }
 
         private void OnTerminalBellRang(object? sender, RoutedEventArgs e)

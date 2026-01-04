@@ -157,10 +157,8 @@ namespace Iciclecreek.Terminal
             // Use Bubble so we don't interfere with the system caption buttons (close/maximize/minimize).
             AddHandler(PointerPressedEvent, OnAnyPointerPressed, RoutingStrategies.Bubble);
 
-            // Process exit remains a CLR event on TerminalControl.
-            _terminalControl.ProcessExited += OnTerminalControlProcessExited;
-
             // Subscribe to TerminalView attached events bubbling up from the inner TerminalView.
+            TerminalView.AddProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -251,8 +249,7 @@ namespace Iciclecreek.Terminal
 
             if (_terminalControl != null)
             {
-                _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
-
+                TerminalView.RemoveProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);

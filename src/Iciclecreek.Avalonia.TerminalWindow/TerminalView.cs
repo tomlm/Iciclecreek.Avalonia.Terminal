@@ -149,6 +149,17 @@ namespace Iciclecreek.Terminal
 
         #region Terminal Attached Events
 
+        public static readonly RoutedEvent<ProcessExitedEventArgs> ProcessExitedEvent =
+            RoutedEvent.Register<TerminalView, ProcessExitedEventArgs>(
+                nameof(ProcessExited),
+                RoutingStrategies.Bubble);
+
+        public static void AddProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
+            target.AddHandler(ProcessExitedEvent, handler);
+
+        public static void RemoveProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
+            target.RemoveHandler(ProcessExitedEvent, handler);
+
         public static readonly RoutedEvent<TitleChangedEventArgs> TitleChangedEvent =
             RoutedEvent.Register<TerminalView, TitleChangedEventArgs>(
                 nameof(TitleChanged),
@@ -1403,7 +1414,6 @@ namespace Iciclecreek.Terminal
                                 _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
                                 _terminal.Buffer.ScrollToBottom();
                                 InvalidateVisual();
-                                ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode));
                             });
                         }
                         break;
@@ -1453,7 +1463,12 @@ namespace Iciclecreek.Terminal
                 InvalidateVisual();
 
                 // Raise event on UI thread so subscribers can safely update UI
-                ProcessExited?.Invoke(this, new ProcessExitedEventArgs(e.ExitCode));
+                var args = new ProcessExitedEventArgs(e.ExitCode)
+                {
+                    RoutedEvent = ProcessExitedEvent
+                };
+                RaiseEvent(args);
+                ProcessExited?.Invoke(this, args);
             });
         }
 
