@@ -26,32 +26,6 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
-        /// <summary>
-        /// Event raised when the terminal title changes.
-        /// </summary>
-        public event EventHandler<TitleChangedEventArgs>? TitleChanged;
-
-        /// <summary>
-        /// Event raised when a window move command is received from the terminal.
-        /// </summary>
-        public event EventHandler<WindowMovedEventArgs>? WindowMoved;
-
-        /// <summary>
-        /// Event raised when a window resize command is received from the terminal.
-        /// </summary>
-        public event EventHandler<WindowResizedEventArgs>? WindowResized;
-
-        /// <summary>
-        /// Event raised when the terminal bell is activated.
-        /// </summary>
-        public event EventHandler? BellRang;
-
-        /// <summary>
-        /// Event raised when window information is requested by the terminal.
-        /// </summary>
-        public event EventHandler<WindowInfoRequestedEventArgs>? WindowInfoRequested;
-
-
         public static readonly StyledProperty<IBrush> SelectionBrushProperty =
             AvaloniaProperty.Register<TerminalWindow, IBrush>(
                 nameof(SelectionBrush),
@@ -149,14 +123,14 @@ namespace Iciclecreek.Terminal
         public TerminalWindow()
         {
             // Set focus to terminal when window opens or is activated
-            Loaded += OnLoaded;
             Opened += OnOpened;
             Activated += OnActivated;
             Deactivated += OnDeactivated;
         }
 
-        private void OnLoaded(object? sender, RoutedEventArgs e)
+        protected override void OnInitialized()
         {
+            base.OnInitialized();
             _terminalControl = new TerminalControl();
             _terminalControl.Options = this.Options ?? new XTerm.Options.TerminalOptions();
             _terminalControl.Options.WindowOptions.GetWinPosition = true;
@@ -183,19 +157,21 @@ namespace Iciclecreek.Terminal
             // Use Bubble so we don't interfere with the system caption buttons (close/maximize/minimize).
             AddHandler(PointerPressedEvent, OnAnyPointerPressed, RoutingStrategies.Bubble);
 
-            // Wire up events
+            // Process exit remains a CLR event on TerminalControl.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
-            _terminalControl.TitleChanged += OnTerminalControlTitleChanged;
-            _terminalControl.WindowMoved += OnTerminalControlWindowMoved;
-            _terminalControl.WindowResized += OnTerminalControlWindowResized;
-            _terminalControl.WindowMinimized += OnTerminalControlWindowMinimized;
-            _terminalControl.WindowMaximized += OnTerminalControlWindowMaximized;
-            _terminalControl.WindowRestored += OnTerminalControlWindowRestored;
-            _terminalControl.WindowRaised += OnTerminalControlWindowRaised;
-            _terminalControl.WindowLowered += OnTerminalControlWindowLowered;
-            _terminalControl.WindowFullscreened += OnTerminalControlWindowFullscreened;
-            _terminalControl.BellRang += OnTerminalControlBellRang;
-            _terminalControl.WindowInfoRequested += OnTerminalControlWindowInfoRequested;
+
+            // Subscribe to TerminalView attached events bubbling up from the inner TerminalView.
+            TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
+            TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
+            TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
+            TerminalView.AddWindowMinimizedHandler(_terminalControl, OnTerminalWindowMinimized);
+            TerminalView.AddWindowMaximizedHandler(_terminalControl, OnTerminalWindowMaximized);
+            TerminalView.AddWindowRestoredHandler(_terminalControl, OnTerminalWindowRestored);
+            TerminalView.AddWindowRaisedHandler(_terminalControl, OnTerminalWindowRaised);
+            TerminalView.AddWindowLoweredHandler(_terminalControl, OnTerminalWindowLowered);
+            TerminalView.AddWindowFullscreenedHandler(_terminalControl, OnTerminalWindowFullscreened);
+            TerminalView.AddBellRangHandler(_terminalControl, OnTerminalBellRang);
+            TerminalView.AddWindowInfoRequestedHandler(_terminalControl, OnTerminalWindowInfoRequested);
 
             // Bind properties from Window to TerminalControl
             _terminalControl.Bind(TerminalControl.FontFamilyProperty, this.GetObservable(FontFamilyProperty));
@@ -211,6 +187,7 @@ namespace Iciclecreek.Terminal
 
             Content = _terminalControl;
         }
+
 
         private void OnOpened(object? sender, EventArgs e)
         {
@@ -275,17 +252,18 @@ namespace Iciclecreek.Terminal
             if (_terminalControl != null)
             {
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
-                _terminalControl.TitleChanged -= OnTerminalControlTitleChanged;
-                _terminalControl.WindowMoved -= OnTerminalControlWindowMoved;
-                _terminalControl.WindowResized -= OnTerminalControlWindowResized;
-                _terminalControl.WindowMinimized -= OnTerminalControlWindowMinimized;
-                _terminalControl.WindowMaximized -= OnTerminalControlWindowMaximized;
-                _terminalControl.WindowRestored -= OnTerminalControlWindowRestored;
-                _terminalControl.WindowRaised -= OnTerminalControlWindowRaised;
-                _terminalControl.WindowLowered -= OnTerminalControlWindowLowered;
-                _terminalControl.WindowFullscreened -= OnTerminalControlWindowFullscreened;
-                _terminalControl.BellRang -= OnTerminalControlBellRang;
-                _terminalControl.WindowInfoRequested -= OnTerminalControlWindowInfoRequested;
+
+                TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
+                TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
+                TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
+                TerminalView.RemoveWindowMinimizedHandler(_terminalControl, OnTerminalWindowMinimized);
+                TerminalView.RemoveWindowMaximizedHandler(_terminalControl, OnTerminalWindowMaximized);
+                TerminalView.RemoveWindowRestoredHandler(_terminalControl, OnTerminalWindowRestored);
+                TerminalView.RemoveWindowRaisedHandler(_terminalControl, OnTerminalWindowRaised);
+                TerminalView.RemoveWindowLoweredHandler(_terminalControl, OnTerminalWindowLowered);
+                TerminalView.RemoveWindowFullscreenedHandler(_terminalControl, OnTerminalWindowFullscreened);
+                TerminalView.RemoveBellRangHandler(_terminalControl, OnTerminalBellRang);
+                TerminalView.RemoveWindowInfoRequestedHandler(_terminalControl, OnTerminalWindowInfoRequested);
             }
         }
 
@@ -307,76 +285,59 @@ namespace Iciclecreek.Terminal
             }
         }
 
-        private void OnTerminalControlTitleChanged(object? sender, TitleChangedEventArgs e)
+        private void OnTerminalTitleChanged(object? sender, TitleChangedEventArgs e)
         {
-            TitleChanged?.Invoke(this, e);
-
             Title = e.Title;
         }
 
-        private void OnTerminalControlWindowMoved(object? sender, WindowMovedEventArgs e)
+        private void OnTerminalWindowMoved(object? sender, WindowMovedEventArgs e)
         {
-            WindowMoved?.Invoke(this, e);
-
             Position = new PixelPoint(e.X, e.Y);
         }
 
-        private void OnTerminalControlWindowResized(object? sender, WindowResizedEventArgs e)
+        private void OnTerminalWindowResized(object? sender, WindowResizedEventArgs e)
         {
-            WindowResized?.Invoke(this, e);
-
             Width = e.Width;
             Height = e.Height;
         }
 
-        private void OnTerminalControlWindowMinimized(object? sender, EventArgs e)
+        private void OnTerminalWindowMinimized(object? sender, RoutedEventArgs e)
         {
             WindowState = WindowState.Minimized;
         }
 
-        private void OnTerminalControlWindowMaximized(object? sender, EventArgs e)
+        private void OnTerminalWindowMaximized(object? sender, RoutedEventArgs e)
         {
             WindowState = WindowState.Maximized;
         }
 
-        private void OnTerminalControlWindowRestored(object? sender, EventArgs e)
+        private void OnTerminalWindowRestored(object? sender, RoutedEventArgs e)
         {
             WindowState = WindowState.Normal;
         }
 
-        private void OnTerminalControlWindowRaised(object? sender, EventArgs e)
+        private void OnTerminalWindowRaised(object? sender, RoutedEventArgs e)
         {
             Activate();
         }
 
-        private void OnTerminalControlWindowLowered(object? sender, EventArgs e)
+        private void OnTerminalWindowLowered(object? sender, RoutedEventArgs e)
         {
-            // Avalonia doesn't have a direct "lower window" API, but we can try to deactivate
-            // This is a best-effort implementation
             Topmost = false;
         }
 
-        private void OnTerminalControlWindowFullscreened(object? sender, EventArgs e)
+        private void OnTerminalWindowFullscreened(object? sender, RoutedEventArgs e)
         {
             WindowState = WindowState.FullScreen;
         }
 
-        private void OnTerminalControlBellRang(object? sender, EventArgs e)
+        private void OnTerminalBellRang(object? sender, RoutedEventArgs e)
         {
-            BellRang?.Invoke(this, EventArgs.Empty);
-
-            // Default bell behavior - could flash the window or play a sound
-            // Note: We intentionally do NOT activate the window here as it would
-            // steal focus from other terminal windows and cause input routing issues.
-            // Applications can subscribe to BellRang event for custom behavior.
+            // default bell behavior: no-op
         }
 
-        private void OnTerminalControlWindowInfoRequested(object? sender, WindowInfoRequestedEventArgs e)
+        private void OnTerminalWindowInfoRequested(object? sender, WindowInfoRequestedEventArgs e)
         {
-            // Raise the event so external handlers can respond
-            WindowInfoRequested?.Invoke(this, e);
-
-            // If not handled externally, provide default responses from the window
             if (!e.Handled)
             {
                 switch (e.Request)
@@ -399,7 +360,6 @@ namespace Iciclecreek.Terminal
                         break;
 
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
-                        // Get screen size from the current screen
                         var screen = Screens.ScreenFromWindow(this);
                         if (screen != null)
                         {
@@ -410,11 +370,8 @@ namespace Iciclecreek.Terminal
                         break;
 
                     case XTerm.Common.WindowInfoRequest.CellSizePixels:
-                        // Cell size is derived from font metrics in TerminalView
-                        // We need to expose this from the terminal control
-                        // For now, use reasonable defaults based on typical terminal fonts
-                        e.CellWidth = (int)(FontSize * 0.6);  // Approximate monospace width
-                        e.CellHeight = (int)(FontSize * 1.2); // Approximate line height
+                        e.CellWidth = (int)(FontSize * 0.6);
+                        e.CellHeight = (int)(FontSize * 1.2);
                         e.Handled = true;
                         break;
 

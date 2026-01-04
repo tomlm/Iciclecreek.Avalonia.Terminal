@@ -1,3 +1,4 @@
+using Avalonia.Interactivity;
 using System;
 using XT = global::XTerm;
 
@@ -7,7 +8,7 @@ namespace Iciclecreek.Terminal
     /// EventArgs for the WindowInfoRequested event.
     /// The handler should set the appropriate response properties based on the Request type.
     /// </summary>
-    public class WindowInfoRequestedEventArgs : EventArgs
+    public class WindowInfoRequestedEventArgs : RoutedEventArgs
     {
         /// <summary>
         /// The type of window information being requested.

@@ -1,3 +1,4 @@
+using Avalonia.Interactivity;
 using System;
 
 namespace Iciclecreek.Terminal
@@ -5,10 +6,9 @@ namespace Iciclecreek.Terminal
     /// <summary>
     /// EventArgs for the TitleChanged event.
     /// </summary>
-    public class TitleChangedEventArgs : EventArgs
+    public class TitleChangedEventArgs : RoutedEventArgs
     {
         public string Title { get; }
-        public bool Handled { get; set; }
 
         public TitleChangedEventArgs(string title)
         {

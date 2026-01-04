@@ -147,6 +147,131 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        #region Terminal Attached Events
+
+        public static readonly RoutedEvent<TitleChangedEventArgs> TitleChangedEvent =
+            RoutedEvent.Register<TerminalView, TitleChangedEventArgs>(
+                nameof(TitleChanged),
+                RoutingStrategies.Bubble);
+
+        public static void AddTitleChangedHandler(Interactive target, EventHandler<TitleChangedEventArgs> handler) =>
+            target.AddHandler(TitleChangedEvent, handler);
+
+        public static void RemoveTitleChangedHandler(Interactive target, EventHandler<TitleChangedEventArgs> handler) =>
+            target.RemoveHandler(TitleChangedEvent, handler);
+
+        public static readonly RoutedEvent<WindowMovedEventArgs> WindowMovedEvent =
+            RoutedEvent.Register<TerminalView, WindowMovedEventArgs>(
+                nameof(WindowMoved),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowMovedHandler(Interactive target, EventHandler<WindowMovedEventArgs> handler) =>
+            target.AddHandler(WindowMovedEvent, handler);
+
+        public static void RemoveWindowMovedHandler(Interactive target, EventHandler<WindowMovedEventArgs> handler) =>
+            target.RemoveHandler(WindowMovedEvent, handler);
+
+        public static readonly RoutedEvent<WindowResizedEventArgs> WindowResizedEvent =
+            RoutedEvent.Register<TerminalView, WindowResizedEventArgs>(
+                nameof(WindowResized),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowResizedHandler(Interactive target, EventHandler<WindowResizedEventArgs> handler) =>
+            target.AddHandler(WindowResizedEvent, handler);
+
+        public static void RemoveWindowResizedHandler(Interactive target, EventHandler<WindowResizedEventArgs> handler) =>
+            target.RemoveHandler(WindowResizedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowMinimizedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowMinimized),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowMinimizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowMinimizedEvent, handler);
+
+        public static void RemoveWindowMinimizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowMinimizedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowMaximizedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowMaximized),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowMaximizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowMaximizedEvent, handler);
+
+        public static void RemoveWindowMaximizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowMaximizedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowRestoredEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowRestored),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowRestoredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowRestoredEvent, handler);
+
+        public static void RemoveWindowRestoredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowRestoredEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowRaisedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowRaised),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowRaisedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowRaisedEvent, handler);
+
+        public static void RemoveWindowRaisedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowRaisedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowLoweredEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowLowered),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowLoweredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowLoweredEvent, handler);
+
+        public static void RemoveWindowLoweredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowLoweredEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowFullscreenedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowFullscreened),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowFullscreenedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowFullscreenedEvent, handler);
+
+        public static void RemoveWindowFullscreenedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowFullscreenedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> BellRangEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(BellRang),
+                RoutingStrategies.Bubble);
+
+        public static void AddBellRangHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(BellRangEvent, handler);
+
+        public static void RemoveBellRangHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(BellRangEvent, handler);
+
+        public static readonly RoutedEvent<WindowInfoRequestedEventArgs> WindowInfoRequestedEvent =
+            RoutedEvent.Register<TerminalView, WindowInfoRequestedEventArgs>(
+                nameof(WindowInfoRequested),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowInfoRequestedHandler(Interactive target, EventHandler<WindowInfoRequestedEventArgs> handler) =>
+            target.AddHandler(WindowInfoRequestedEvent, handler);
+
+        public static void RemoveWindowInfoRequestedHandler(Interactive target, EventHandler<WindowInfoRequestedEventArgs> handler) =>
+            target.RemoveHandler(WindowInfoRequestedEvent, handler);
+
+        #endregion
+
         /// <summary>
         /// Event raised when the PTY process exits.
         /// </summary>
@@ -257,6 +382,7 @@ namespace Iciclecreek.Terminal
             _terminal.DataReceived += OnTerminalDataReceived;
             _terminal.BufferChanged += OnTerminalBufferChanged;
             _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
+            // window events
             _terminal.TitleChanged += OnTerminalTitleChanged;
             _terminal.WindowMoved += OnTerminalWindowMoved;
             _terminal.WindowResized += OnTerminalWindowResized;
@@ -268,6 +394,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
             _terminal.BellRang += OnTerminalBellRang;
             _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
+            // end window events
 
             // Setup cursor blink timer
             _cursorBlinkTimer = new DispatcherTimer
@@ -900,58 +1027,97 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalTitleChanged(object? sender, XT.Events.TerminalEvents.TitleChangeEventArgs e)
         {
-            TitleChanged?.Invoke(this, new TitleChangedEventArgs(e.Title));
+            var args = new TitleChangedEventArgs(e.Title)
+            {
+                RoutedEvent = TitleChangedEvent
+            };
+
+            RaiseEvent(args);
+            TitleChanged?.Invoke(this, args);
         }
 
         private void OnTerminalWindowMoved(object? sender, XT.Events.TerminalEvents.WindowMovedEventArgs e)
         {
-            WindowMoved?.Invoke(this, new WindowMovedEventArgs(e.X, e.Y));
+            var args = new WindowMovedEventArgs(e.X, e.Y)
+            {
+                RoutedEvent = WindowMovedEvent
+            };
+
+            RaiseEvent(args);
+            WindowMoved?.Invoke(this, args);
         }
 
         private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
         {
-            WindowResized?.Invoke(this, new WindowResizedEventArgs(e.Width, e.Height));
+            var args = new WindowResizedEventArgs(e.Width, e.Height)
+            {
+                RoutedEvent = WindowResizedEvent
+            };
+
+            RaiseEvent(args);
+            WindowResized?.Invoke(this, args);
         }
 
         private void OnTerminalWindowMinimized(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(WindowMinimizedEvent);
+            RaiseEvent(args);
             WindowMinimized?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalWindowMaximized(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(WindowMaximizedEvent);
+            RaiseEvent(args);
             WindowMaximized?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalWindowRestored(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(WindowRestoredEvent);
+            RaiseEvent(args);
             WindowRestored?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalWindowRaised(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(WindowRaisedEvent);
+            RaiseEvent(args);
             WindowRaised?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalWindowLowered(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(WindowLoweredEvent);
+            RaiseEvent(args);
             WindowLowered?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalWindowFullscreened(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(WindowFullscreenedEvent);
+            RaiseEvent(args);
             WindowFullscreened?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalBellRang(object? sender, EventArgs e)
         {
+            var args = new RoutedEventArgs(BellRangEvent);
+            RaiseEvent(args);
             BellRang?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
         {
-            // Create our own event args and forward to subscribers
-            var args = new WindowInfoRequestedEventArgs(e.Request);
+            // Raise routed event so any parent can handle it without custom plumbing.
+            var args = new WindowInfoRequestedEventArgs(e.Request)
+            {
+                RoutedEvent = WindowInfoRequestedEvent
+            };
+
+            RaiseEvent(args);
+
+            // Keep CLR event for back-compat.
             WindowInfoRequested?.Invoke(this, args);
 
             // Copy response data back to the terminal's event args

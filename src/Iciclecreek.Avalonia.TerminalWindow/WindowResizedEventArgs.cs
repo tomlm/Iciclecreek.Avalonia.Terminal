@@ -1,3 +1,5 @@
+using Avalonia.Interactivity;
+
 using System;
 
 namespace Iciclecreek.Terminal
@@ -5,11 +7,10 @@ namespace Iciclecreek.Terminal
     /// <summary>
     /// EventArgs for the WindowResized event.
     /// </summary>
-    public class WindowResizedEventArgs : EventArgs
+    public class WindowResizedEventArgs : RoutedEventArgs
     {
         public int Width { get; }
         public int Height { get; }
-        public bool Handled { get; set; }
 
         public WindowResizedEventArgs(int width, int height)
         {
