@@ -8,6 +8,7 @@ namespace Iciclecreek.Terminal
     public class TitleChangedEventArgs : EventArgs
     {
         public string Title { get; }
+        public bool Handled { get; set; }
 
         public TitleChangedEventArgs(string title)
         {

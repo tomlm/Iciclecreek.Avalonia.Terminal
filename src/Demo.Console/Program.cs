@@ -16,7 +16,8 @@ namespace Demo.Console
             return AppBuilder.Configure<App>()
                 .UseConsolonia()
                 .UseAutoDetectedConsole()
-                .LogToException();
+                .LogToException()
+                .WithDeveloperTools(); ;
         }
     }
 }

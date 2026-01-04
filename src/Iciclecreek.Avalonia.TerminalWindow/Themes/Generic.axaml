@@ -14,13 +14,12 @@
                                        FontSize="{TemplateBinding FontSize}"
                                        FontStyle="{TemplateBinding FontStyle}"
                                        FontWeight="{TemplateBinding FontWeight}"
-                                       TextDecorations="{TemplateBinding TextDecorations}"
                                        Foreground="{TemplateBinding Foreground}"
                                        Background="{TemplateBinding Background}"
                                        SelectionBrush="{TemplateBinding SelectionBrush}"
                                        Process="{TemplateBinding Process}"
                                        Args="{TemplateBinding Args}"
-                                       BufferSize="{TemplateBinding BufferSize}"/>                    
+                                       Options="{TemplateBinding Options}"/>                    
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"
                               Grid.Column="1"

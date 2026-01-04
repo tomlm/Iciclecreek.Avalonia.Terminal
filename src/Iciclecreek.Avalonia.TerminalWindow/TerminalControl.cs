@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using XTerm;
+using XTerm.Buffer;
 
 namespace Iciclecreek.Terminal
 {
@@ -101,15 +102,14 @@ namespace Iciclecreek.Terminal
                 defaultValue: System.Array.Empty<string>());
 
         public static readonly StyledProperty<int> BufferSizeProperty =
-            AvaloniaProperty.Register<TerminalControl, int>(
-                nameof(BufferSize),
-                defaultValue: 1000);
+                  AvaloniaProperty.Register<TerminalControl, int>(
+                      nameof(BufferSize),
+                      defaultValue: 1000);
 
-        public TextDecorationLocation? TextDecorations
-        {
-            get => GetValue(TextDecorationsProperty);
-            set => SetValue(TextDecorationsProperty, value);
-        }
+        public static readonly StyledProperty<XTerm.Options.TerminalOptions?> OptionsProperty =
+            AvaloniaProperty.Register<TerminalControl, XTerm.Options.TerminalOptions?>(
+                nameof(Options),
+                defaultValue: null);
 
         public IBrush SelectionBrush
         {
@@ -129,10 +129,17 @@ namespace Iciclecreek.Terminal
             set => SetValue(ArgsProperty, value);
         }
 
+
         public int BufferSize
         {
             get => GetValue(BufferSizeProperty);
             set => SetValue(BufferSizeProperty, value);
+        }
+        
+        public XTerm.Options.TerminalOptions? Options
+        {
+            get => GetValue(OptionsProperty);
+            set => SetValue(OptionsProperty, value);
         }
 
         private static bool _stylesLoaded = false;
@@ -239,6 +246,7 @@ namespace Iciclecreek.Terminal
             if (_scrollBar != null && _terminalView != null)
             {
                 _scrollBar.Scroll += OnScrollBarScroll;
+                _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
                 _terminalView.TitleChanged += OnTerminalViewTitleChanged;
@@ -252,7 +260,6 @@ namespace Iciclecreek.Terminal
                 _terminalView.WindowFullscreened += OnTerminalViewWindowFullscreened;
                 _terminalView.BellRang += OnTerminalViewBellRang;
                 _terminalView.WindowInfoRequested += OnTerminalViewWindowInfoRequested;
-                UpdateScrollBar();
             }
         }
 

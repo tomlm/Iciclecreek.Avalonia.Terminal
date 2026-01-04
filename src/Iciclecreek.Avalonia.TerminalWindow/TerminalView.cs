@@ -142,6 +142,11 @@ namespace Iciclecreek.Terminal
                 nameof(CursorBlinkRate),
                 defaultValue: 530);
 
+        public static readonly StyledProperty<XTerm.Options.TerminalOptions?> OptionsProperty =
+            AvaloniaProperty.Register<TerminalControl, XTerm.Options.TerminalOptions?>(
+                nameof(Options),
+                defaultValue: null);
+
         /// <summary>
         /// Event raised when the PTY process exits.
         /// </summary>
@@ -236,14 +241,18 @@ namespace Iciclecreek.Terminal
             Focusable = true;
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
+        }
 
-            _terminal = new XT.Terminal(new XT.Options.TerminalOptions()
-            {
-                Cols = 80,
-                Rows = 24,
-                Scrollback = BufferSize,
-            });
-            _isAlternateBuffer = _terminal.IsAlternateBufferActive;
+        protected override void OnInitialized()
+        {
+            // Sync terminal options with styled properties
+            var options = Options ?? new XT.Options.TerminalOptions();
+
+            options.CursorStyle = CursorStyle;
+            options.CursorBlink = CursorBlink;
+            options.CursorBlinkRate = CursorBlinkRate;
+
+            _terminal = new XT.Terminal(options);
 
             _terminal.DataReceived += OnTerminalDataReceived;
             _terminal.BufferChanged += OnTerminalBufferChanged;
@@ -413,6 +422,12 @@ namespace Iciclecreek.Terminal
             set => SetValue(CursorBlinkRateProperty, value);
         }
 
+        public XTerm.Options.TerminalOptions? Options
+        {
+            get => GetValue(OptionsProperty);
+            set => SetValue(OptionsProperty, value);
+        }
+
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
             base.OnPropertyChanged(change);
@@ -446,11 +461,6 @@ namespace Iciclecreek.Terminal
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
-            // Sync terminal options with styled properties
-            _terminal.Options.CursorStyle = CursorStyle;
-            _terminal.Options.CursorBlink = CursorBlink;
-            _terminal.Options.CursorBlinkRate = CursorBlinkRate;
-
             if (!string.IsNullOrEmpty(Process))
             {
                 LaunchProcess();
@@ -504,7 +514,7 @@ namespace Iciclecreek.Terminal
         protected override async void OnKeyDown(KeyEventArgs e)
         {
             Debug.WriteLine($"[TerminalView] OnKeyDown: Key={e.Key}, IsFocused={IsFocused}, Source={e.Source?.GetType().Name}, KeySymbol='{e.KeySymbol}'");
-            
+
             // Only process input if this terminal has focus
             if (!IsFocused)
             {
@@ -632,7 +642,7 @@ namespace Iciclecreek.Terminal
         protected override async void OnTextInput(TextInputEventArgs e)
         {
             Debug.WriteLine($"[TerminalView] OnTextInput: Text='{e.Text}', IsFocused={IsFocused}");
-            
+
             // Only process input if this terminal has focus
             if (!IsFocused)
             {
@@ -1531,7 +1541,7 @@ namespace Iciclecreek.Terminal
                     // Only render the first half of the columns since they'll be doubled
                     int effectiveCols = _terminal.Cols / 2;
 
-                    for (int x = 0; x < effectiveCols && x < line.Length; )
+                    for (int x = 0; x < effectiveCols && x < line.Length;)
                     {
                         var cell = line[x];
                         string text = String.Empty;
@@ -1694,7 +1704,7 @@ namespace Iciclecreek.Terminal
         private string GenerateWin32InputSequence(KeyEventArgs e, bool isKeyDown)
         {
             var vk = ConvertAvaloniaKeyToVirtualKey(e.Key);
-            
+
             // If we can't get a virtual key code, we can't generate a Win32 sequence
             if (vk == 0)
             {

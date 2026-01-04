@@ -9,6 +9,7 @@ namespace Iciclecreek.Terminal
     {
         public int X { get; }
         public int Y { get; }
+        public bool Handled { get; set; }
 
         public WindowMovedEventArgs(int x, int y)
         {

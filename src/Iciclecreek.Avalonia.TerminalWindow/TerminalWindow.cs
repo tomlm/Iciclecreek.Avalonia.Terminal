@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using XTerm;
 
 namespace Iciclecreek.Terminal
 {
@@ -50,10 +51,6 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public event EventHandler<WindowInfoRequestedEventArgs>? WindowInfoRequested;
 
-        public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
-            AvaloniaProperty.Register<TerminalWindow, TextDecorationLocation?>(
-                nameof(TextDecorations),
-                defaultValue: null);
 
         public static readonly StyledProperty<IBrush> SelectionBrushProperty =
             AvaloniaProperty.Register<TerminalWindow, IBrush>(
@@ -70,11 +67,6 @@ namespace Iciclecreek.Terminal
                 nameof(Args),
                 defaultValue: Array.Empty<string>());
 
-        public static readonly StyledProperty<int> BufferSizeProperty =
-            AvaloniaProperty.Register<TerminalWindow, int>(
-                nameof(BufferSize),
-                defaultValue: 1000);
-
         public static readonly StyledProperty<bool> CloseOnProcessExitProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
                 nameof(CloseOnProcessExit),
@@ -85,19 +77,12 @@ namespace Iciclecreek.Terminal
                 nameof(UpdateTitleFromTerminal),
                 defaultValue: true);
 
-        public static readonly StyledProperty<bool> HandleWindowCommandsProperty =
-            AvaloniaProperty.Register<TerminalWindow, bool>(
-                nameof(HandleWindowCommands),
-                defaultValue: true);
 
-        /// <summary>
-        /// Gets or sets the text decorations for the terminal.
-        /// </summary>
-        public TextDecorationLocation? TextDecorations
-        {
-            get => GetValue(TextDecorationsProperty);
-            set => SetValue(TextDecorationsProperty, value);
-        }
+        public static readonly StyledProperty<XTerm.Options.TerminalOptions?> OptionsProperty =
+            AvaloniaProperty.Register<TerminalWindow, XTerm.Options.TerminalOptions?>(
+                nameof(Options),
+                defaultValue: null);
+
 
         /// <summary>
         /// Gets or sets the selection brush for the terminal.
@@ -126,14 +111,6 @@ namespace Iciclecreek.Terminal
             set => SetValue(ArgsProperty, value);
         }
 
-        /// <summary>
-        /// Gets or sets the scrollback buffer size.
-        /// </summary>
-        public int BufferSize
-        {
-            get => GetValue(BufferSizeProperty);
-            set => SetValue(BufferSizeProperty, value);
-        }
 
         /// <summary>
         /// Gets or sets whether the window should close when the process exits.
@@ -153,13 +130,14 @@ namespace Iciclecreek.Terminal
             set => SetValue(UpdateTitleFromTerminalProperty, value);
         }
 
+
         /// <summary>
-        /// Gets or sets whether window manipulation commands from the terminal should be handled.
+        /// Gets or sets the terminal options.
         /// </summary>
-        public bool HandleWindowCommands
+        public XTerm.Options.TerminalOptions? Options
         {
-            get => GetValue(HandleWindowCommandsProperty);
-            set => SetValue(HandleWindowCommandsProperty, value);
+            get => GetValue(OptionsProperty);
+            set => SetValue(OptionsProperty, value);
         }
 
         static TerminalWindow()
@@ -170,14 +148,35 @@ namespace Iciclecreek.Terminal
 
         public TerminalWindow()
         {
-            // Create the terminal control as content
-            _terminalControl = new TerminalControl();
-            Content = _terminalControl;
-
             // Set focus to terminal when window opens or is activated
+            Loaded += OnLoaded;
             Opened += OnOpened;
             Activated += OnActivated;
             Deactivated += OnDeactivated;
+        }
+
+        private void OnLoaded(object? sender, RoutedEventArgs e)
+        {
+            _terminalControl = new TerminalControl();
+            _terminalControl.Options = this.Options ?? new XTerm.Options.TerminalOptions();
+            _terminalControl.Options.WindowOptions.GetWinPosition = true;
+            _terminalControl.Options.WindowOptions.GetWinSizePixels = true;
+            _terminalControl.Options.WindowOptions.GetWinSizeChars = true;
+            _terminalControl.Options.WindowOptions.GetScreenSizePixels = true;
+            _terminalControl.Options.WindowOptions.GetCellSizePixels = true;
+            _terminalControl.Options.WindowOptions.GetIconTitle = true;
+            _terminalControl.Options.WindowOptions.GetWinTitle = true;
+            _terminalControl.Options.WindowOptions.GetWinState = true;
+            _terminalControl.Options.WindowOptions.SetWinPosition = true;
+            _terminalControl.Options.WindowOptions.SetWinSizePixels = true;
+            _terminalControl.Options.WindowOptions.SetWinSizeChars = true;
+            _terminalControl.Options.WindowOptions.RaiseWin = true;
+            _terminalControl.Options.WindowOptions.LowerWin = true;
+            _terminalControl.Options.WindowOptions.RefreshWin = true;
+            _terminalControl.Options.WindowOptions.RestoreWin = true;
+            _terminalControl.Options.WindowOptions.MaximizeWin = true;
+            _terminalControl.Options.WindowOptions.MinimizeWin = true;
+            _terminalControl.Options.WindowOptions.FullscreenWin = true;
 
             // Clicking the native title bar/chrome can steal keyboard focus away from the content
             // (especially on Linux). Restore focus on any pointer press within the window.
@@ -205,11 +204,12 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.FontWeightProperty, this.GetObservable(FontWeightProperty));
             _terminalControl.Bind(TemplatedControl.ForegroundProperty, this.GetObservable(ForegroundProperty));
             _terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
-            _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
-            _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
+            _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
+
+            Content = _terminalControl;
         }
 
         private void OnOpened(object? sender, EventArgs e)
@@ -311,87 +311,60 @@ namespace Iciclecreek.Terminal
         {
             TitleChanged?.Invoke(this, e);
 
-            if (UpdateTitleFromTerminal)
-            {
-                Title = e.Title;
-            }
+            Title = e.Title;
         }
 
         private void OnTerminalControlWindowMoved(object? sender, WindowMovedEventArgs e)
         {
             WindowMoved?.Invoke(this, e);
 
-            if (HandleWindowCommands)
-            {
-                Position = new PixelPoint(e.X, e.Y);
-            }
+            Position = new PixelPoint(e.X, e.Y);
         }
 
         private void OnTerminalControlWindowResized(object? sender, WindowResizedEventArgs e)
         {
             WindowResized?.Invoke(this, e);
 
-            if (HandleWindowCommands)
-            {
-                Width = e.Width;
-                Height = e.Height;
-            }
+            Width = e.Width;
+            Height = e.Height;
         }
 
         private void OnTerminalControlWindowMinimized(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.Minimized;
-            }
+            WindowState = WindowState.Minimized;
         }
 
         private void OnTerminalControlWindowMaximized(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.Maximized;
-            }
+            WindowState = WindowState.Maximized;
         }
 
         private void OnTerminalControlWindowRestored(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.Normal;
-            }
+            WindowState = WindowState.Normal;
         }
 
         private void OnTerminalControlWindowRaised(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands && !IsActive)
-            {
-                Activate();
-            }
+            Activate();
         }
 
         private void OnTerminalControlWindowLowered(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                // Avalonia doesn't have a direct "lower window" API, but we can try to deactivate
-                // This is a best-effort implementation
-                Topmost = false;
-            }
+            // Avalonia doesn't have a direct "lower window" API, but we can try to deactivate
+            // This is a best-effort implementation
+            Topmost = false;
         }
 
         private void OnTerminalControlWindowFullscreened(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.FullScreen;
-            }
+            WindowState = WindowState.FullScreen;
         }
 
         private void OnTerminalControlBellRang(object? sender, EventArgs e)
         {
             BellRang?.Invoke(this, EventArgs.Empty);
-            
+
             // Default bell behavior - could flash the window or play a sound
             // Note: We intentionally do NOT activate the window here as it would
             // steal focus from other terminal windows and cause input routing issues.
@@ -402,7 +375,7 @@ namespace Iciclecreek.Terminal
         {
             // Raise the event so external handlers can respond
             WindowInfoRequested?.Invoke(this, e);
-            
+
             // If not handled externally, provide default responses from the window
             if (!e.Handled)
             {
@@ -412,19 +385,19 @@ namespace Iciclecreek.Terminal
                         e.IsIconified = WindowState == WindowState.Minimized;
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.Position:
                         e.X = Position.X;
                         e.Y = Position.Y;
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.SizePixels:
                         e.WidthPixels = (int)Width;
                         e.HeightPixels = (int)Height;
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
                         // Get screen size from the current screen
                         var screen = Screens.ScreenFromWindow(this);
@@ -435,7 +408,7 @@ namespace Iciclecreek.Terminal
                             e.Handled = true;
                         }
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.CellSizePixels:
                         // Cell size is derived from font metrics in TerminalView
                         // We need to expose this from the terminal control
@@ -444,7 +417,7 @@ namespace Iciclecreek.Terminal
                         e.CellHeight = (int)(FontSize * 1.2); // Approximate line height
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.Title:
                     case XTerm.Common.WindowInfoRequest.IconTitle:
                         e.Title = Title;

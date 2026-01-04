@@ -57,6 +57,12 @@ namespace Demo.Views
                 nameof(TextDecorations),
                 defaultValue: null);
 
+        public static readonly StyledProperty<XTerm.Options.TerminalOptions?> OptionsProperty =
+            AvaloniaProperty.Register<TerminalWindow, XTerm.Options.TerminalOptions?>(
+                nameof(Options),
+                defaultValue: null);
+
+
         public static readonly StyledProperty<IBrush> SelectionBrushProperty =
             AvaloniaProperty.Register<ManagedTerminalWindow, IBrush>(
                 nameof(SelectionBrush),
@@ -80,16 +86,6 @@ namespace Demo.Views
         public static readonly StyledProperty<bool> CloseOnProcessExitProperty =
             AvaloniaProperty.Register<ManagedTerminalWindow, bool>(
                 nameof(CloseOnProcessExit),
-                defaultValue: true);
-
-        public static readonly StyledProperty<bool> UpdateTitleFromTerminalProperty =
-            AvaloniaProperty.Register<ManagedTerminalWindow, bool>(
-                nameof(UpdateTitleFromTerminal),
-                defaultValue: true);
-
-        public static readonly StyledProperty<bool> HandleWindowCommandsProperty =
-            AvaloniaProperty.Register<ManagedTerminalWindow, bool>(
-                nameof(HandleWindowCommands),
                 defaultValue: true);
 
         /// <summary>
@@ -147,21 +143,12 @@ namespace Demo.Views
         }
 
         /// <summary>
-        /// Gets or sets whether the window title should be updated from terminal escape sequences.
+        /// Gets or sets the terminal options.
         /// </summary>
-        public bool UpdateTitleFromTerminal
+        public XTerm.Options.TerminalOptions? Options
         {
-            get => GetValue(UpdateTitleFromTerminalProperty);
-            set => SetValue(UpdateTitleFromTerminalProperty, value);
-        }
-
-        /// <summary>
-        /// Gets or sets whether window manipulation commands from the terminal should be handled.
-        /// </summary>
-        public bool HandleWindowCommands
-        {
-            get => GetValue(HandleWindowCommandsProperty);
-            set => SetValue(HandleWindowCommandsProperty, value);
+            get => GetValue(OptionsProperty);
+            set => SetValue(OptionsProperty, value);
         }
 
         static ManagedTerminalWindow()
@@ -185,19 +172,37 @@ namespace Demo.Views
 
         }
 
-        
-
-        private void OnOpened(object? sender, EventArgs e)
+        protected override void OnInitialized()
         {
             // Create the terminal control as content
+            Options = this.Options ?? new XTerm.Options.TerminalOptions();
+            Options.WindowOptions.GetWinPosition = true;
+            Options.WindowOptions.GetWinSizePixels = true;
+            Options.WindowOptions.GetWinSizeChars = true;
+            Options.WindowOptions.GetScreenSizePixels = true;
+            Options.WindowOptions.GetCellSizePixels = true;
+            Options.WindowOptions.GetIconTitle = true;
+            Options.WindowOptions.GetWinTitle = true;
+            Options.WindowOptions.GetWinState = true;
+            Options.WindowOptions.SetWinPosition = true;
+            Options.WindowOptions.SetWinSizePixels = true;
+            Options.WindowOptions.SetWinSizeChars = true;
+            Options.WindowOptions.RaiseWin = true;
+            Options.WindowOptions.LowerWin = true;
+            Options.WindowOptions.RefreshWin = true;
+            Options.WindowOptions.RestoreWin = true;
+            Options.WindowOptions.MaximizeWin = true;
+            Options.WindowOptions.MinimizeWin = true;
+            Options.WindowOptions.FullscreenWin = true;
+
             _terminalControl = new TerminalControl()
             {
+                Options = this.Options,
                 FontFamily = this.FontFamily,
                 FontSize = this.FontSize,
                 Foreground = this.Foreground,
                 Background = this.Background,
             };
-            Content = _terminalControl;
 
             // Wire up events
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
@@ -225,7 +230,11 @@ namespace Demo.Views
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
+            Content = _terminalControl;
+        }
 
+        private void OnOpened(object? sender, EventArgs e)
+        {
             RestoreTerminalFocus();
         }
 
@@ -327,7 +336,7 @@ namespace Demo.Views
         {
             TitleChanged?.Invoke(this, e);
 
-            if (UpdateTitleFromTerminal)
+            if (!e.Handled)
             {
                 Title = e.Title;
             }
@@ -337,7 +346,7 @@ namespace Demo.Views
         {
             WindowMoved?.Invoke(this, e);
 
-            if (HandleWindowCommands)
+            if (!e.Handled)
             {
                 Position = new PixelPoint(e.X, e.Y);
             }
@@ -347,67 +356,49 @@ namespace Demo.Views
         {
             WindowResized?.Invoke(this, e);
 
-            if (HandleWindowCommands)
+            if (!e.Handled)
             {
-                Width = e.Width;
-                Height = e.Height;
+                this.Width = e.Width;
+                this.Height = e.Height;
             }
         }
 
         private void OnTerminalControlWindowMinimized(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.Minimized;
-            }
+            this.MinimizeCommand.Execute();
         }
 
         private void OnTerminalControlWindowMaximized(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.Maximized;
-            }
+            this.MaximizeCommand.Execute();
         }
 
         private void OnTerminalControlWindowRestored(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.Normal;
-            }
+            this.RestoreCommand.Execute();
         }
 
         private void OnTerminalControlWindowRaised(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands && !IsActive)
-            {
-                Activate();
-            }
+            Activate();
         }
 
         private void OnTerminalControlWindowLowered(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                // Avalonia doesn't have a direct "lower window" API, but we can try to deactivate
-                // This is a best-effort implementation
-                Topmost = false;
-            }
+            // Avalonia doesn't have a direct "lower window" API, but we can try to deactivate
+            // This is a best-effort implementation
+            //Topmost = false;
         }
 
         private void OnTerminalControlWindowFullscreened(object? sender, EventArgs e)
         {
-            if (HandleWindowCommands)
-            {
-                WindowState = WindowState.FullScreen;
-            }
+            WindowState = WindowState.FullScreen;
         }
 
         private void OnTerminalControlBellRang(object? sender, EventArgs e)
         {
             BellRang?.Invoke(this, EventArgs.Empty);
-            
+
             // Default bell behavior - could flash the window or play a sound
             // Note: We intentionally do NOT activate the window here as it would
             // steal focus from other terminal windows and cause input routing issues.
@@ -418,7 +409,7 @@ namespace Demo.Views
         {
             // Raise the event so external handlers can respond
             WindowInfoRequested?.Invoke(this, e);
-            
+
             // If not handled externally, provide default responses from the window
             if (!e.Handled)
             {
@@ -428,19 +419,19 @@ namespace Demo.Views
                         e.IsIconified = WindowState == WindowState.Minimized;
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.Position:
                         e.X = Position.X;
                         e.Y = Position.Y;
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.SizePixels:
                         e.WidthPixels = (int)Width;
                         e.HeightPixels = (int)Height;
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
                         // Get screen size from the current screen
                         var screen = Screens.ScreenFromWindow((object)this as WindowBase);
@@ -451,7 +442,7 @@ namespace Demo.Views
                             e.Handled = true;
                         }
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.CellSizePixels:
                         // Cell size is derived from font metrics in TerminalView
                         // We need to expose this from the terminal control
@@ -460,7 +451,7 @@ namespace Demo.Views
                         e.CellHeight = (int)(FontSize * 1.2); // Approximate line height
                         e.Handled = true;
                         break;
-                        
+
                     case XTerm.Common.WindowInfoRequest.Title:
                     case XTerm.Common.WindowInfoRequest.IconTitle:
                         e.Title = Title;

@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Consolonia" Version="11.3.9-beta.2218" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.0.4" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">

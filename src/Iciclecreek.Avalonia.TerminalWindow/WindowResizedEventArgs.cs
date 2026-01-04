@@ -9,6 +9,7 @@ namespace Iciclecreek.Terminal
     {
         public int Width { get; }
         public int Height { get; }
+        public bool Handled { get; set; }
 
         public WindowResizedEventArgs(int width, int height)
         {
