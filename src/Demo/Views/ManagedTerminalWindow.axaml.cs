@@ -132,6 +132,8 @@ namespace Demo.Views
 
         public ManagedTerminalWindow()
         {
+            this.Position = new PixelPoint(0,0);
+
             // Set focus to terminal when window opens or is activated
             Opened += OnOpened;
             Activated += OnActivated;

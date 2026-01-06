@@ -1,4 +1,5 @@
-﻿using Avalonia.Controls;
+﻿using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml.MarkupExtensions;
 using Iciclecreek.Terminal;
@@ -17,11 +18,17 @@ public partial class MainWindow : Window
 
     private void OnNewClicked(object? sender, RoutedEventArgs e)
     {
+        var maxWidth = (int)this.Bounds.Width / 2;
+        var maxHeight = (int)this.Bounds.Height / 2;
+
         var terminalWindow = new ManagedTerminalWindow
         {
             Width = 80 * FontSize,
             Height = 25 * FontSize,
-            CloseOnProcessExit = true
+            CloseOnProcessExit = true,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
+                                          Random.Shared.Next(0, (int)this.Bounds.Height - maxHeight))
         };
         terminalWindow.Show(Windows);
     }
