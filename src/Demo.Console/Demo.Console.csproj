@@ -13,11 +13,11 @@
     <PackageReference Include="Consolonia" Version="11.3.9-beta.2218" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">
+<ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">
     <ProjectReference Include="..\Iciclecreek.Avalonia.TerminalWindow\Iciclecreek.Avalonia.Terminal.csproj" />
-    <ProjectReference Include="..\..\..\Porta.Pty\src\Porta.Pty\Porta.Pty.csproj" />
     <ProjectReference Include="..\..\..\XTerm.NET\src\XTerm.NET\XTerm.NET.csproj" />
     <ProjectReference Include="..\..\..\Consolonia\src\Consolonia\Consolonia.csproj" />
+    <ProjectReference Include="..\..\..\Consolonia\src\Consolonia.PlatformSupport\Consolonia.PlatformSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>

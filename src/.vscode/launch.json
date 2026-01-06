@@ -9,6 +9,12 @@
             "type": "dotnet",
             "request": "launch",
             "projectPath": "${workspaceFolder}/Demo.Desktop/Demo.Desktop.csproj"
+        },
+        {
+            "name": "Demo.Console Debug",
+            "type": "dotnet",
+            "request": "launch",
+            "projectPath": "${workspaceFolder}/Demo.Console/Demo.Console.csproj"
         }
     ]
 }
