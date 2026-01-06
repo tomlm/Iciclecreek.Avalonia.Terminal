@@ -1192,12 +1192,12 @@ namespace Iciclecreek.Terminal
             if (ptyConnection == null || string.IsNullOrEmpty(data))
                 return;
 
-            //await _semaphore.WaitAsync(ct).ConfigureAwait(false);
+            await _semaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var bytes = Utf8NoBom.GetBytes(data);
                 await ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
-              //  await ptyConnection.WriterStream.FlushAsync(ct).ConfigureAwait(false);
+                await ptyConnection.WriterStream.FlushAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -1205,7 +1205,7 @@ namespace Iciclecreek.Terminal
             }
             finally
             {
-//                _semaphore.Release();
+                _semaphore.Release();
             }
         }
 
