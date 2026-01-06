@@ -424,7 +424,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminal.Options.Scrollback = value;
                 SetAndRaise(BufferSizeProperty, ref _bufferSize, value);
-                InvalidateVisual();
+                this.RequestInvalidate();
             }
         }
 
@@ -443,7 +443,7 @@ namespace Iciclecreek.Terminal
                 if (oldValue != _terminal.Buffer.ViewportY)
                 {
                     RaisePropertyChanged(ViewportYProperty, oldValue, _terminal.Buffer.ViewportY);
-                    InvalidateVisual();
+                    this.RequestInvalidate();
                 }
             }
         }
@@ -645,7 +645,7 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
-                InvalidateVisual();
+                this.RequestInvalidate();
             }
         }
 
@@ -679,7 +679,7 @@ namespace Iciclecreek.Terminal
                     if (!string.IsNullOrEmpty(sequence))
                     {
                         e.Handled = true;
-                        await SendToPtyAsync(sequence);
+                        await SendToPtyAsync(sequence).ConfigureAwait(false);
                         return;
                     }
                     // If we couldn't generate a Win32 sequence, fall through to normal handling
@@ -696,7 +696,7 @@ namespace Iciclecreek.Terminal
                     if (!string.IsNullOrEmpty(sequence))
                     {
                         e.Handled = true;
-                        await SendToPtyAsync(sequence);
+                        await SendToPtyAsync(sequence).ConfigureAwait(false);
                     }
                     return;
                 }
@@ -710,7 +710,7 @@ namespace Iciclecreek.Terminal
                         if (!string.IsNullOrEmpty(sequence))
                         {
                             e.Handled = true;
-                            await SendToPtyAsync(sequence);
+                            await SendToPtyAsync(sequence).ConfigureAwait(false);
                         }
                     }
                     return;
@@ -721,7 +721,7 @@ namespace Iciclecreek.Terminal
                 if (TryGetPrintableChar(e, out var printableChar))
                 {
                     e.Handled = true;
-                    await SendToPtyAsync(printableChar.ToString());
+                    await SendToPtyAsync(printableChar.ToString()).ConfigureAwait(false);
                     return;
                 }
 
@@ -758,7 +758,7 @@ namespace Iciclecreek.Terminal
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: false);
                     if (!string.IsNullOrEmpty(sequence))
                     {
-                        await SendToPtyAsync(sequence);
+                        await SendToPtyAsync(sequence).ConfigureAwait(false);
                         e.Handled = true;
                     }
                 }
@@ -798,7 +798,7 @@ namespace Iciclecreek.Terminal
             try
             {
                 Debug.WriteLine($"[TerminalView] OnTextInput: Sending '{e.Text}' to PTY");
-                await SendToPtyAsync(e.Text);
+                await SendToPtyAsync(e.Text).ConfigureAwait(false);
                 e.Handled = true;
             }
             catch (Exception ex)
@@ -829,7 +829,7 @@ namespace Iciclecreek.Terminal
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Down, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
-                    await SendToPtyAsync(sequence);
+                    await SendToPtyAsync(sequence).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -857,7 +857,7 @@ namespace Iciclecreek.Terminal
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Up, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
-                    await SendToPtyAsync(sequence);
+                    await SendToPtyAsync(sequence).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -889,7 +889,7 @@ namespace Iciclecreek.Terminal
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
-                    await SendToPtyAsync(sequence);
+                    await SendToPtyAsync(sequence).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -921,7 +921,7 @@ namespace Iciclecreek.Terminal
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
-                    await SendToPtyAsync(sequence);
+                    await SendToPtyAsync(sequence).ConfigureAwait(false);
                     e.Handled = true;
                     return;
                 }
@@ -970,7 +970,7 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            InvalidateVisual();
+            this.RequestInvalidate();
         }
 
         protected override async void OnLostFocus(RoutedEventArgs e)
@@ -992,156 +992,195 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            InvalidateVisual();
+            this.RequestInvalidate();
         }
 
         private void OnTerminalBufferChanged(object? sender, XT.Events.TerminalEvents.BufferChangedEventArgs e)
         {
-            var oldValue = _isAlternateBuffer;
-            _isAlternateBuffer = e.Buffer == XT.Common.BufferType.Alternate;
-
-            if (oldValue != _isAlternateBuffer)
+            Dispatcher.UIThread.Post(() =>
             {
-                RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
-            }
+                var oldValue = _isAlternateBuffer;
+                _isAlternateBuffer = e.Buffer == XT.Common.BufferType.Alternate;
 
-            RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
-            RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
-            RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
-            InvalidateVisual();
+                if (oldValue != _isAlternateBuffer)
+                {
+                    RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
+                }
+
+                RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
+                RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
+                RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
+                this.RequestInvalidate();
+            });
         }
 
         private void OnTerminalCursorStyleChanged(object? sender, XT.Events.TerminalEvents.CursorStyleChangedEventArgs e)
         {
-            if (!Equals(CursorStyle, e.Style))
+            Dispatcher.UIThread.Post(() =>
             {
-                SetValue(CursorStyleProperty, e.Style);
-            }
+                if (!Equals(CursorStyle, e.Style))
+                {
+                    SetValue(CursorStyleProperty, e.Style);
+                }
 
-            if (!Equals(CursorBlink, e.Blink))
-            {
-                SetValue(CursorBlinkProperty, e.Blink);
-            }
+                if (!Equals(CursorBlink, e.Blink))
+                {
+                    SetValue(CursorBlinkProperty, e.Blink);
+                }
 
-            InvalidateVisual();
+                this.RequestInvalidate();
+            });
         }
 
         private void OnTerminalTitleChanged(object? sender, XT.Events.TerminalEvents.TitleChangeEventArgs e)
         {
-            var args = new TitleChangedEventArgs(e.Title)
+            Dispatcher.UIThread.Post(() =>
             {
-                RoutedEvent = TitleChangedEvent
-            };
 
-            RaiseEvent(args);
-            TitleChanged?.Invoke(this, args);
+                var args = new TitleChangedEventArgs(e.Title)
+                {
+                    RoutedEvent = TitleChangedEvent
+                };
+
+                RaiseEvent(args);
+                TitleChanged?.Invoke(this, args);
+            });
         }
 
         private void OnTerminalWindowMoved(object? sender, XT.Events.TerminalEvents.WindowMovedEventArgs e)
         {
-            var args = new WindowMovedEventArgs(e.X, e.Y)
+            Dispatcher.UIThread.Post(() =>
             {
-                RoutedEvent = WindowMovedEvent
-            };
+                var args = new WindowMovedEventArgs(e.X, e.Y)
+                {
+                    RoutedEvent = WindowMovedEvent
+                };
 
-            RaiseEvent(args);
-            WindowMoved?.Invoke(this, args);
+                RaiseEvent(args);
+                WindowMoved?.Invoke(this, args);
+            });
         }
 
         private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
         {
-            var args = new WindowResizedEventArgs(e.Width, e.Height)
+            Dispatcher.UIThread.Post(() =>
             {
-                RoutedEvent = WindowResizedEvent
-            };
 
-            RaiseEvent(args);
-            WindowResized?.Invoke(this, args);
+                var args = new WindowResizedEventArgs(e.Width, e.Height)
+                {
+                    RoutedEvent = WindowResizedEvent
+                };
+
+                RaiseEvent(args);
+                WindowResized?.Invoke(this, args);
+            });
         }
 
         private void OnTerminalWindowMinimized(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(WindowMinimizedEvent);
-            RaiseEvent(args);
-            WindowMinimized?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(WindowMinimizedEvent);
+                RaiseEvent(args);
+                WindowMinimized?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalWindowMaximized(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(WindowMaximizedEvent);
-            RaiseEvent(args);
-            WindowMaximized?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(WindowMaximizedEvent);
+                RaiseEvent(args);
+                WindowMaximized?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalWindowRestored(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(WindowRestoredEvent);
-            RaiseEvent(args);
-            WindowRestored?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(WindowRestoredEvent);
+                RaiseEvent(args);
+                WindowRestored?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalWindowRaised(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(WindowRaisedEvent);
-            RaiseEvent(args);
-            WindowRaised?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(WindowRaisedEvent);
+                RaiseEvent(args);
+                WindowRaised?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalWindowLowered(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(WindowLoweredEvent);
-            RaiseEvent(args);
-            WindowLowered?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(WindowLoweredEvent);
+                RaiseEvent(args);
+                WindowLowered?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalWindowFullscreened(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(WindowFullscreenedEvent);
-            RaiseEvent(args);
-            WindowFullscreened?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(WindowFullscreenedEvent);
+                RaiseEvent(args);
+                WindowFullscreened?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalBellRang(object? sender, EventArgs e)
         {
-            var args = new RoutedEventArgs(BellRangEvent);
-            RaiseEvent(args);
-            BellRang?.Invoke(this, EventArgs.Empty);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var args = new RoutedEventArgs(BellRangEvent);
+                RaiseEvent(args);
+                BellRang?.Invoke(this, EventArgs.Empty);
+            });
         }
 
         private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
         {
-            // Raise routed event so any parent can handle it without custom plumbing.
-            var args = new WindowInfoRequestedEventArgs(e.Request)
+            Dispatcher.UIThread.Post(() =>
             {
-                RoutedEvent = WindowInfoRequestedEvent
-            };
+                // Raise routed event so any parent can handle it without custom plumbing.
+                var args = new WindowInfoRequestedEventArgs(e.Request)
+                {
+                    RoutedEvent = WindowInfoRequestedEvent
+                };
 
-            RaiseEvent(args);
+                RaiseEvent(args);
 
-            // Keep CLR event for back-compat.
-            WindowInfoRequested?.Invoke(this, args);
+                // Keep CLR event for back-compat.
+                WindowInfoRequested?.Invoke(this, args);
 
-            // Copy response data back to the terminal's event args
-            if (args.Handled)
-            {
-                e.Handled = true;
-                e.IsIconified = args.IsIconified;
-                e.X = args.X;
-                e.Y = args.Y;
-                e.WidthPixels = args.WidthPixels;
-                e.HeightPixels = args.HeightPixels;
-                e.CellWidth = args.CellWidth;
-                e.CellHeight = args.CellHeight;
-                e.Title = args.Title;
-            }
+                // Copy response data back to the terminal's event args
+                if (args.Handled)
+                {
+                    e.Handled = true;
+                    e.IsIconified = args.IsIconified;
+                    e.X = args.X;
+                    e.Y = args.Y;
+                    e.WidthPixels = args.WidthPixels;
+                    e.HeightPixels = args.HeightPixels;
+                    e.CellWidth = args.CellWidth;
+                    e.CellHeight = args.CellHeight;
+                    e.Title = args.Title;
+                }
+            });
         }
 
         private async void OnTerminalDataReceived(object? sender, XT.Events.TerminalEvents.DataEventArgs e)
         {
             // Terminal wants to send data (typically in response to device status queries, etc.)
-
-
-            await SendToPtyAsync(e.Data);
+            await SendToPtyAsync(e.Data).ConfigureAwait(false);
         }
 
         private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
@@ -1153,12 +1192,12 @@ namespace Iciclecreek.Terminal
             if (ptyConnection == null || string.IsNullOrEmpty(data))
                 return;
 
-            await _semaphore.WaitAsync(ct);
+            //await _semaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var bytes = Utf8NoBom.GetBytes(data);
-                await ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length, ct);
-                await ptyConnection.WriterStream.FlushAsync(ct);
+                await ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
+              //  await ptyConnection.WriterStream.FlushAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -1166,7 +1205,7 @@ namespace Iciclecreek.Terminal
             }
             finally
             {
-                _semaphore.Release();
+//                _semaphore.Release();
             }
         }
 
@@ -1384,7 +1423,7 @@ namespace Iciclecreek.Terminal
         {
             try
             {
-                var buffer = new byte[8192];
+                var buffer = new byte[0x40000];
                 while (!cancellationToken.IsCancellationRequested && _ptyConnection != null)
                 {
                     var bytesRead = await _ptyConnection.ReaderStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
@@ -1397,27 +1436,25 @@ namespace Iciclecreek.Terminal
                             _processExitHandled = true;
                             var exitCode = _ptyConnection?.ExitCode ?? 0;
 
-                            await Dispatcher.UIThread.InvokeAsync(() =>
-                            {
-                                _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
-                                _terminal.Buffer.ScrollToBottom();
-                                InvalidateVisual();
-                            });
+                            _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
+                            _terminal.Buffer.ScrollToBottom();
+
+                            this.RequestInvalidate();
                         }
                         break;
                     }
 
                     var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    _terminal.Write(output);
 
-                    await Dispatcher.UIThread.InvokeAsync(() =>
-                    {
-                        _terminal.Write(output);
-                        // Auto-scroll to bottom when new content arrives
-                        _terminal.Buffer.ScrollToBottom();
-                        RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
-                        InvalidateVisual();
-                    });
+                    // Auto-scroll to bottom when new content arrives
+                    var y = _terminal.Buffer.ViewportY;
+                    _terminal.Buffer.ScrollToBottom();
 
+                    if (y != Terminal.Buffer.ViewportY)
+                        Dispatcher.UIThread.Post(() => RaisePropertyChanged(ViewportYProperty, y, _terminal.Buffer.ViewportY));
+
+                    this.RequestInvalidate();
                 }
             }
             catch (OperationCanceledException)
@@ -1426,11 +1463,9 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    _terminal.WriteLine($"\nError reading from process: {ex.Message}\n");
-                    _terminal.Buffer.ScrollToBottom();
-                });
+                _terminal.WriteLine($"\nError reading from process: {ex.Message}\n");
+                _terminal.Buffer.ScrollToBottom();
+                this.RequestInvalidate();
             }
         }
 
@@ -1442,12 +1477,12 @@ namespace Iciclecreek.Terminal
                 return;
             _processExitHandled = true;
 
+            _terminal.WriteLine($"\nProcess exited with code: {e.ExitCode}\n");
+            _terminal.Buffer.ScrollToBottom();
+            this.RequestInvalidate();
+
             Dispatcher.UIThread.InvokeAsync(() =>
             {
-                _terminal.WriteLine($"\nProcess exited with code: {e.ExitCode}\n");
-                _terminal.Buffer.ScrollToBottom();
-                InvalidateVisual();
-
                 // Raise event on UI thread so subscribers can safely update UI
                 var args = new ProcessExitedEventArgs(e.ExitCode)
                 {
@@ -1540,34 +1575,42 @@ namespace Iciclecreek.Terminal
             int viewportLines = _terminal.Rows;
             int startLine = viewportY;
             int endLine = Math.Min(_terminal.Buffer.Length, startLine + viewportLines);
-            for (int y = startLine; y < endLine; y++)
+            try
             {
-                var line = _terminal.Buffer.GetLine(y);
-                if (line == null)
-                    continue;
 
-                int screenY = y - startLine;
-
-                // Calculate Y positions for this screen row
-                var startYPos = Snap(screenY * _charHeight, scale);
-                var endYPos = Snap((screenY + 1) * _charHeight, scale);
-                var rowHeight = Math.Max(0, endYPos - startYPos);
-
-                // Check for double-width/double-height line attributes
-                var lineAttr = line.LineAttribute;
-                if (lineAttr == LineAttribute.DoubleWidth ||
-                         lineAttr == LineAttribute.DoubleHeightTop ||
-                         lineAttr == LineAttribute.DoubleHeightBottom)
+                for (int y = startLine; y < endLine; y++)
                 {
-                    RenderDoubleWidthLine(context, line, screenY, startYPos, rowHeight, lineAttr, scale);
+                    var line = _terminal.Buffer.GetLine(y);
+                    if (line == null)
+                        continue;
+
+                    int screenY = y - startLine;
+
+                    // Calculate Y positions for this screen row
+                    var startYPos = Snap(screenY * _charHeight, scale);
+                    var endYPos = Snap((screenY + 1) * _charHeight, scale);
+                    var rowHeight = Math.Max(0, endYPos - startYPos);
+
+                    // Check for double-width/double-height line attributes
+                    var lineAttr = line.LineAttribute;
+                    if (lineAttr == LineAttribute.DoubleWidth ||
+                             lineAttr == LineAttribute.DoubleHeightTop ||
+                             lineAttr == LineAttribute.DoubleHeightBottom)
+                    {
+                        RenderDoubleWidthLine(context, line, screenY, startYPos, rowHeight, lineAttr, scale);
+                    }
+                    else
+                    {
+                        RenderNormalLine(context, line, screenY, startYPos, rowHeight, scale);
+                    }
                 }
-                else
-                {
-                    RenderNormalLine(context, line, screenY, startYPos, rowHeight, scale);
-                }
+
+                RenderCursor(context, viewportY, scale);
             }
-
-            RenderCursor(context, viewportY, scale);
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TerminalView] Render error: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -1808,7 +1851,7 @@ namespace Iciclecreek.Terminal
             switch (CursorStyle)
             {
                 case XT.Common.CursorStyle.Block:
-                        // TODO Use ConsoleFontBrush
+                    // TODO Use ConsoleFontBrush
                     if (IsFocused)
                     {
                         // Filled block when focused

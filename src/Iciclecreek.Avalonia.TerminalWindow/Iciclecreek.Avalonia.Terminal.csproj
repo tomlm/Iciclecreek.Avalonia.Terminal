@@ -19,7 +19,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <RepositoryUrl>https://github.com/tomlm/Iciclecreek.Avalonia.Terminal</RepositoryUrl>
     <Copyright>Tom Laird-McConnell All Rights Reserved</Copyright>
-    <RootNamespace>Iciclecreek.Avalonia.TerminalWindow</RootNamespace>
+    <RootNamespace>Iciclecreek.TerminalWindow</RootNamespace>
     <ContentTargetFolders>content</ContentTargetFolders>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

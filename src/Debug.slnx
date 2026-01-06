@@ -1,5 +1,7 @@
 <Solution>
   <Project Path="../../Consolonia/src/Consolonia.Core/Consolonia.Core.csproj" />
+  <Project Path="../../Consolonia/src/Consolonia.GuiCS/Consolonia.GuiCS.csproj" />
+  <Project Path="../../Consolonia/src/Consolonia.PlatformSupport/Consolonia.PlatformSupport.csproj" />
   <Project Path="../../Consolonia/src/Consolonia/Consolonia.csproj" />
   <Project Path="../../Iciclecreek.Avalonia.WindowManager/source/Iciclecreek.Avalonia.WindowManager/Iciclecreek.Avalonia.WindowManager.csproj" />
   <Project Path="../../Porta.Pty/src/Porta.Pty.Tests/Porta.Pty.Tests.csproj" />

@@ -16,11 +16,6 @@ namespace Iciclecreek.Terminal
         public XT.Common.WindowInfoRequest Request { get; }
 
         /// <summary>
-        /// Set to true if the request was handled and a response should be sent.
-        /// </summary>
-        public bool Handled { get; set; }
-
-        /// <summary>
         /// For State request: true if window is iconified (minimized), false otherwise.
         /// </summary>
         public bool IsIconified { get; set; }

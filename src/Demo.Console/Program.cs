@@ -18,7 +18,7 @@ namespace Demo.Console
                 .UseConsolonia()
                 .UseAutoDetectedConsole()
                 .LogToException()
-                .WithDeveloperTools(); ;
+                .WithDeveloperTools(); 
         }
     }
 }
