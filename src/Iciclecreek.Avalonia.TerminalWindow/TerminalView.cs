@@ -1569,7 +1569,9 @@ namespace Iciclecreek.Terminal
         public override void Render(DrawingContext context)
         {
             var scale = VisualRoot?.RenderScaling ?? 1.0;
-
+            // Debug.WriteLine("======");
+            // Debug.WriteLine(_terminal.Buffer.PrintViewport());
+            
             // Use the terminal buffer's ViewportY to determine what to render
             int viewportY = _terminal.Buffer.ViewportY;
             int viewportLines = _terminal.Rows;

@@ -25,6 +25,8 @@ public partial class MainWindow : Window
         {
             Width = 80 * FontSize,
             Height = 25 * FontSize,
+            Background= Avalonia.Media.Brushes.Black,
+            Foreground= Avalonia.Media.Brushes.LightGray,
             CloseOnProcessExit = true,
             WindowStartupLocation = WindowStartupLocation.Manual,
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),

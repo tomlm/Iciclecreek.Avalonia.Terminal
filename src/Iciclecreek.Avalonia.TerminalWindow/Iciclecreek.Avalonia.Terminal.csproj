@@ -42,7 +42,7 @@
     <PackageReference Include="Wcwidth" Version="4.0.1" />
     <PackageReference Include="XTerm.NET" Version="1.0.10" />
   </ItemGroup>
-  <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true'">
+  <ItemGroup>
     <ProjectReference Include="..\..\..\XTerm.NET\src\XTerm.NET\XTerm.NET.csproj" />
     <ProjectReference Include="..\..\..\Iciclecreek.Avalonia.WindowManager\source\Iciclecreek.Avalonia.WindowManager\Iciclecreek.Avalonia.WindowManager.csproj" />
   </ItemGroup>
