@@ -1,8 +1,6 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
-using Avalonia.Markup.Xaml.MarkupExtensions;
-using Iciclecreek.Terminal;
 using System;
 using System.Collections.Generic;
 
