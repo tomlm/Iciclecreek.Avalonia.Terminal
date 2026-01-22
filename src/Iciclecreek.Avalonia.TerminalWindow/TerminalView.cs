@@ -1454,12 +1454,17 @@ namespace Iciclecreek.Terminal
                     var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
                     _terminal.Write(output);
 
-                    // Auto-scroll to bottom when new content arrives
-                    var y = _terminal.Buffer.ViewportY;
-                    _terminal.Buffer.ScrollToBottom();
+                    // Auto-scroll to bottom when new content arrives, but only in normal buffer.
+                    // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)
+                    // handles its own cursor positioning and shouldn't be scrolled.
+                    if (!_isAlternateBuffer)
+                    {
+                        var y = _terminal.Buffer.ViewportY;
+                        _terminal.Buffer.ScrollToBottom();
 
-                    if (y != Terminal.Buffer.ViewportY)
-                        Dispatcher.UIThread.Post(() => RaisePropertyChanged(ViewportYProperty, y, _terminal.Buffer.ViewportY));
+                        if (y != Terminal.Buffer.ViewportY)
+                            Dispatcher.UIThread.Post(() => RaisePropertyChanged(ViewportYProperty, y, _terminal.Buffer.ViewportY));
+                    }
 
                     this.RequestInvalidate();
                 }
@@ -1576,8 +1581,8 @@ namespace Iciclecreek.Terminal
         public override void Render(DrawingContext context)
         {
             var scale = VisualRoot?.RenderScaling ?? 1.0;
-            // Debug.WriteLine("======");
-            // Debug.WriteLine(_terminal.Buffer.PrintViewport());
+            //Debug.WriteLine("======");
+            //Debug.WriteLine(_terminal.Buffer.PrintViewport());
             
             // Use the terminal buffer's ViewportY to determine what to render
             int viewportY = _terminal.Buffer.ViewportY;
@@ -1644,9 +1649,9 @@ namespace Iciclecreek.Terminal
                 }
                 return;
             }
-
+            
             // Build and cache text runs for this line
-            var runs = new List<CachedTextRun>();
+            textRuns = new List<CachedTextRun>();
 
             for (int x = 0; x < _terminal.Cols;)
             {
@@ -1678,7 +1683,7 @@ namespace Iciclecreek.Terminal
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
                             break;
                         textBuilder.Append(currentCell.Content);
-                        cellCount += currentCell.Width;  // Wide chars add 2, normal chars add 1
+                        cellCount += currentCell.Width;  
 
                         // Skip the placeholder cell that follows a wide character
                         x += currentCell.Width;
@@ -1711,13 +1716,13 @@ namespace Iciclecreek.Terminal
 
                 var position = new Point(startX, startYPos);
                 // Cache only content-dependent data, not screen position
-                runs.Add(new CachedTextRun(formattedText, runStartX, cellCount, background));
+                textRuns.Add(new CachedTextRun(formattedText, runStartX, cellCount, background));
 
                 context.FillRectangle(background, rect);
                 context.DrawText(formattedText, position);
             }
 
-            line.Cache = runs;
+            line.Cache = textRuns;
         }
 
         /// <summary>

@@ -8,7 +8,6 @@
   <Project Path="../../Consolonia/src/Consolonia.Themes/Consolonia.Themes.csproj" />
   <Project Path="../../Consolonia/src/Consolonia/Consolonia.csproj" />
   <Project Path="../../Iciclecreek.Avalonia.WindowManager/source/Iciclecreek.Avalonia.WindowManager/Iciclecreek.Avalonia.WindowManager.csproj" />
-  <Project Path="../../Porta.Pty/src/Porta.Pty/Porta.Pty.csproj" />
   <Project Path="../../XTerm.NET/src/XTerm.NET.Tests/XTerm.NET.Tests.csproj" />
   <Project Path="../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj" />
   <Project Path="Demo.Console/Demo.Console.csproj" Id="315f847a-0490-4fc0-8dfa-8cd6a32f3465" />
