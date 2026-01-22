@@ -388,6 +388,13 @@ namespace Iciclecreek.Terminal
             options.CursorBlink = CursorBlink;
             options.CursorBlinkRate = CursorBlinkRate;
 
+            // On Linux, the PTY doesn't convert LF to CRLF (ONLCR is disabled for raw mode),
+            // so we need XTerm to handle LF as implicit CRLF
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                options.ConvertEol = true;
+            }
+
             _terminal = new XT.Terminal(options);
 
             _terminal.DataReceived += OnTerminalDataReceived;
