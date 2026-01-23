@@ -40,6 +40,9 @@ namespace Iciclecreek.Terminal
         private DispatcherTimer _cursorBlinkTimer;
         private bool _cursorBlinkOn = true;
 
+        // Selection state - tracks whether terminal is handling selection vs forwarding mouse to app
+        private bool _isSelecting = false;
+
         // Unique identifier for this terminal instance (for debugging)
         private readonly Guid _instanceId = Guid.NewGuid();
 
@@ -504,6 +507,36 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// Copies selected text to the clipboard.
+        /// </summary>
+        /// <returns>True if text was copied, false if no selection.</returns>
+        public async Task<bool> CopyAsync()
+        {
+            if (!_terminal.Selection.HasSelection)
+                return false;
+
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null)
+                return false;
+
+            var text = _terminal.Selection.GetSelectionText();
+            if (!string.IsNullOrEmpty(text))
+            {
+                // Normalize line endings for the current platform
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // Ensure Windows gets \r\n line endings
+                    text = text.Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\r\n");
+                }
+
+                await clipboard.SetTextAsync(text);
+                return true;
+            }
+
+            return false;
+        }
+
         public int ExitCode => _ptyConnection!.ExitCode;
 
         public int Pid => _ptyConnection!.Pid;
@@ -701,6 +734,33 @@ namespace Iciclecreek.Terminal
 
             try
             {
+                // Handle Ctrl+C - copy if there's a selection, otherwise send SIGINT
+                if (e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control)
+                {
+                    if (_terminal.Selection.HasSelection)
+                    {
+                        e.Handled = true;
+                        await CopyAsync();
+                        _terminal.Selection.ClearSelection();
+                        this.RequestInvalidate();
+                        return;
+                    }
+                    // No selection - fall through to send Ctrl+C (SIGINT) to the process
+                }
+
+                // Handle Ctrl+Shift+C for copy (always copies, doesn't send SIGINT)
+                if (e.Key == Key.C && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                {
+                    if (_terminal.Selection.HasSelection)
+                    {
+                        e.Handled = true;
+                        await CopyAsync();
+                        _terminal.Selection.ClearSelection();
+                        this.RequestInvalidate();
+                        return;
+                    }
+                }
+
                 // Handle Ctrl+V and Ctrl+Shift+V for paste (terminal emulator intercepts these)
                 if (e.Key == Key.V && (e.KeyModifiers == KeyModifiers.Control || 
                                         e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift)))
@@ -855,14 +915,62 @@ namespace Iciclecreek.Terminal
             // Request focus when clicked
             Focus();
 
-            if (_ptyConnection == null)
-                return;
-
             try
             {
                 var point = e.GetPosition(this);
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
+
+                // Check if we should handle selection (app doesn't want mouse, or Shift override)
+                if (ShouldHandleSelection(e.KeyModifiers))
+                {
+                    var props = e.GetCurrentPoint(this).Properties;
+
+                    // Right-click: copy if selection exists, otherwise paste
+                    if (props.IsRightButtonPressed)
+                    {
+                        if (_terminal.Selection.HasSelection)
+                        {
+                            await CopyAsync();
+                            _terminal.Selection.ClearSelection();
+                            this.RequestInvalidate();
+                        }
+                        else
+                        {
+                            await PasteAsync();
+                        }
+                        e.Handled = true;
+                        return;
+                    }
+
+                    // Left-click clears existing selection before starting new one
+                    if (props.IsLeftButtonPressed && _terminal.Selection.HasSelection)
+                    {
+                        _terminal.Selection.ClearSelection();
+                        this.RequestInvalidate();
+                    }
+
+                    // Determine selection mode based on click count
+                    var clickCount = e.ClickCount;
+                    var mode = clickCount switch
+                    {
+                        2 => XT.Selection.SelectionMode.Word,
+                        3 => XT.Selection.SelectionMode.Line,
+                        _ => XT.Selection.SelectionMode.Normal
+                    };
+
+                    // Start selection - use viewport-relative row
+                    int viewportRow = row;
+                    _terminal.Selection.StartSelection(col, viewportRow, mode);
+                    _isSelecting = true;
+                    this.RequestInvalidate();
+                    e.Handled = true;
+                    return;
+                }
+
+                // Forward mouse event to application
+                if (_ptyConnection == null)
+                    return;
 
                 var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
@@ -883,11 +991,21 @@ namespace Iciclecreek.Terminal
         {
             base.OnPointerReleased(e);
 
-            if (_ptyConnection == null)
-                return;
-
             try
             {
+                // If we were selecting, end selection
+                if (_isSelecting)
+                {
+                    _terminal.Selection.EndSelection();
+                    _isSelecting = false;
+                    e.Handled = true;
+                    return;
+                }
+
+                // Forward mouse event to application
+                if (_ptyConnection == null)
+                    return;
+
                 var point = e.GetPosition(this);
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
@@ -911,16 +1029,27 @@ namespace Iciclecreek.Terminal
         {
             base.OnPointerMoved(e);
 
-            if (_ptyConnection == null)
-                return;
-
             try
             {
                 var point = e.GetPosition(this);
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
-                var props = e.GetCurrentPoint(this).Properties;
 
+                // If we're selecting, update the selection
+                if (_isSelecting)
+                {
+                    int viewportRow = row;
+                    _terminal.Selection.UpdateSelection(col, viewportRow);
+                    this.RequestInvalidate();
+                    e.Handled = true;
+                    return;
+                }
+
+                // Forward mouse event to application
+                if (_ptyConnection == null)
+                    return;
+
+                var props = e.GetCurrentPoint(this).Properties;
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
                 var button = ConvertPointerButton(props);
                 var eventType = (props.IsLeftButtonPressed || props.IsMiddleButtonPressed || props.IsRightButtonPressed)
@@ -1321,6 +1450,19 @@ namespace Iciclecreek.Terminal
             return XT.Input.MouseButton.None;
         }
 
+        /// <summary>
+        /// Determines if the terminal should handle text selection vs forwarding mouse to app.
+        /// Selection is handled when: (1) app hasn't captured mouse, OR (2) Shift is held (override).
+        /// </summary>
+        private bool ShouldHandleSelection(KeyModifiers modifiers)
+        {
+            bool appWantsMouse = _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None;
+            bool shiftHeld = modifiers.HasFlag(KeyModifiers.Shift);
+
+            // Handle selection if app doesn't want mouse, OR if Shift override is active
+            return !appWantsMouse || shiftHeld;
+        }
+
         private bool TryGetPrintableChar(KeyEventArgs e, out char character)
         {
             // Prefer the symbol provided by Avalonia (already respects layout)
@@ -1653,6 +1795,9 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // Render selection overlay
+                RenderSelection(context, viewportY, scale);
+
                 RenderCursor(context, viewportY, scale);
             }
             catch (Exception ex)
@@ -1860,6 +2005,58 @@ namespace Iciclecreek.Terminal
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Renders the selection overlay.
+        /// </summary>
+        private void RenderSelection(DrawingContext context, int viewportY, double scale)
+        {
+            if (!_terminal.Selection.HasSelection)
+                return;
+
+            int viewportLines = _terminal.Rows;
+
+            for (int screenY = 0; screenY < viewportLines; screenY++)
+            {
+                // Find cells that are selected in this row
+                int? selectionStartX = null;
+                int? selectionEndX = null;
+
+                for (int x = 0; x < _terminal.Cols; x++)
+                {
+                    if (_terminal.Selection.IsCellSelected(x, screenY))
+                    {
+                        if (!selectionStartX.HasValue)
+                            selectionStartX = x;
+                        selectionEndX = x;
+                    }
+                    else if (selectionStartX.HasValue)
+                    {
+                        // End of a selection run - draw it
+                        DrawSelectionRect(context, selectionStartX.Value, selectionEndX!.Value + 1, screenY, scale);
+                        selectionStartX = null;
+                        selectionEndX = null;
+                    }
+                }
+
+                // Draw remaining selection at end of row
+                if (selectionStartX.HasValue)
+                {
+                    DrawSelectionRect(context, selectionStartX.Value, selectionEndX!.Value + 1, screenY, scale);
+                }
+            }
+        }
+
+        private void DrawSelectionRect(DrawingContext context, int startX, int endX, int screenY, double scale)
+        {
+            var x1 = Snap(startX * _charWidth, scale);
+            var x2 = Snap(endX * _charWidth, scale);
+            var y1 = Snap(screenY * _charHeight, scale);
+            var y2 = Snap((screenY + 1) * _charHeight, scale);
+
+            var rect = new Rect(x1, y1, Math.Max(0, x2 - x1), Math.Max(0, y2 - y1));
+            context.FillRectangle(SelectionBrush, rect);
         }
 
         private void RenderCursor(DrawingContext context, int viewportY, double scale)
