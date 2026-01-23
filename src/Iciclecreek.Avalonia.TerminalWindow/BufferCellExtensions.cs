@@ -129,23 +129,25 @@ namespace Iciclecreek.Avalonia.Terminal
         {
             var palette = new Color[256];
 
-            // 0-15: Basic 16 colors
-            palette[0] = Color.FromRgb(0, 0, 0);       // Black
-            palette[1] = Color.FromRgb(205, 0, 0);     // Red
-            palette[2] = Color.FromRgb(0, 205, 0);     // Green
-            palette[3] = Color.FromRgb(205, 205, 0);   // Yellow
-            palette[4] = Color.FromRgb(0, 0, 238);     // Blue
-            palette[5] = Color.FromRgb(205, 0, 205);   // Magenta
-            palette[6] = Color.FromRgb(0, 205, 205);   // Cyan
-            palette[7] = Color.FromRgb(229, 229, 229); // White
-            palette[8] = Color.FromRgb(127, 127, 127); // Bright Black (Gray)
-            palette[9] = Color.FromRgb(255, 0, 0);     // Bright Red
-            palette[10] = Color.FromRgb(0, 255, 0);    // Bright Green
-            palette[11] = Color.FromRgb(255, 255, 0);  // Bright Yellow
-            palette[12] = Color.FromRgb(92, 92, 255);  // Bright Blue
-            palette[13] = Color.FromRgb(255, 0, 255);  // Bright Magenta
-            palette[14] = Color.FromRgb(0, 255, 255);  // Bright Cyan
-            palette[15] = Color.FromRgb(255, 255, 255);// Bright White
+            // 0-15: Basic 16 colors (standard xterm color scheme)
+            // Normal colors (0-7)
+            palette[0] = Color.FromRgb(0, 0, 0);         // Black
+            palette[1] = Color.FromRgb(205, 0, 0);       // Red
+            palette[2] = Color.FromRgb(0, 205, 0);       // Green
+            palette[3] = Color.FromRgb(205, 205, 0);     // Yellow
+            palette[4] = Color.FromRgb(0, 0, 238);       // Blue
+            palette[5] = Color.FromRgb(205, 0, 205);     // Magenta
+            palette[6] = Color.FromRgb(0, 205, 205);     // Cyan
+            palette[7] = Color.FromRgb(229, 229, 229);   // White (Light Gray)
+            // Bright colors (8-15)
+            palette[8] = Color.FromRgb(127, 127, 127);   // Bright Black (Gray)
+            palette[9] = Color.FromRgb(255, 0, 0);       // Bright Red
+            palette[10] = Color.FromRgb(0, 255, 0);      // Bright Green
+            palette[11] = Color.FromRgb(255, 255, 0);    // Bright Yellow
+            palette[12] = Color.FromRgb(92, 92, 255);    // Bright Blue
+            palette[13] = Color.FromRgb(255, 0, 255);    // Bright Magenta
+            palette[14] = Color.FromRgb(0, 255, 255);    // Bright Cyan
+            palette[15] = Color.FromRgb(255, 255, 255);  // Bright White
 
             // 16-231: 216 color cube (6x6x6)
             int index = 16;

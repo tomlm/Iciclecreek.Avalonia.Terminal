@@ -1819,8 +1819,8 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void RenderNormalLine(DrawingContext context, BufferLine line, int screenY, double startYPos, double rowHeight, double scale)
         {
-            // Try to use cached text runs for this line
-            var textRuns = line.Cache as List<CachedTextRun>;
+            // Try to use cached text runs for this line (but not when ReverseVideo mode is active as it affects all cells)
+            var textRuns = !_terminal.ReverseVideo ? line.Cache as List<CachedTextRun> : null;
             if (textRuns != null)
             {
                 foreach (var run in textRuns)
@@ -1890,7 +1890,11 @@ namespace Iciclecreek.Terminal
                 var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                 var background = cell.GetBackgroundBrush(this.Background);
                 var foreground = cell.GetForegroundBrush(this.Foreground);
+                // Apply cell-level inverse attribute
                 if (cell.Attributes.IsInverse())
+                    (foreground, background) = (background, foreground);
+                // Apply terminal-wide reverse video mode (DECSCNM)
+                if (_terminal.ReverseVideo)
                     (foreground, background) = (background, foreground);
                 if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                     (foreground, background) = (background, foreground);
@@ -1909,7 +1913,9 @@ namespace Iciclecreek.Terminal
                 context.DrawText(formattedText, position);
             }
 
-            line.Cache = textRuns;
+            // Cache the text runs (but not when ReverseVideo mode is active)
+            if (!_terminal.ReverseVideo)
+                line.Cache = textRuns;
         }
 
         /// <summary>
@@ -1995,7 +2001,11 @@ namespace Iciclecreek.Terminal
                         var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                         var background = cell.GetBackgroundBrush(this.Background);
                         var foreground = cell.GetForegroundBrush(this.Foreground);
+                        // Apply cell-level inverse attribute
                         if (cell.Attributes.IsInverse())
+                            (foreground, background) = (background, foreground);
+                        // Apply terminal-wide reverse video mode (DECSCNM)
+                        if (_terminal.ReverseVideo)
                             (foreground, background) = (background, foreground);
                         if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                             (foreground, background) = (background, foreground);
