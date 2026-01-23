@@ -479,6 +479,31 @@ namespace Iciclecreek.Terminal
 
         public void Kill() => _ptyConnection!.Kill();
 
+        /// <summary>
+        /// Pastes text from the clipboard into the terminal.
+        /// </summary>
+        public async Task PasteAsync()
+        {
+            if (_ptyConnection == null)
+                return;
+
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null)
+                return;
+
+            var text = await clipboard.GetTextAsync();
+            if (!string.IsNullOrEmpty(text))
+            {
+                // Wrap paste in bracketed paste sequences if mode is enabled
+                if (_terminal.BracketedPasteMode)
+                {
+                    text = $"\u001b[200~{text}\u001b[201~";
+                }
+
+                await SendToPtyAsync(text);
+            }
+        }
+
         public int ExitCode => _ptyConnection!.ExitCode;
 
         public int Pid => _ptyConnection!.Pid;
@@ -676,6 +701,15 @@ namespace Iciclecreek.Terminal
 
             try
             {
+                // Handle Ctrl+V and Ctrl+Shift+V for paste (terminal emulator intercepts these)
+                if (e.Key == Key.V && (e.KeyModifiers == KeyModifiers.Control || 
+                                        e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift)))
+                {
+                    e.Handled = true;
+                    await PasteAsync();
+                    return;
+                }
+
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
                 var hasAlt = (modifiers & XT.Input.KeyModifiers.Alt) != 0;
 
