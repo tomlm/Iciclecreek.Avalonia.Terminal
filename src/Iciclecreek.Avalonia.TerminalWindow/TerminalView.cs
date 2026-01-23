@@ -774,8 +774,12 @@ namespace Iciclecreek.Terminal
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
                 var hasAlt = (modifiers & XT.Input.KeyModifiers.Alt) != 0;
 
-                // Check if Win32 Input Mode is enabled
-                if (_terminal.Win32InputMode)
+                // Check if Win32 Input Mode is enabled OR if we should force it for Windows legacy apps
+                // Legacy Windows console apps in alternate buffer mode often need Win32 input format
+                bool useWin32Format = _terminal.Win32InputMode || 
+                    (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && _isAlternateBuffer);
+
+                if (useWin32Format)
                 {
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: true);
                     if (!string.IsNullOrEmpty(sequence))
@@ -854,8 +858,11 @@ namespace Iciclecreek.Terminal
 
             try
             {
-                // Only send KeyUp events in Win32 Input Mode
-                if (_terminal.Win32InputMode)
+                // Send KeyUp events in Win32 Input Mode or for Windows legacy apps in alternate buffer
+                bool useWin32Format = _terminal.Win32InputMode || 
+                    (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && _isAlternateBuffer);
+
+                if (useWin32Format)
                 {
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: false);
                     if (!string.IsNullOrEmpty(sequence))
