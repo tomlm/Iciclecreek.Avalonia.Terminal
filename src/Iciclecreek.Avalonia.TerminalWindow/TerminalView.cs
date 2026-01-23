@@ -761,9 +761,10 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
-                // Handle Ctrl+V and Ctrl+Shift+V for paste (terminal emulator intercepts these)
-                if (e.Key == Key.V && (e.KeyModifiers == KeyModifiers.Control || 
-                                        e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift)))
+                // Handle Ctrl+Shift+V for paste (standard terminal shortcut)
+                // Ctrl+V is NOT intercepted - it gets passed to the application
+                // (some apps use Ctrl+V for literal character input mode)
+                if (e.Key == Key.V && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
                 {
                     e.Handled = true;
                     await PasteAsync();
