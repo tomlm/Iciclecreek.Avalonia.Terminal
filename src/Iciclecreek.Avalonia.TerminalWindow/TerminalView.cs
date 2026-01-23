@@ -375,7 +375,9 @@ namespace Iciclecreek.Terminal
             FocusableProperty.OverrideDefaultValue<TerminalView>(true);
         }
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
         public TerminalView()
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
         {
             Focusable = true;
             Loaded += OnLoaded;
@@ -494,7 +496,9 @@ namespace Iciclecreek.Terminal
             if (clipboard == null)
                 return;
 
+#pragma warning disable CS0618 // Type or member is obsolete
             var text = await clipboard.GetTextAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
             if (!string.IsNullOrEmpty(text))
             {
                 // Wrap paste in bracketed paste sequences if mode is enabled
@@ -662,7 +666,7 @@ namespace Iciclecreek.Terminal
             }
         }
 
-        private void OnLoaded(object sender, RoutedEventArgs e)
+        private void OnLoaded(object? sender, RoutedEventArgs e)
         {
             if (!string.IsNullOrEmpty(Process))
             {
@@ -676,7 +680,7 @@ namespace Iciclecreek.Terminal
             }
         }
 
-        private void OnUnloaded(object sender, RoutedEventArgs e)
+        private void OnUnloaded(object? sender, RoutedEventArgs e)
         {
             _cursorBlinkTimer.Stop();
             _terminal.DataReceived -= OnTerminalDataReceived;
@@ -704,7 +708,7 @@ namespace Iciclecreek.Terminal
                 for (int y = 0; y < _terminal.Rows; y++)
                 {
                     var line = _terminal.Buffer.GetLine(y);
-                    if (line.Any(cell => cell.Attributes.IsBlink()))
+                    if (line != null && line.Any(cell => cell.Attributes.IsBlink()))
                     {
                         line.Cache = null;
                     }

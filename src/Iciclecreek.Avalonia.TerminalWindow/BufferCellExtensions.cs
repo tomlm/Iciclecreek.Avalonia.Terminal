@@ -74,23 +74,26 @@ namespace Iciclecreek.Avalonia.Terminal
 
             var realColor = cell.ExtractColor(color, mode);
 
-            if (cell.Attributes.IsBold())
+            if (realColor != null)
             {
-                // Increase brightness for bold text
-                var c = realColor.Value;
-                byte r = (byte)Math.Min(255, c.R + 85);
-                byte g = (byte)Math.Min(255, c.G + 85);
-                byte b = (byte)Math.Min(255, c.B + 85);
-                return Color.FromRgb(r, g, b);
-            }
-            else if (cell.Attributes.IsDim())
-            {
-                // Decrease brightness for dim text
-                var c = realColor.Value;
-                byte r = (byte)(c.R * 0.6);
-                byte g = (byte)(c.G * 0.6);
-                byte b = (byte)(c.B * 0.6);
-                return Color.FromRgb(r, g, b);
+                if (cell.Attributes.IsBold())
+                {
+                    // Increase brightness for bold text
+                    var c = realColor.Value;
+                    byte r = (byte)Math.Min(255, c.R + 85);
+                    byte g = (byte)Math.Min(255, c.G + 85);
+                    byte b = (byte)Math.Min(255, c.B + 85);
+                    return Color.FromRgb(r, g, b);
+                }
+                else if (cell.Attributes.IsDim())
+                {
+                    // Decrease brightness for dim text
+                    var c = realColor.Value;
+                    byte r = (byte)(c.R * 0.6);
+                    byte g = (byte)(c.G * 0.6);
+                    byte b = (byte)(c.B * 0.6);
+                    return Color.FromRgb(r, g, b);
+                }
             }
             return realColor;
         }

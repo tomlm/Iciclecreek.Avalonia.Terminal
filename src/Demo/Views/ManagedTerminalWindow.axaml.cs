@@ -415,7 +415,7 @@ namespace Demo.Views
                         break;
 
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
-                        var screen = Screens.ScreenFromWindow((object)this as WindowBase);
+                        var screen = Screens.ScreenFromWindow((WindowBase)(object)this);
                         if (screen != null)
                         {
                             e.WidthPixels = (int)screen.Bounds.Width;
