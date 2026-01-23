@@ -761,6 +761,13 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // Clear selection for any other keystroke
+                if (_terminal.Selection.HasSelection)
+                {
+                    _terminal.Selection.ClearSelection();
+                    this.RequestInvalidate();
+                }
+
                 // Handle Ctrl+Shift+V for paste (standard terminal shortcut)
                 // Ctrl+V is NOT intercepted - it gets passed to the application
                 // (some apps use Ctrl+V for literal character input mode)
@@ -902,6 +909,13 @@ namespace Iciclecreek.Terminal
             {
                 Debug.WriteLine($"[TerminalView] OnTextInput: Win32 input mode, skipping");
                 return;
+            }
+
+            // Clear selection when text is being input
+            if (_terminal.Selection.HasSelection)
+            {
+                _terminal.Selection.ClearSelection();
+                this.RequestInvalidate();
             }
 
             try
