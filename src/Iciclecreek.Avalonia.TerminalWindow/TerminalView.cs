@@ -785,17 +785,20 @@ namespace Iciclecreek.Terminal
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
                 var hasAlt = (modifiers & XT.Input.KeyModifiers.Alt) != 0;
 
-                // Check if Win32 Input Mode is enabled OR if we should force it for Windows legacy apps
-                // Legacy Windows console apps in alternate buffer mode often need Win32 input format
-                bool useWin32Format = _terminal.Win32InputMode || 
-                    (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && _isAlternateBuffer);
-
+                // Windows ConPTY limitation: There is no VT sequence for plain ESCAPE key.
+                // When ENABLE_VIRTUAL_TERMINAL_INPUT is enabled (by cmd.exe), the only way
+                // to send ESCAPE is via Win32 INPUT_RECORD format. Always use Win32 for ESC on Windows.
+                bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+                bool isEscapeKey = e.Key == Key.Escape;
+                bool useWin32Format = _terminal.Win32InputMode || (isWindows && isEscapeKey);
+                
                 if (useWin32Format)
                 {
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: true);
                     if (!string.IsNullOrEmpty(sequence))
                     {
                         e.Handled = true;
+
                         await SendToPtyAsync(sequence).ConfigureAwait(false);
                         return;
                     }
@@ -869,9 +872,10 @@ namespace Iciclecreek.Terminal
 
             try
             {
-                // Send KeyUp events in Win32 Input Mode or for Windows legacy apps in alternate buffer
-                bool useWin32Format = _terminal.Win32InputMode || 
-                    (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && _isAlternateBuffer);
+                // Windows ConPTY limitation: Always send ESCAPE key in Win32 format
+                bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+                bool isEscapeKey = e.Key == Key.Escape;
+                bool useWin32Format = _terminal.Win32InputMode || (isWindows && isEscapeKey);
 
                 if (useWin32Format)
                 {
