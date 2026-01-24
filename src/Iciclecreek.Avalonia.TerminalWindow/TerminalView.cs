@@ -791,7 +791,7 @@ namespace Iciclecreek.Terminal
                 bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
                 bool isEscapeKey = e.Key == Key.Escape;
                 bool useWin32Format = _terminal.Win32InputMode || (isWindows && isEscapeKey);
-                
+
                 if (useWin32Format)
                 {
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: true);
@@ -2247,6 +2247,34 @@ namespace Iciclecreek.Terminal
             else if (e.Key == Key.Space)
             {
                 unicodeChar = 0x20;
+            }
+
+            // If Ctrl is pressed and this is a printable character, prefer the corresponding control code.
+            // This improves compatibility for terminal apps that expect ^X (0x18), ^C (0x03), etc.
+            // even when the underlying transport is Win32 INPUT_RECORD format.
+            if ((e.KeyModifiers & KeyModifiers.Control) != 0 && unicodeChar != 0)
+            {
+                // Ctrl+A..Z => 0x01..0x1A
+                if (unicodeChar >= 'a' && unicodeChar <= 'z')
+                    unicodeChar = unicodeChar - 'a' + 1;
+                else if (unicodeChar >= 'A' && unicodeChar <= 'Z')
+                    unicodeChar = unicodeChar - 'A' + 1;
+                else
+                {
+                    // Common Ctrl+<punct> mappings
+                    unicodeChar = unicodeChar switch
+                    {
+                        0x20 => 0x00, // Ctrl+Space => NUL
+                        '@' => 0x00,  // Ctrl+@ => NUL
+                        '[' => 0x1B,  // Ctrl+[ => ESC
+                        '\\' => 0x1C, // Ctrl+\\ => FS
+                        ']' => 0x1D,  // Ctrl+] => GS
+                        '^' => 0x1E,  // Ctrl+^ => RS
+                        '_' => 0x1F,  // Ctrl+_ => US
+                        '?' => 0x7F,  // Ctrl+? => DEL
+                        _ => unicodeChar
+                    };
+                }
             }
 
             // Build control key state flags
