@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Iciclecreek.Avalonia.Terminal;
@@ -668,7 +669,7 @@ namespace Iciclecreek.Terminal
 
         private void OnLoaded(object? sender, RoutedEventArgs e)
         {
-            if (!string.IsNullOrEmpty(Process))
+            if (_ptyConnection == null && !string.IsNullOrEmpty(Process))
             {
                 LaunchProcess();
             }
@@ -683,6 +684,13 @@ namespace Iciclecreek.Terminal
         private void OnUnloaded(object? sender, RoutedEventArgs e)
         {
             _cursorBlinkTimer.Stop();
+            _isSelecting = false;
+        }
+
+        protected override void OnDetachedFromLogicalTree(LogicalTreeAttachmentEventArgs e)
+        {
+            base.OnDetachedFromLogicalTree(e);
+
             _terminal.DataReceived -= OnTerminalDataReceived;
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
