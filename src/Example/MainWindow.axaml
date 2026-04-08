@@ -1,0 +1,23 @@
+<Window xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+		xmlns:term="using:Iciclecreek.Terminal"
+		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+		x:Class="Example.MainWindow"
+		Title="Example">
+	<TabControl>
+		<TabItem Header="Tab 1">
+			<term:TerminalControl FontFamily="Cascadia Mono"
+								  FontSize="14" BufferSize="1000"/>
+		</TabItem>
+		<TabItem Header="Tab 2">
+			<term:TerminalControl FontFamily="Cascadia Mono"
+								  FontSize="14" BufferSize="1000"/>
+		</TabItem>
+		<TabItem Header="Tab 3">
+			<term:TerminalControl FontFamily="Cascadia Mono"
+								  FontSize="14" BufferSize="1000"/>
+		</TabItem>
+	</TabControl>
+</Window>
