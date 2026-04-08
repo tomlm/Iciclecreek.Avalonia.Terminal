@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
@@ -43,6 +44,9 @@ namespace Iciclecreek.Terminal
 
         // Selection state - tracks whether terminal is handling selection vs forwarding mouse to app
         private bool _isSelecting = false;
+
+        // IME (Input Method Editor) support
+        private TerminalInputMethodClient? _inputMethodClient;
 
         // Unique identifier for this terminal instance (for debugging)
         private readonly Guid _instanceId = Guid.NewGuid();
@@ -383,6 +387,7 @@ namespace Iciclecreek.Terminal
             Focusable = true;
             Loaded += OnLoaded;
             Unloaded += OnUnloaded;
+            TextInputMethodClientRequested += OnTextInputMethodClientRequested;
         }
 
         protected override void OnInitialized()
@@ -426,6 +431,9 @@ namespace Iciclecreek.Terminal
                 Interval = TimeSpan.FromMilliseconds(CursorBlinkRate)
             };
             _cursorBlinkTimer.Tick += OnCursorBlinkTick;
+
+            // Initialize IME client
+            _inputMethodClient = new TerminalInputMethodClient(this);
         }
 
         public bool IsAlternateBuffer => _isAlternateBuffer;
@@ -1191,6 +1199,9 @@ namespace Iciclecreek.Terminal
             _cursorBlinkTimer.Stop();
             _cursorBlinkOn = true;
 
+            // Clear any preedit text when focus is lost
+            _inputMethodClient?.ClearPreeditText();
+
             if (_ptyConnection != null && _terminal.SendFocusEvents)
             {
                 var sequence = _terminal.GenerateFocusEvent(false);
@@ -1201,6 +1212,11 @@ namespace Iciclecreek.Terminal
             }
 
             this.RequestInvalidate();
+        }
+
+        private void OnTextInputMethodClientRequested(object? sender, TextInputMethodClientRequestedEventArgs e)
+        {
+            e.Client = _inputMethodClient;
         }
 
         private void OnTerminalBufferChanged(object? sender, XT.Events.TerminalEvents.BufferChangedEventArgs e)
@@ -1680,6 +1696,9 @@ namespace Iciclecreek.Terminal
                             Dispatcher.UIThread.Post(() => RaisePropertyChanged(ViewportYProperty, y, _terminal.Buffer.ViewportY));
                     }
 
+                    // Notify IME of cursor position change after terminal processes data
+                    Dispatcher.UIThread.Post(() => _inputMethodClient?.NotifyCursorRectangleChanged());
+
                     this.RequestInvalidate();
                 }
             }
@@ -1837,6 +1856,9 @@ namespace Iciclecreek.Terminal
                 RenderSelection(context, viewportY, scale);
 
                 RenderCursor(context, viewportY, scale);
+
+                // Render IME preedit (composition) text overlay
+                RenderPreeditText(context, viewportY, scale);
             }
             catch (Exception ex)
             {
@@ -2199,6 +2221,56 @@ namespace Iciclecreek.Terminal
             return Math.Round(value * scale, MidpointRounding.AwayFromZero) / scale;
         }
 
+        /// <summary>
+        /// Renders the IME preedit (composition) text overlay at the cursor position.
+        /// This displays the uncommitted text that the IME is composing, with an underline
+        /// to indicate it is not yet committed.
+        /// </summary>
+        private void RenderPreeditText(DrawingContext context, int viewportY, double scale)
+        {
+            var preeditText = _inputMethodClient?.PreeditText;
+            if (string.IsNullOrEmpty(preeditText))
+                return;
+
+            int cursorX = _terminal.Buffer.X;
+            int cursorY = _terminal.Buffer.Y;
+            int absoluteCursorY = _terminal.Buffer.YBase + cursorY;
+
+            // Only render if cursor is visible in current viewport
+            if (absoluteCursorY < viewportY || absoluteCursorY >= viewportY + _terminal.Rows)
+                return;
+
+            int screenY = absoluteCursorY - viewportY;
+            double posX = Snap(cursorX * _charWidth, scale);
+            double posY = Snap(screenY * _charHeight, scale);
+            double cellHeight = Snap((screenY + 1) * _charHeight, scale) - posY;
+
+            var typeface = new Typeface(FontFamily, FontStyle, FontWeight);
+            var foreground = GetValue(ForegroundProperty) ?? Brushes.White;
+            var background = GetValue(BackgroundProperty) ?? Brushes.Black;
+
+            var formattedText = new FormattedText(
+                preeditText,
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                typeface,
+                FontSize,
+                foreground);
+
+            double textWidth = formattedText.Width;
+
+            // Draw background behind preedit text to cover existing content
+            context.FillRectangle(background, new Rect(posX, posY, textWidth, cellHeight));
+
+            // Draw the preedit text
+            context.DrawText(formattedText, new Point(posX, posY));
+
+            // Draw underline to indicate uncommitted composition text
+            double underlineY = posY + cellHeight - Math.Max(1.0, scale);
+            var pen = new Pen(foreground, Math.Max(1.0, scale));
+            context.DrawLine(pen, new Point(posX, underlineY), new Point(posX + textWidth, underlineY));
+        }
+
         #region Win32 Input Mode Support
 
         /// <summary>
@@ -2475,6 +2547,174 @@ namespace Iciclecreek.Terminal
 
                 _ => 0
             };
+        }
+
+        #endregion
+
+        #region IME Support
+
+        /// <summary>
+        /// Implements Avalonia's <see cref="TextInputMethodClient"/> for the terminal.
+        /// This enables IME (Input Method Editor) support so that non-English characters
+        /// can be composed correctly with the composition window positioned at the cursor.
+        /// </summary>
+        private sealed class TerminalInputMethodClient : TextInputMethodClient
+        {
+            private readonly TerminalView _view;
+            private string? _preeditText;
+
+            public TerminalInputMethodClient(TerminalView view)
+            {
+                _view = view;
+            }
+
+            /// <summary>
+            /// Gets the preedit (composition) text currently being entered by the IME.
+            /// </summary>
+            public string? PreeditText => _preeditText;
+
+            /// <summary>
+            /// The visual that is rendering the text — this is the terminal view itself.
+            /// </summary>
+            public override Visual TextViewVisual => _view;
+
+            /// <summary>
+            /// Indicates the terminal supports displaying uncommitted preedit text.
+            /// </summary>
+            public override bool SupportsPreedit => true;
+
+            /// <summary>
+            /// Indicates the terminal can provide surrounding text for IME context.
+            /// </summary>
+            public override bool SupportsSurroundingText => true;
+
+            /// <summary>
+            /// Returns the text content of the current line up to the cursor,
+            /// providing context for the IME.
+            /// </summary>
+            public override string SurroundingText
+            {
+                get
+                {
+                    try
+                    {
+                        var buffer = _view._terminal.Buffer;
+                        int absoluteY = buffer.YBase + buffer.Y;
+                        var line = buffer.GetLine(absoluteY);
+                        if (line == null) return string.Empty;
+
+                        var sb = new StringBuilder();
+                        for (int x = 0; x < line.Length; x++)
+                        {
+                            var cell = line[x];
+                            sb.Append(string.IsNullOrEmpty(cell.Content) ? " " : cell.Content);
+                        }
+                        return sb.ToString();
+                    }
+                    catch
+                    {
+                        return string.Empty;
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Gets the cursor rectangle relative to the terminal view,
+            /// used to position the IME composition window at the cursor.
+            /// </summary>
+            public override Rect CursorRectangle
+            {
+                get
+                {
+                    try
+                    {
+                        var buffer = _view._terminal.Buffer;
+                        int cursorX = buffer.X;
+                        int absoluteCursorY = buffer.YBase + buffer.Y;
+                        int viewportY = buffer.ViewportY;
+                        int screenY = absoluteCursorY - viewportY;
+
+                        double posX = cursorX * _view._charWidth;
+                        double posY = screenY * _view._charHeight;
+
+                        return new Rect(posX, posY, _view._charWidth, _view._charHeight);
+                    }
+                    catch
+                    {
+                        return default;
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Gets or sets the selection range within the surrounding text.
+            /// For a terminal, this corresponds to the cursor column position.
+            /// </summary>
+            public override TextSelection Selection
+            {
+                get
+                {
+                    try
+                    {
+                        int cursorX = _view._terminal.Buffer.X;
+                        return new TextSelection(cursorX, cursorX);
+                    }
+                    catch
+                    {
+                        return new TextSelection(0, 0);
+                    }
+                }
+                set { /* Terminal selection is managed separately */ }
+            }
+
+            /// <summary>
+            /// Called by the IME to display uncommitted composition text at the cursor position.
+            /// </summary>
+            public override void SetPreeditText(string? preeditText)
+            {
+                _preeditText = preeditText;
+                _view.RequestInvalidate();
+            }
+
+            /// <summary>
+            /// Called by the IME to display uncommitted composition text with an optional
+            /// cursor offset within the preedit string.
+            /// </summary>
+            /// <param name="preeditText">The current composition text, or null/empty to clear it.</param>
+            /// <param name="cursorPos">The cursor position within the preedit string.
+            /// A terminal renders preedit as a simple underlined overlay so the within-composition
+            /// cursor position is not used here.</param>
+            public override void SetPreeditText(string? preeditText, int? cursorPos)
+            {
+                // cursorPos (position of IME cursor within the composition string) is intentionally
+                // not used: the terminal renders preedit as a simple underlined text overlay and
+                // does not support a separate cursor inside the composition window.
+                _preeditText = preeditText;
+                _view.RequestInvalidate();
+            }
+
+            /// <summary>
+            /// Clears any active preedit text (e.g. when focus is lost).
+            /// </summary>
+            public void ClearPreeditText()
+            {
+                if (_preeditText != null)
+                {
+                    _preeditText = null;
+                    _view.RequestInvalidate();
+                }
+            }
+
+            /// <summary>
+            /// Notifies the IME that the cursor rectangle has changed.
+            /// Called when the terminal buffer updates and the cursor may have moved.
+            /// </summary>
+            internal void NotifyCursorRectangleChanged() => RaiseCursorRectangleChanged();
+
+            /// <summary>
+            /// Notifies the IME that the surrounding text has changed.
+            /// </summary>
+            internal void NotifySurroundingTextChanged() => RaiseSurroundingTextChanged();
         }
 
         #endregion
