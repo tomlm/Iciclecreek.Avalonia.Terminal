@@ -65,6 +65,8 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+
 
         /// <summary>
         /// Gets or sets the selection brush for the terminal.
@@ -197,8 +199,8 @@ namespace Iciclecreek.Terminal
             // Use Bubble so we don't interfere with the system caption buttons (close/maximize/minimize).
             AddHandler(PointerPressedEvent, OnAnyPointerPressed, RoutingStrategies.Bubble);
 
-            // Subscribe to TerminalView attached events bubbling up from the inner TerminalView.
-            TerminalView.AddProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
+            // Subscribe to terminal events.
+            _terminalControl.ProcessExited += OnTerminalControlProcessExited;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -327,7 +329,7 @@ namespace Iciclecreek.Terminal
             if (_terminalControl != null)
             {
                 _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
-                TerminalView.RemoveProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
+                _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -360,10 +362,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
         {
+            ProcessExited?.Invoke(this, e);
+
             if (CloseOnProcessExit)
             {
                 Close();
-                e.Handled = true;
             }
         }
 

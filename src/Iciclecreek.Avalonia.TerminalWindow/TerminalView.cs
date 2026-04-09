@@ -28,7 +28,7 @@ namespace Iciclecreek.Terminal
     {
         private XT.Terminal _terminal;
         private FormattedText _measureText;
-        private string _currentDirectory;
+        private string? _currentDirectory;
         private double _charWidth;
         private double _charHeight;
         private int _bufferSize = 1000;
@@ -168,17 +168,6 @@ namespace Iciclecreek.Terminal
                 defaultValue: null);
 
         #region Terminal Attached Events
-
-        public static readonly RoutedEvent<ProcessExitedEventArgs> ProcessExitedEvent =
-            RoutedEvent.Register<TerminalView, ProcessExitedEventArgs>(
-                nameof(ProcessExited),
-                RoutingStrategies.Bubble);
-
-        public static void AddProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
-            target.AddHandler(ProcessExitedEvent, handler);
-
-        public static void RemoveProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
-            target.RemoveHandler(ProcessExitedEvent, handler);
 
         public static readonly RoutedEvent<TitleChangedEventArgs> TitleChangedEvent =
             RoutedEvent.Register<TerminalView, TitleChangedEventArgs>(
@@ -689,7 +678,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Gets the current working directory reported by the terminal session.
+        /// Gets the current working directory reported by the running terminal session.
         /// </summary>
         public string? CurrentDirectory => _currentDirectory;
 
@@ -1849,11 +1838,7 @@ namespace Iciclecreek.Terminal
             Dispatcher.UIThread.InvokeAsync(() =>
             {
                 // Raise event on UI thread so subscribers can safely update UI
-                var args = new ProcessExitedEventArgs(e.ExitCode)
-                {
-                    RoutedEvent = ProcessExitedEvent
-                };
-                RaiseEvent(args);
+                var args = new ProcessExitedEventArgs(e.ExitCode);
                 ProcessExited?.Invoke(this, args);
             });
         }

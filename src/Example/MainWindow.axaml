@@ -23,6 +23,7 @@
 				<term:TerminalControl x:Name="Term2" IsVisible="false"
 									  Grid.Row="2" Grid.ColumnSpan="2"
 									  StartingDirectory="{Binding #MyDir.Text}"
+									  ProcessExited="Term2_ProcessExited"
 									  Background="#202020"
 									  FontFamily="Cascadia Mono"
 									  FontSize="14" BufferSize="1000"/>

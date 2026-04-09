@@ -108,15 +108,7 @@ public partial class MainWindow : Window
 
 | Event | Description |
 |-------|-------------|
-| `ProcessExited` | Raised when the PTY process exits |
-| `TitleChanged` | Raised when the terminal title changes (via escape sequences) |
-| `BellRang` | Raised when the terminal bell is activated |
-| `WindowMoved` | Raised when a window move command is received |
-| `WindowResized` | Raised when a window resize command is received |
-| `WindowMinimized` | Raised when a minimize command is received |
-| `WindowMaximized` | Raised when a maximize command is received |
-| `WindowRestored` | Raised when a restore command is received |
-| `WindowFullscreened` | Raised when a fullscreen command is received |
+| `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. |
 
 ### TerminalWindow
 
@@ -180,6 +172,12 @@ terminalWindow.Show();
 | `CloseOnProcessExit` | `bool` | `true` | Automatically close the window when the process exits |
 | `UpdateTitleFromTerminal` | `bool` | `true` | Update window title from terminal escape sequences |
 | `HandleWindowCommands` | `bool` | `true` | Handle window manipulation commands from the terminal |
+
+**Events:**
+
+| Event | Description |
+|-------|-------------|
+| `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. If `CloseOnProcessExit` is `true`, the event is raised before the window closes. |
 
 
 ## Links
