@@ -1,4 +1,3 @@
-using Avalonia.Interactivity;
 using System;
 
 namespace Iciclecreek.Terminal
@@ -6,7 +5,7 @@ namespace Iciclecreek.Terminal
     /// <summary>
     /// EventArgs for the ProcessExited event.
     /// </summary>
-    public class ProcessExitedEventArgs : RoutedEventArgs
+    public class ProcessExitedEventArgs : EventArgs
     {
         public int ExitCode { get; }
 

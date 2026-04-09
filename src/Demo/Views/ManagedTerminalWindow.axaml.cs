@@ -178,8 +178,8 @@ namespace Demo.Views
                 Background = this.Background,
             };
 
-            // Subscribe to TerminalView attached events bubbling from the inner TerminalView.
-            TerminalView.AddProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
+            // Subscribe to terminal events.
+            _terminalControl.ProcessExited += OnTerminalControlProcessExited;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -273,7 +273,7 @@ namespace Demo.Views
 
             if (_terminalControl != null)
             {
-                TerminalView.RemoveProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
+                _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);

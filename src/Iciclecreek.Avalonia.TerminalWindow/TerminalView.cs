@@ -18,6 +18,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using XTerm.Buffer;
+using XTerm.Events;
 using XT = global::XTerm;
 
 namespace Iciclecreek.Terminal
@@ -27,6 +28,7 @@ namespace Iciclecreek.Terminal
     {
         private XT.Terminal _terminal;
         private FormattedText _measureText;
+        private string? _currentDirectory;
         private double _charWidth;
         private double _charHeight;
         private int _bufferSize = 1000;
@@ -80,6 +82,11 @@ namespace Iciclecreek.Terminal
                 nameof(ViewportLines),
                 o => o.ViewportLines);
 
+        public static readonly DirectProperty<TerminalView, string?> CurrentDirectoryProperty =
+            AvaloniaProperty.RegisterDirect<TerminalView, string?>(
+                nameof(CurrentDirectory),
+                o => o.CurrentDirectory);
+
         public static readonly StyledProperty<FontFamily> FontFamilyProperty =
             AvaloniaProperty.Register<TerminalView, FontFamily>(
                 nameof(FontFamily),
@@ -130,6 +137,11 @@ namespace Iciclecreek.Terminal
                 nameof(Args),
                 defaultValue: Array.Empty<string>());
 
+        public static readonly StyledProperty<string?> StartingDirectoryProperty =
+            AvaloniaProperty.Register<TerminalView, string?>(
+                nameof(StartingDirectory),
+                defaultValue: Environment.CurrentDirectory);
+
         public static readonly StyledProperty<Color> CursorColorProperty =
             AvaloniaProperty.Register<TerminalView, Color>(
                 nameof(CursorColor),
@@ -156,17 +168,6 @@ namespace Iciclecreek.Terminal
                 defaultValue: null);
 
         #region Terminal Attached Events
-
-        public static readonly RoutedEvent<ProcessExitedEventArgs> ProcessExitedEvent =
-            RoutedEvent.Register<TerminalView, ProcessExitedEventArgs>(
-                nameof(ProcessExited),
-                RoutingStrategies.Bubble);
-
-        public static void AddProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
-            target.AddHandler(ProcessExitedEvent, handler);
-
-        public static void RemoveProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
-            target.RemoveHandler(ProcessExitedEvent, handler);
 
         public static readonly RoutedEvent<TitleChangedEventArgs> TitleChangedEvent =
             RoutedEvent.Register<TerminalView, TitleChangedEventArgs>(
@@ -423,6 +424,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
             _terminal.BellRang += OnTerminalBellRang;
             _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
+            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
             // end window events
 
             // Setup cursor blink timer
@@ -436,8 +438,24 @@ namespace Iciclecreek.Terminal
             _inputMethodClient = new TerminalInputMethodClient(this);
         }
 
+        private void OnTerminalDirectoryChanged(object? sender, TerminalEvents.DirectoryChangeEventArgs e)
+        {
+            Dispatcher.UIThread.Invoke(() =>
+            {
+                var oldValue = _currentDirectory;
+                _currentDirectory = e.Directory;
+                RaisePropertyChanged(CurrentDirectoryProperty, oldValue, _currentDirectory);
+            });
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether the terminal is currently using the alternate screen buffer.
+        /// </summary>
         public bool IsAlternateBuffer => _isAlternateBuffer;
 
+        /// <summary>
+        /// Gets or sets the terminal scrollback buffer size in lines.
+        /// </summary>
         public int BufferSize
         {
             get => _bufferSize;
@@ -550,94 +568,159 @@ namespace Iciclecreek.Terminal
             return false;
         }
 
+        /// <summary>
+        /// Gets the exit code of the launched PTY process after it has terminated.
+        /// </summary>
         public int ExitCode => _ptyConnection!.ExitCode;
 
+        /// <summary>
+        /// Gets the operating system process identifier of the launched PTY process.
+        /// </summary>
         public int Pid => _ptyConnection!.Pid;
 
+        /// <summary>
+        /// Gets or sets the font family used to render terminal text.
+        /// </summary>
         public FontFamily FontFamily
         {
             get => GetValue(FontFamilyProperty);
             set => SetValue(FontFamilyProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the font size used to render terminal text.
+        /// </summary>
         public double FontSize
         {
             get => GetValue(FontSizeProperty);
             set => SetValue(FontSizeProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the font style used to render terminal text.
+        /// </summary>
         public FontStyle FontStyle
         {
             get => GetValue(FontStyleProperty);
             set => SetValue(FontStyleProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the font weight used to render terminal text.
+        /// </summary>
         public FontWeight FontWeight
         {
             get => GetValue(FontWeightProperty);
             set => SetValue(FontWeightProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the text decoration locations applied to terminal text.
+        /// </summary>
         public TextDecorationLocation? TextDecorations
         {
             get => GetValue(TextDecorationsProperty);
             set => SetValue(TextDecorationsProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the default foreground brush used for terminal text.
+        /// </summary>
         public IBrush Foreground
         {
             get => GetValue(ForegroundProperty);
             set => SetValue(ForegroundProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the terminal background brush.
+        /// </summary>
         public IBrush Background
         {
             get => GetValue(BackgroundProperty);
             set => SetValue(BackgroundProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the brush used to render selected terminal text.
+        /// </summary>
         public IBrush SelectionBrush
         {
             get => GetValue(SelectionBrushProperty);
             set => SetValue(SelectionBrushProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the executable or shell to launch in the terminal.
+        /// </summary>
         public string Process
         {
             get => GetValue(ProcessProperty);
             set => SetValue(ProcessProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the command-line arguments passed to <see cref="Process"/> when launching.
+        /// </summary>
         public IList<string> Args
         {
             get => GetValue(ArgsProperty);
             set => SetValue(ArgsProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the initial working directory used when the PTY process is started.
+        /// </summary>
+        public string? StartingDirectory
+        {
+            get => GetValue(StartingDirectoryProperty);
+            set => SetValue(StartingDirectoryProperty, value);
+        }
+
+        /// <summary>
+        /// Gets the current working directory reported by the running terminal session.
+        /// </summary>
+        public string? CurrentDirectory => _currentDirectory;
+
+        /// <summary>
+        /// Gets or sets the cursor color used when rendering the terminal caret.
+        /// </summary>
         public Color CursorColor
         {
             get => GetValue(CursorColorProperty);
             set => SetValue(CursorColorProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the cursor style used by the terminal.
+        /// </summary>
         public XT.Common.CursorStyle CursorStyle
         {
             get => GetValue(CursorStyleProperty);
             set => SetValue(CursorStyleProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets a value indicating whether the terminal cursor should blink.
+        /// </summary>
         public bool CursorBlink
         {
             get => GetValue(CursorBlinkProperty);
             set => SetValue(CursorBlinkProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the cursor blink rate in milliseconds.
+        /// </summary>
         public int CursorBlinkRate
         {
             get => GetValue(CursorBlinkRateProperty);
             set => SetValue(CursorBlinkRateProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the terminal emulation options used to configure the inner <see cref="XTerm.Terminal"/>.
+        /// </summary>
         public XTerm.Options.TerminalOptions? Options
         {
             get => GetValue(OptionsProperty);
@@ -675,11 +758,11 @@ namespace Iciclecreek.Terminal
             }
         }
 
-        private void OnLoaded(object? sender, RoutedEventArgs e)
+        private async void OnLoaded(object? sender, RoutedEventArgs e)
         {
             if (_ptyConnection == null && !string.IsNullOrEmpty(Process))
             {
-                LaunchProcess();
+                await LaunchProcess();
             }
 
             // Start cursor blinking if enabled
@@ -712,6 +795,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowLowered -= OnTerminalWindowLowered;
             _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
             _terminal.BellRang -= OnTerminalBellRang;
+            _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
             CleanupProcess();
         }
@@ -1608,7 +1692,13 @@ namespace Iciclecreek.Terminal
             return character != default;
         }
 
-        private async void LaunchProcess()
+        /// <summary>
+        /// Launch the terminal process with the current Process, Args, and StartingDirectory properties. If the process is already running, it will be
+        /// terminated and replaced with a new instance using the updated properties. 
+        /// </summary>
+        /// <returns></returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        public async Task LaunchProcess()
         {
             CleanupProcess();
 
@@ -1624,14 +1714,17 @@ namespace Iciclecreek.Terminal
                     processToLaunch = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash";
                 }
 
+                SetAndRaise(CurrentDirectoryProperty, ref _currentDirectory, StartingDirectory ?? Environment.CurrentDirectory);
+
                 var options = new PtyOptions
                 {
                     Name = processToLaunch,
                     Cols = _terminal.Cols,
                     Rows = _terminal.Rows,
-                    Cwd = Environment.CurrentDirectory,
+                    Cwd = _currentDirectory,
                     App = processToLaunch
                 };
+
 
                 // Add arguments if provided
                 if (Args != null && Args.Count > 0)
@@ -1654,6 +1747,22 @@ namespace Iciclecreek.Terminal
                     _terminal.WriteLine($"Error launching process: {ex.Message}\n");
                 });
             }
+        }
+
+        /// <summary>
+        /// Launch the terminal process with the specified parameters, updating the Process, Args, and StartingDirectory properties. 
+        /// If the process is already running, it will be terminated and replaced with a new instance using the updated properties.
+        /// </summary>
+        /// <param name="startingDirectory"></param>
+        /// <param name="process"></param>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        public virtual async Task LaunchProcess(string? startingDirectory, string process, params string[] args)
+        {
+            StartingDirectory = startingDirectory;
+            Process = process;
+            Args = args ?? Array.Empty<string>();
+            await LaunchProcess();
         }
 
         private async Task ReadPtyOutputAsync(CancellationToken cancellationToken)
@@ -1729,11 +1838,7 @@ namespace Iciclecreek.Terminal
             Dispatcher.UIThread.InvokeAsync(() =>
             {
                 // Raise event on UI thread so subscribers can safely update UI
-                var args = new ProcessExitedEventArgs(e.ExitCode)
-                {
-                    RoutedEvent = ProcessExitedEvent
-                };
-                RaiseEvent(args);
+                var args = new ProcessExitedEventArgs(e.ExitCode);
                 ProcessExited?.Invoke(this, args);
             });
         }
@@ -1816,7 +1921,7 @@ namespace Iciclecreek.Terminal
             var scale = VisualRoot?.RenderScaling ?? 1.0;
             //Debug.WriteLine("======");
             //Debug.WriteLine(_terminal.Buffer.PrintViewport());
-            
+
             // Use the terminal buffer's ViewportY to determine what to render
             int viewportY = _terminal.Buffer.ViewportY;
             int viewportLines = _terminal.Rows;
@@ -1888,7 +1993,7 @@ namespace Iciclecreek.Terminal
                 }
                 return;
             }
-            
+
             // Build and cache text runs for this line
             textRuns = new List<CachedTextRun>();
 
@@ -1922,7 +2027,7 @@ namespace Iciclecreek.Terminal
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
                             break;
                         textBuilder.Append(currentCell.Content);
-                        cellCount += currentCell.Width;  
+                        cellCount += currentCell.Width;
 
                         // Skip the placeholder cell that follows a wide character
                         x += currentCell.Width;

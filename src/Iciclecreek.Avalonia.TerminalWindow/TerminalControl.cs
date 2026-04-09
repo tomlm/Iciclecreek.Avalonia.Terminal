@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace Iciclecreek.Terminal
 {
@@ -15,6 +16,7 @@ namespace Iciclecreek.Terminal
     {
         private TerminalView? _terminalView;
         private ScrollBar? _scrollBar;
+        private string? _currentDirectory;
 
 
         public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
@@ -37,6 +39,16 @@ namespace Iciclecreek.Terminal
                 nameof(Args),
                 defaultValue: System.Array.Empty<string>());
 
+        public static readonly StyledProperty<string?> StartingDirectoryProperty =
+            AvaloniaProperty.Register<TerminalControl, string?>(
+                nameof(StartingDirectory),
+                defaultValue: null);
+
+        public static readonly DirectProperty<TerminalControl, string?> CurrentDirectoryProperty =
+            AvaloniaProperty.RegisterDirect<TerminalControl, string?>(
+                nameof(CurrentDirectory),
+                o => o.CurrentDirectory);
+
         public static readonly StyledProperty<int> BufferSizeProperty =
                   AvaloniaProperty.Register<TerminalControl, int>(
                       nameof(BufferSize),
@@ -47,31 +59,61 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+
+        /// <summary>
+        /// Gets or sets the brush used to render selected terminal text.
+        /// </summary>
         public IBrush SelectionBrush
         {
             get => GetValue(SelectionBrushProperty);
             set => SetValue(SelectionBrushProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the executable or shell to launch in the terminal.
+        /// </summary>
         public string Process
         {
             get => GetValue(ProcessProperty);
             set => SetValue(ProcessProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the command-line arguments passed to <see cref="Process"/> when launching.
+        /// </summary>
         public IList<string> Args
         {
             get => GetValue(ArgsProperty);
             set => SetValue(ArgsProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the initial working directory used when the PTY process is started.
+        /// </summary>
+        public string? StartingDirectory
+        {
+            get => GetValue(StartingDirectoryProperty);
+            set => SetValue(StartingDirectoryProperty, value);
+        }
 
+        /// <summary>
+        /// Gets the current working directory reported by the running terminal session.
+        /// </summary>
+        public string? CurrentDirectory => _currentDirectory;
+
+        /// <summary>
+        /// Gets or sets the terminal scrollback buffer size in lines.
+        /// </summary>
         public int BufferSize
         {
             get => GetValue(BufferSizeProperty);
             set => SetValue(BufferSizeProperty, value);
         }
-        
+
+        /// <summary>
+        /// Gets or sets the terminal emulation options used by the inner <see cref="TerminalView"/>.
+        /// </summary>
         public XTerm.Options.TerminalOptions? Options
         {
             get => GetValue(OptionsProperty);
@@ -115,16 +157,75 @@ namespace Iciclecreek.Terminal
         {
         }
 
+        /// <summary>
+        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
+        /// </summary>
         public XTerm.Terminal Terminal => _terminalView!.Terminal;
 
 
+        /// <summary>
+        /// Waits for the terminal process to exit, with a timeout in milliseconds.
+        /// </summary>
+        /// <param name="ms">The maximum amount of time to wait, in milliseconds.</param>
         public void WaitForExit(int ms) => _terminalView!.WaitForExit(ms);
 
+        /// <summary>
+        /// Terminates the running terminal process.
+        /// </summary>
         public void Kill() => _terminalView!.Kill();
 
+        /// <summary>
+        /// Gets the exit code of the launched process after it has terminated.
+        /// </summary>
         public int ExitCode => _terminalView!.ExitCode;
 
+        /// <summary>
+        /// Gets the operating system process identifier of the launched terminal process.
+        /// </summary>
         public int Pid => _terminalView!.Pid;
+
+        /// <summary>
+        /// Launch the terminal process with the current Process, Args, and StartingDirectory properties. If the process is already running, it will be
+        /// terminated and replaced with a new instance using the updated properties. 
+        /// </summary>
+        /// <returns></returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        public virtual async Task LaunchProcess()
+        {
+            if (_terminalView == null)
+            {
+                ApplyTemplate();
+            }
+
+            if (_terminalView == null)
+                throw new InvalidOperationException("TerminalControl template has not been applied yet.");
+
+            await _terminalView.LaunchProcess();
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_terminalView != null && !_terminalView.IsFocused)
+                {
+                    _terminalView.Focus();
+                }
+            }, DispatcherPriority.Input);
+        }
+
+        /// <summary>
+        /// Launch the terminal process with the specified parameters, updating the Process, Args, and StartingDirectory properties. 
+        /// If the process is already running, it will be terminated and replaced with a new instance using the updated properties.
+        /// </summary>
+        /// <param name="startingDirectory"></param>
+        /// <param name="process"></param>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        public virtual async Task LaunchProcess(string? startingDirectory, string process, params string[] args)
+        {
+            StartingDirectory = startingDirectory;
+            Process = process;
+            Args = args ?? Array.Empty<string>();
+            await LaunchProcess();
+        }
 
         protected override void OnGotFocus(GotFocusEventArgs e)
         {
@@ -160,7 +261,10 @@ namespace Iciclecreek.Terminal
             if (_terminalView != null)
             {
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
+                _terminalView.ProcessExited -= OnTerminalViewProcessExited;
             }
+
+            SetCurrentDirectory(null);
 
             // Get template parts
             _terminalView = e.NameScope.Find<TerminalView>("PART_TerminalView");
@@ -172,6 +276,8 @@ namespace Iciclecreek.Terminal
                 _scrollBar.Scroll += OnScrollBarScroll;
                 _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
+                _terminalView.ProcessExited += OnTerminalViewProcessExited;
+                SetCurrentDirectory(_terminalView.CurrentDirectory);
                 // (no window event hooking needed)
             }
         }
@@ -193,6 +299,20 @@ namespace Iciclecreek.Terminal
             {
                 UpdateScrollBar();
             }
+            else if (e.Property == TerminalView.CurrentDirectoryProperty)
+            {
+                SetCurrentDirectory(_terminalView?.CurrentDirectory);
+            }
+        }
+
+        private void OnTerminalViewProcessExited(object? sender, ProcessExitedEventArgs e)
+        {
+            ProcessExited?.Invoke(this, e);
+        }
+
+        private void SetCurrentDirectory(string? currentDirectory)
+        {
+            SetAndRaise(CurrentDirectoryProperty, ref _currentDirectory, currentDirectory);
         }
 
         private void UpdateScrollBar()

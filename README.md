@@ -84,6 +84,10 @@ public partial class MainWindow : Window
 |----------|------|---------|-------------|
 | `Process` | `string` | `cmd.exe` (Windows) / `sh` (Unix) | The shell or process to launch |
 | `Args` | `IList<string>` | Empty | Command-line arguments for the process |
+| `StartingDirectory` | `string?` | Current working directory | The initial working directory used when launching the PTY process |
+| `CurrentDirectory` | `string?` | Read-only | The current working directory reported by the running terminal session via OSC 7 |
+| `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
+| `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
 | `FontFamily` | `FontFamily` | Inherited | Terminal font family (use monospace fonts) |
 | `FontSize` | `double` | Inherited | Terminal font size |
@@ -91,19 +95,20 @@ public partial class MainWindow : Window
 | `Background` | `IBrush` | Inherited | Terminal background color |
 | `SelectionBrush` | `IBrush` | Semi-transparent blue | Text selection highlight color |
 
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
+| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
+| `Kill()` | Terminates the running terminal process |
+| `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
+
 **Events:**
 
 | Event | Description |
 |-------|-------------|
-| `ProcessExited` | Raised when the PTY process exits |
-| `TitleChanged` | Raised when the terminal title changes (via escape sequences) |
-| `BellRang` | Raised when the terminal bell is activated |
-| `WindowMoved` | Raised when a window move command is received |
-| `WindowResized` | Raised when a window resize command is received |
-| `WindowMinimized` | Raised when a minimize command is received |
-| `WindowMaximized` | Raised when a maximize command is received |
-| `WindowRestored` | Raised when a restore command is received |
-| `WindowFullscreened` | Raised when a fullscreen command is received |
+| `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. |
 
 ### TerminalWindow
 
@@ -140,6 +145,7 @@ var terminalWindow = new TerminalWindow
     Height = 600,
     FontFamily = new FontFamily("Cascadia Mono"),
     FontSize = 14,
+    StartingDirectory = Environment.CurrentDirectory,
     Process = "pwsh.exe",  // PowerShell Core
     Args = new[] { "-NoLogo" },
     CloseOnProcessExit = true
@@ -148,13 +154,31 @@ var terminalWindow = new TerminalWindow
 terminalWindow.Show();
 ```
 
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
+| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
+| `Kill()` | Terminates the running terminal process |
+| `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
+
 **Additional Properties (beyond TerminalControl):**
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
+| `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `CloseOnProcessExit` | `bool` | `true` | Automatically close the window when the process exits |
 | `UpdateTitleFromTerminal` | `bool` | `true` | Update window title from terminal escape sequences |
 | `HandleWindowCommands` | `bool` | `true` | Handle window manipulation commands from the terminal |
+
+**Events:**
+
+| Event | Description |
+|-------|-------------|
+| `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. If `CloseOnProcessExit` is `true`, the event is raised before the window closes. |
+
 
 ## Links
 
