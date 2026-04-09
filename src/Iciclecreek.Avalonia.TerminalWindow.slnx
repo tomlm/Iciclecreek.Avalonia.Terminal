@@ -2,5 +2,6 @@
   <Project Path="Demo.Console/Demo.Console.csproj" />
   <Project Path="Demo.Desktop/Demo.Desktop.csproj" />
   <Project Path="Demo/Demo.csproj" />
+  <Project Path="Example/Example.csproj" />
   <Project Path="Iciclecreek.Avalonia.TerminalWindow/Iciclecreek.Avalonia.Terminal.csproj" />
 </Solution>
