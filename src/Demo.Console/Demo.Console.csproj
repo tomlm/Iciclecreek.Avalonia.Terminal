@@ -10,14 +10,11 @@
 
   <ItemGroup>
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.0.4" />
-    <PackageReference Include="Consolonia" Version="11.3.9-beta.2218" />
+    <PackageReference Include="Consolonia" Version="11.3.10" />
   </ItemGroup>
 
-<ItemGroup >
+<ItemGroup>
     <ProjectReference Include="..\Iciclecreek.Avalonia.TerminalWindow\Iciclecreek.Avalonia.Terminal.csproj" />
-    <ProjectReference Include="..\..\..\XTerm.NET\src\XTerm.NET\XTerm.NET.csproj" />
-    <ProjectReference Include="..\..\..\Consolonia\src\Consolonia\Consolonia.csproj" />
-    <ProjectReference Include="..\..\..\Consolonia\src\Consolonia.PlatformSupport\Consolonia.PlatformSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>
