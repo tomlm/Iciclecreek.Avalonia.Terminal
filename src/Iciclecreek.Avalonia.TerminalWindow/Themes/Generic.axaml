@@ -18,6 +18,7 @@
                                        Background="{TemplateBinding Background}"
                                        SelectionBrush="{TemplateBinding SelectionBrush}"
                                        Process="{TemplateBinding Process}"
+                                       StartingDirectory="{TemplateBinding StartingDirectory}"
                                        Args="{TemplateBinding Args}"
                                        Options="{TemplateBinding Options}"/>                    
                     <!-- Scrollbar -->

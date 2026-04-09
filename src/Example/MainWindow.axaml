@@ -3,13 +3,25 @@
 		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
 		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		xmlns:term="using:Iciclecreek.Terminal"
+		xmlns:xterm="using:XTerm.Options"
 		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
 		x:Class="Example.MainWindow"
 		Title="Example">
 	<TabControl>
 		<TabItem Header="Tab 1">
-			<term:TerminalControl FontFamily="Cascadia Mono"
-								  FontSize="14" BufferSize="1000"/>
+			<Grid RowDefinitions="Auto, Auto, *" ColumnDefinitions="*,Auto">
+				<TextBox x:Name="MyDir" Text="c:\\" Margin="5"/>
+				<Button Content="Start" Grid.Column="1" Click="OnStart"/>
+				<StackPanel Orientation="Horizontal" Grid.Row="1" Margin="5">
+					<TextBlock Text="Current Directory: "/>
+					<TextBlock Text="{Binding ElementName=Term1, Path=CurrentDirectory}"/>
+				</StackPanel>
+				<term:TerminalControl x:Name="Term1" IsVisible="false"
+									  Grid.Row="2" Grid.ColumnSpan="2"
+									  StartingDirectory="{Binding #MyDir.Text}"
+									  FontFamily="Cascadia Mono"
+									  FontSize="14" BufferSize="1000"/>
+			</Grid>
 		</TabItem>
 		<TabItem Header="Tab 2">
 			<term:TerminalControl FontFamily="Cascadia Mono"

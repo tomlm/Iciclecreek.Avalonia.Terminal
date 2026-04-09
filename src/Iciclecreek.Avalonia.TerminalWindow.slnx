@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj" />
   <Project Path="Demo.Console/Demo.Console.csproj" />
   <Project Path="Demo.Desktop/Demo.Desktop.csproj" />
   <Project Path="Demo/Demo.csproj" />

@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using XTerm;
 
 namespace Iciclecreek.Terminal
@@ -37,6 +38,16 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalWindow, IList<string>>(
                 nameof(Args),
                 defaultValue: Array.Empty<string>());
+
+        public static readonly StyledProperty<string?> StartingDirectoryProperty =
+            AvaloniaProperty.Register<TerminalWindow, string?>(
+                nameof(StartingDirectory),
+                defaultValue: Environment.CurrentDirectory);
+
+        public static readonly DirectProperty<TerminalWindow, string?> CurrentDirectoryProperty =
+            AvaloniaProperty.RegisterDirect<TerminalWindow, string?>(
+                nameof(CurrentDirectory),
+                o => o.CurrentDirectory);
 
         public static readonly StyledProperty<bool> CloseOnProcessExitProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
@@ -81,6 +92,20 @@ namespace Iciclecreek.Terminal
             get => GetValue(ArgsProperty);
             set => SetValue(ArgsProperty, value);
         }
+
+        /// <summary>
+        /// Gets or sets the initial working directory for the terminal process.
+        /// </summary>
+        public string? StartingDirectory
+        {
+            get => GetValue(StartingDirectoryProperty);
+            set => SetValue(StartingDirectoryProperty, value);
+        }
+
+        /// <summary>
+        /// Gets the current working directory reported by the terminal session.
+        /// </summary>
+        public string? CurrentDirectory => _terminalControl?.CurrentDirectory;
 
 
         /// <summary>
@@ -128,6 +153,14 @@ namespace Iciclecreek.Terminal
         protected override void OnInitialized()
         {
             base.OnInitialized();
+            EnsureTerminalControl();
+        }
+
+        private void EnsureTerminalControl()
+        {
+            if (_terminalControl != null)
+                return;
+
             _terminalControl = new TerminalControl();
             _terminalControl.Options = this.Options ?? new XTerm.Options.TerminalOptions();
             _terminalControl.Options.WindowOptions.GetWinPosition = true;
@@ -167,6 +200,7 @@ namespace Iciclecreek.Terminal
             TerminalView.AddWindowFullscreenedHandler(_terminalControl, OnTerminalWindowFullscreened);
             TerminalView.AddBellRangHandler(_terminalControl, OnTerminalBellRang);
             TerminalView.AddWindowInfoRequestedHandler(_terminalControl, OnTerminalWindowInfoRequested);
+            _terminalControl.PropertyChanged += OnTerminalControlPropertyChanged;
 
             // Bind properties from Window to TerminalControl
             _terminalControl.Bind(TerminalControl.FontFamilyProperty, this.GetObservable(FontFamilyProperty));
@@ -177,10 +211,49 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
             _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
+            _terminalControl.Bind(TerminalControl.StartingDirectoryProperty, this.GetObservable(StartingDirectoryProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
 
             Content = _terminalControl;
+        }
+
+        /// <summary>
+        /// Launch the terminal process with the current Process, Args, and StartingDirectory properties. If the process is already running, it will be
+        /// terminated and replaced with a new instance using the updated properties. 
+        /// </summary>
+        /// <returns></returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        public virtual async Task LaunchProcess()
+        {
+            EnsureTerminalControl();
+            await _terminalControl.LaunchProcess();
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (IsVisible)
+                {
+                    Activate();
+                }
+
+                RestoreTerminalFocus();
+            }, DispatcherPriority.Input);
+        }
+
+        /// <summary>
+        /// Launch the terminal process with the specified parameters, updating the Process, Args, and StartingDirectory properties. 
+        /// If the process is already running, it will be terminated and replaced with a new instance using the updated properties.
+        /// </summary>
+        /// <param name="startingDirectory"></param>
+        /// <param name="process"></param>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        public virtual async Task LaunchProcess(string? startingDirectory, string process, params string[] args)
+        {
+            StartingDirectory = startingDirectory;
+            Process = process;
+            Args = args ?? Array.Empty<string>();
+            await LaunchProcess();
         }
 
 
@@ -243,6 +316,7 @@ namespace Iciclecreek.Terminal
 
             if (_terminalControl != null)
             {
+                _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
                 TerminalView.RemoveProcessExitedHandler(_terminalControl, OnTerminalControlProcessExited);
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
@@ -255,6 +329,14 @@ namespace Iciclecreek.Terminal
                 TerminalView.RemoveWindowFullscreenedHandler(_terminalControl, OnTerminalWindowFullscreened);
                 TerminalView.RemoveBellRangHandler(_terminalControl, OnTerminalBellRang);
                 TerminalView.RemoveWindowInfoRequestedHandler(_terminalControl, OnTerminalWindowInfoRequested);
+            }
+        }
+
+        private void OnTerminalControlPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+        {
+            if (e.Property == TerminalControl.CurrentDirectoryProperty)
+            {
+                RaisePropertyChanged(CurrentDirectoryProperty, e.OldValue as string, e.NewValue as string);
             }
         }
 

@@ -8,5 +8,12 @@ namespace Example
         {
             InitializeComponent();
         }
+
+        private async void OnStart(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            Term1.IsVisible = true;
+            await Term1.LaunchProcess();
+            Term1.Focus();
+        }
     }
 }

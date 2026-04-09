@@ -26,6 +26,7 @@ namespace Iciclecreek.Terminal
     public class TerminalView : Control
     {
         private XT.Terminal _terminal;
+        private string? _currentDirectory;
         private FormattedText _measureText;
         private double _charWidth;
         private double _charHeight;
@@ -80,6 +81,11 @@ namespace Iciclecreek.Terminal
                 nameof(ViewportLines),
                 o => o.ViewportLines);
 
+        public static readonly DirectProperty<TerminalView, string?> CurrentDirectoryProperty =
+            AvaloniaProperty.RegisterDirect<TerminalView, string?>(
+                nameof(CurrentDirectory),
+                o => o.CurrentDirectory);
+
         public static readonly StyledProperty<FontFamily> FontFamilyProperty =
             AvaloniaProperty.Register<TerminalView, FontFamily>(
                 nameof(FontFamily),
@@ -129,6 +135,11 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalView, IList<string>>(
                 nameof(Args),
                 defaultValue: Array.Empty<string>());
+
+        public static readonly StyledProperty<string?> StartingDirectoryProperty =
+            AvaloniaProperty.Register<TerminalView, string?>(
+                nameof(StartingDirectory),
+                defaultValue: Environment.CurrentDirectory);
 
         public static readonly StyledProperty<Color> CursorColorProperty =
             AvaloniaProperty.Register<TerminalView, Color>(
@@ -422,6 +433,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowLowered += OnTerminalWindowLowered;
             _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
             _terminal.BellRang += OnTerminalBellRang;
+            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
             _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
             // end window events
 
@@ -436,8 +448,14 @@ namespace Iciclecreek.Terminal
             _inputMethodClient = new TerminalInputMethodClient(this);
         }
 
+        /// <summary>
+        /// Gets a value indicating whether the terminal is currently using the alternate screen buffer.
+        /// </summary>
         public bool IsAlternateBuffer => _isAlternateBuffer;
 
+        /// <summary>
+        /// Gets or sets the terminal scrollback buffer size in lines.
+        /// </summary>
         public int BufferSize
         {
             get => _bufferSize;
@@ -485,8 +503,19 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// Gets the number of visible rows in the current terminal viewport.
+        /// </summary>
         public int ViewportLines => _terminal.Rows;
 
+        /// <summary>
+        /// Gets the current working directory reported by the terminal session.
+        /// </summary>
+        public string? CurrentDirectory => _currentDirectory;
+
+        /// <summary>
+        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
+        /// </summary>
         public XTerm.Terminal Terminal => _terminal;
 
         public void WaitForExit(int ms) => _ptyConnection!.WaitForExit(ms);
@@ -550,94 +579,721 @@ namespace Iciclecreek.Terminal
             return false;
         }
 
+        /// <summary>
+        /// Gets the exit code of the launched PTY process after it has terminated.
+        /// </summary>
         public int ExitCode => _ptyConnection!.ExitCode;
 
+        /// <summary>
+        /// Gets the operating system process identifier of the launched PTY process.
+        /// </summary>
         public int Pid => _ptyConnection!.Pid;
 
+        /// <summary>
+        /// Gets or sets the font family used to render terminal text.
+        /// </summary>
         public FontFamily FontFamily
         {
             get => GetValue(FontFamilyProperty);
             set => SetValue(FontFamilyProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the font size used to render terminal text.
+        /// </summary>
         public double FontSize
         {
             get => GetValue(FontSizeProperty);
             set => SetValue(FontSizeProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the font style used to render terminal text.
+        /// </summary>
         public FontStyle FontStyle
         {
             get => GetValue(FontStyleProperty);
             set => SetValue(FontStyleProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the font weight used to render terminal text.
+        /// </summary>
         public FontWeight FontWeight
         {
             get => GetValue(FontWeightProperty);
             set => SetValue(FontWeightProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the text decoration locations applied to terminal text.
+        /// </summary>
         public TextDecorationLocation? TextDecorations
         {
             get => GetValue(TextDecorationsProperty);
             set => SetValue(TextDecorationsProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the default foreground brush used for terminal text.
+        /// </summary>
         public IBrush Foreground
         {
             get => GetValue(ForegroundProperty);
             set => SetValue(ForegroundProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the terminal background brush.
+        /// </summary>
         public IBrush Background
         {
             get => GetValue(BackgroundProperty);
             set => SetValue(BackgroundProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the brush used to render selected terminal text.
+        /// </summary>
         public IBrush SelectionBrush
         {
             get => GetValue(SelectionBrushProperty);
             set => SetValue(SelectionBrushProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the executable or shell to launch in the terminal.
+        /// </summary>
         public string Process
         {
             get => GetValue(ProcessProperty);
             set => SetValue(ProcessProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the command-line arguments passed to <see cref="Process"/> when launching.
+        /// </summary>
         public IList<string> Args
         {
             get => GetValue(ArgsProperty);
             set => SetValue(ArgsProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the initial working directory used when the PTY process is started.
+        /// </summary>
+        public string? StartingDirectory
+        {
+            get => GetValue(StartingDirectoryProperty);
+            set => SetValue(StartingDirectoryProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the cursor color used when rendering the terminal caret.
+        /// </summary>
         public Color CursorColor
         {
             get => GetValue(CursorColorProperty);
             set => SetValue(CursorColorProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the cursor style used by the terminal.
+        /// </summary>
         public XT.Common.CursorStyle CursorStyle
         {
             get => GetValue(CursorStyleProperty);
             set => SetValue(CursorStyleProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets a value indicating whether the terminal cursor should blink.
+        /// </summary>
         public bool CursorBlink
         {
             get => GetValue(CursorBlinkProperty);
             set => SetValue(CursorBlinkProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the cursor blink rate in milliseconds.
+        /// </summary>
         public int CursorBlinkRate
         {
             get => GetValue(CursorBlinkRateProperty);
             set => SetValue(CursorBlinkRateProperty, value);
         }
 
+        /// <summary>
+        /// Gets or sets the terminal emulation options used to configure the inner <see cref="XTerm.Terminal"/>.
+        /// </summary>
+        public XTerm.Options.TerminalOptions? Options
+        {
+            get => GetValue(OptionsProperty);
+            set => SetValue(OptionsProperty, value);
+        }
+
+        #region Terminal Attached Events
+
+        public static readonly RoutedEvent<ProcessExitedEventArgs> ProcessExitedEvent =
+            RoutedEvent.Register<TerminalView, ProcessExitedEventArgs>(
+                nameof(ProcessExited),
+                RoutingStrategies.Bubble);
+
+        public static void AddProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
+            target.AddHandler(ProcessExitedEvent, handler);
+
+        public static void RemoveProcessExitedHandler(Interactive target, EventHandler<ProcessExitedEventArgs> handler) =>
+            target.RemoveHandler(ProcessExitedEvent, handler);
+
+        public static readonly RoutedEvent<TitleChangedEventArgs> TitleChangedEvent =
+            RoutedEvent.Register<TerminalView, TitleChangedEventArgs>(
+                nameof(TitleChanged),
+                RoutingStrategies.Bubble);
+
+        public static void AddTitleChangedHandler(Interactive target, EventHandler<TitleChangedEventArgs> handler) =>
+            target.AddHandler(TitleChangedEvent, handler);
+
+        public static void RemoveTitleChangedHandler(Interactive target, EventHandler<TitleChangedEventArgs> handler) =>
+            target.RemoveHandler(TitleChangedEvent, handler);
+
+        public static readonly RoutedEvent<WindowMovedEventArgs> WindowMovedEvent =
+            RoutedEvent.Register<TerminalView, WindowMovedEventArgs>(
+                nameof(WindowMoved),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowMovedHandler(Interactive target, EventHandler<WindowMovedEventArgs> handler) =>
+            target.AddHandler(WindowMovedEvent, handler);
+
+        public static void RemoveWindowMovedHandler(Interactive target, EventHandler<WindowMovedEventArgs> handler) =>
+            target.RemoveHandler(WindowMovedEvent, handler);
+
+        public static readonly RoutedEvent<WindowResizedEventArgs> WindowResizedEvent =
+            RoutedEvent.Register<TerminalView, WindowResizedEventArgs>(
+                nameof(WindowResized),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowResizedHandler(Interactive target, EventHandler<WindowResizedEventArgs> handler) =>
+            target.AddHandler(WindowResizedEvent, handler);
+
+        public static void RemoveWindowResizedHandler(Interactive target, EventHandler<WindowResizedEventArgs> handler) =>
+            target.RemoveHandler(WindowResizedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowMinimizedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowMinimized),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowMinimizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowMinimizedEvent, handler);
+
+        public static void RemoveWindowMinimizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowMinimizedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowMaximizedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowMaximized),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowMaximizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowMaximizedEvent, handler);
+
+        public static void RemoveWindowMaximizedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowMaximizedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowRestoredEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowRestored),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowRestoredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowRestoredEvent, handler);
+
+        public static void RemoveWindowRestoredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowRestoredEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowRaisedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowRaised),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowRaisedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowRaisedEvent, handler);
+
+        public static void RemoveWindowRaisedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowRaisedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowLoweredEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowLowered),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowLoweredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowLoweredEvent, handler);
+
+        public static void RemoveWindowLoweredHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowLoweredEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> WindowFullscreenedEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(WindowFullscreened),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowFullscreenedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(WindowFullscreenedEvent, handler);
+
+        public static void RemoveWindowFullscreenedHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(WindowFullscreenedEvent, handler);
+
+        public static readonly RoutedEvent<RoutedEventArgs> BellRangEvent =
+            RoutedEvent.Register<TerminalView, RoutedEventArgs>(
+                nameof(BellRang),
+                RoutingStrategies.Bubble);
+
+        public static void AddBellRangHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.AddHandler(BellRangEvent, handler);
+
+        public static void RemoveBellRangHandler(Interactive target, EventHandler<RoutedEventArgs> handler) =>
+            target.RemoveHandler(BellRangEvent, handler);
+
+        public static readonly RoutedEvent<WindowInfoRequestedEventArgs> WindowInfoRequestedEvent =
+            RoutedEvent.Register<TerminalView, WindowInfoRequestedEventArgs>(
+                nameof(WindowInfoRequested),
+                RoutingStrategies.Bubble);
+
+        public static void AddWindowInfoRequestedHandler(Interactive target, EventHandler<WindowInfoRequestedEventArgs> handler) =>
+            target.AddHandler(WindowInfoRequestedEvent, handler);
+
+        public static void RemoveWindowInfoRequestedHandler(Interactive target, EventHandler<WindowInfoRequestedEventArgs> handler) =>
+            target.RemoveHandler(WindowInfoRequestedEvent, handler);
+
+        #endregion
+
+        /// <summary>
+        /// Event raised when the PTY process exits.
+        /// </summary>
+        public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+
+        /// <summary>
+        /// Event raised when the terminal title changes.
+        /// </summary>
+        public event EventHandler<TitleChangedEventArgs>? TitleChanged;
+
+        /// <summary>
+        /// Event raised when a window move command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowMovedEventArgs>? WindowMoved;
+
+        /// <summary>
+        /// Event raised when a window resize command is received from the terminal.
+        /// </summary>
+        public event EventHandler<WindowResizedEventArgs>? WindowResized;
+
+        /// <summary>
+        /// Event raised when a window minimize command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowMinimized;
+
+        /// <summary>
+        /// Event raised when a window maximize command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowMaximized;
+
+        /// <summary>
+        /// Event raised when a window restore command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowRestored;
+
+        /// <summary>
+        /// Event raised when a window raise command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowRaised;
+
+        /// <summary>
+        /// Event raised when a window lower command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowLowered;
+
+        /// <summary>
+        /// Event raised when a window fullscreen command is received from the terminal.
+        /// </summary>
+        public event EventHandler? WindowFullscreened;
+
+        /// <summary>
+        /// Event raised when the terminal bell is activated.
+        /// </summary>
+        public event EventHandler? BellRang;
+
+        /// <summary>
+        /// Event raised when window information is requested by the terminal.
+        /// The handler should set the response properties on the event args.
+        /// </summary>
+        public event EventHandler<WindowInfoRequestedEventArgs>? WindowInfoRequested;
+
+
+        static TerminalView()
+        {
+            AffectsRender<TerminalView>(
+                FontFamilyProperty,
+                FontSizeProperty,
+                FontStyleProperty,
+                FontWeightProperty,
+                TextDecorationsProperty,
+                ForegroundProperty,
+                BackgroundProperty,
+                SelectionBrushProperty,
+                BufferSizeProperty,
+                ViewportYProperty,
+                CursorColorProperty,
+                CursorStyleProperty,
+                CursorBlinkProperty);
+
+            AffectsMeasure<TerminalView>(
+                FontFamilyProperty,
+                FontSizeProperty,
+                FontStyleProperty,
+                FontWeightProperty,
+                BufferSizeProperty);
+
+            FocusableProperty.OverrideDefaultValue<TerminalView>(true);
+        }
+
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+        public TerminalView()
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+        {
+            Focusable = true;
+            Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
+            TextInputMethodClientRequested += OnTextInputMethodClientRequested;
+        }
+
+        protected override void OnInitialized()
+        {
+            // Sync terminal options with styled properties
+            var options = Options ?? new XT.Options.TerminalOptions();
+
+            options.CursorStyle = CursorStyle;
+            options.CursorBlink = CursorBlink;
+            options.CursorBlinkRate = CursorBlinkRate;
+
+            // On Linux, the PTY doesn't convert LF to CRLF (ONLCR is disabled for raw mode),
+            // so we need XTerm to handle LF as implicit CRLF
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                options.ConvertEol = true;
+            }
+
+            _terminal = new XT.Terminal(options);
+
+            _terminal.DataReceived += OnTerminalDataReceived;
+            _terminal.BufferChanged += OnTerminalBufferChanged;
+            _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
+            // window events
+            _terminal.TitleChanged += OnTerminalTitleChanged;
+            _terminal.WindowMoved += OnTerminalWindowMoved;
+            _terminal.WindowResized += OnTerminalWindowResized;
+            _terminal.WindowMinimized += OnTerminalWindowMinimized;
+            _terminal.WindowMaximized += OnTerminalWindowMaximized;
+            _terminal.WindowRestored += OnTerminalWindowRestored;
+            _terminal.WindowRaised += OnTerminalWindowRaised;
+            _terminal.WindowLowered += OnTerminalWindowLowered;
+            _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
+            _terminal.BellRang += OnTerminalBellRang;
+            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
+            _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
+            // end window events
+
+            // Setup cursor blink timer
+            _cursorBlinkTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(CursorBlinkRate)
+            };
+            _cursorBlinkTimer.Tick += OnCursorBlinkTick;
+
+            // Initialize IME client
+            _inputMethodClient = new TerminalInputMethodClient(this);
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether the terminal is currently using the alternate screen buffer.
+        /// </summary>
+        public bool IsAlternateBuffer => _isAlternateBuffer;
+
+        /// <summary>
+        /// Gets or sets the terminal scrollback buffer size in lines.
+        /// </summary>
+        public int BufferSize
+        {
+            get => _bufferSize;
+            set
+            {
+                _terminal.Options.Scrollback = value;
+                SetAndRaise(BufferSizeProperty, ref _bufferSize, value);
+                this.RequestInvalidate();
+            }
+        }
+
+        /// <summary>
+        /// The absolute line index of the top of the viewport in the buffer.
+        /// 0 = top of buffer, higher values = scrolled forward towards current output.
+        /// </summary>
+        public int ViewportY
+        {
+            get => _terminal.Buffer.ViewportY;
+            set
+            {
+                var oldValue = _terminal.Buffer.ViewportY;
+                _terminal.Buffer.ViewportY = value;
+
+                if (oldValue != _terminal.Buffer.ViewportY)
+                {
+                    RaisePropertyChanged(ViewportYProperty, oldValue, _terminal.Buffer.ViewportY);
+                    this.RequestInvalidate();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Maximum scroll position (total buffer lines - viewport lines).
+        /// This is the maximum value ViewportY can be.
+        /// </summary>
+        public int MaxScrollback
+        {
+            get
+            {
+                // Simple: total lines in buffer minus how many we can see
+                var totalLines = _terminal.Buffer.Length;
+                var viewportLines = _terminal.Rows;
+                var max = Math.Max(0, totalLines - viewportLines);
+                return max;
+            }
+        }
+
+        /// <summary>
+        /// Gets the number of visible rows in the current terminal viewport.
+        /// </summary>
+        public int ViewportLines => _terminal.Rows;
+
+        /// <summary>
+        /// Gets the current working directory reported by the terminal session.
+        /// </summary>
+        public string? CurrentDirectory => _currentDirectory;
+
+        /// <summary>
+        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
+        /// </summary>
+        public XTerm.Terminal Terminal => _terminal;
+
+        public void WaitForExit(int ms) => _ptyConnection!.WaitForExit(ms);
+
+        public void Kill() => _ptyConnection!.Kill();
+
+        /// <summary>
+        /// Pastes text from the clipboard into the terminal.
+        /// </summary>
+        public async Task PasteAsync()
+        {
+            if (_ptyConnection == null)
+                return;
+
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null)
+                return;
+
+#pragma warning disable CS0618 // Type or member is obsolete
+            var text = await clipboard.GetTextAsync();
+#pragma warning restore CS0618 // Type or member is obsolete
+            if (!string.IsNullOrEmpty(text))
+            {
+                // Wrap paste in bracketed paste sequences if mode is enabled
+                if (_terminal.BracketedPasteMode)
+                {
+                    text = $"\u001b[200~{text}\u001b[201~";
+                }
+
+                await SendToPtyAsync(text);
+            }
+        }
+
+        /// <summary>
+        /// Copies selected text to the clipboard.
+        /// </summary>
+        /// <returns>True if text was copied, false if no selection.</returns>
+        public async Task<bool> CopyAsync()
+        {
+            if (!_terminal.Selection.HasSelection)
+                return false;
+
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard == null)
+                return false;
+
+            var text = _terminal.Selection.GetSelectionText();
+            if (!string.IsNullOrEmpty(text))
+            {
+                // Normalize line endings for the current platform
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // Ensure Windows gets \r\n line endings
+                    text = text.Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\r\n");
+                }
+
+                await clipboard.SetTextAsync(text);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Gets the exit code of the launched PTY process after it has terminated.
+        /// </summary>
+        public int ExitCode => _ptyConnection!.ExitCode;
+
+        /// <summary>
+        /// Gets the operating system process identifier of the launched PTY process.
+        /// </summary>
+        public int Pid => _ptyConnection!.Pid;
+
+        /// <summary>
+        /// Gets or sets the font family used to render terminal text.
+        /// </summary>
+        public FontFamily FontFamily
+        {
+            get => GetValue(FontFamilyProperty);
+            set => SetValue(FontFamilyProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the font size used to render terminal text.
+        /// </summary>
+        public double FontSize
+        {
+            get => GetValue(FontSizeProperty);
+            set => SetValue(FontSizeProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the font style used to render terminal text.
+        /// </summary>
+        public FontStyle FontStyle
+        {
+            get => GetValue(FontStyleProperty);
+            set => SetValue(FontStyleProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the font weight used to render terminal text.
+        /// </summary>
+        public FontWeight FontWeight
+        {
+            get => GetValue(FontWeightProperty);
+            set => SetValue(FontWeightProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the text decoration locations applied to terminal text.
+        /// </summary>
+        public TextDecorationLocation? TextDecorations
+        {
+            get => GetValue(TextDecorationsProperty);
+            set => SetValue(TextDecorationsProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the default foreground brush used for terminal text.
+        /// </summary>
+        public IBrush Foreground
+        {
+            get => GetValue(ForegroundProperty);
+            set => SetValue(ForegroundProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the terminal background brush.
+        /// </summary>
+        public IBrush Background
+        {
+            get => GetValue(BackgroundProperty);
+            set => SetValue(BackgroundProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the brush used to render selected terminal text.
+        /// </summary>
+        public IBrush SelectionBrush
+        {
+            get => GetValue(SelectionBrushProperty);
+            set => SetValue(SelectionBrushProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the executable or shell to launch in the terminal.
+        /// </summary>
+        public string Process
+        {
+            get => GetValue(ProcessProperty);
+            set => SetValue(ProcessProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the command-line arguments passed to <see cref="Process"/> when launching.
+        /// </summary>
+        public IList<string> Args
+        {
+            get => GetValue(ArgsProperty);
+            set => SetValue(ArgsProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the initial working directory used when the PTY process is started.
+        /// </summary>
+        public string? StartingDirectory
+        {
+            get => GetValue(StartingDirectoryProperty);
+            set => SetValue(StartingDirectoryProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the cursor color used when rendering the terminal caret.
+        /// </summary>
+        public Color CursorColor
+        {
+            get => GetValue(CursorColorProperty);
+            set => SetValue(CursorColorProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the cursor style used by the terminal.
+        /// </summary>
+        public XT.Common.CursorStyle CursorStyle
+        {
+            get => GetValue(CursorStyleProperty);
+            set => SetValue(CursorStyleProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the terminal cursor should blink.
+        /// </summary>
+        public bool CursorBlink
+        {
+            get => GetValue(CursorBlinkProperty);
+            set => SetValue(CursorBlinkProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the cursor blink rate in milliseconds.
+        /// </summary>
+        public int CursorBlinkRate
+        {
+            get => GetValue(CursorBlinkRateProperty);
+            set => SetValue(CursorBlinkRateProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the terminal emulation options used to configure the inner <see cref="XTerm.Terminal"/>.
+        /// </summary>
         public XTerm.Options.TerminalOptions? Options
         {
             get => GetValue(OptionsProperty);
@@ -675,13 +1331,12 @@ namespace Iciclecreek.Terminal
             }
         }
 
-        private void OnLoaded(object? sender, RoutedEventArgs e)
+        private async void OnLoaded(object? sender, RoutedEventArgs e)
         {
             if (_ptyConnection == null && !string.IsNullOrEmpty(Process))
             {
-                LaunchProcess();
+                await LaunchProcess();
             }
-
             // Start cursor blinking if enabled
             if (CursorBlink)
             {
@@ -712,6 +1367,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowLowered -= OnTerminalWindowLowered;
             _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
             _terminal.BellRang -= OnTerminalBellRang;
+            _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
             CleanupProcess();
         }
@@ -857,7 +1513,7 @@ namespace Iciclecreek.Terminal
                 if (TryGetPrintableChar(e, out var printableChar))
                 {
                     e.Handled = true;
-                    await SendToPtyAsync(printableChar.ToString()).ConfigureAwait(false);
+                    await SendToPtyAsync(printableChar.ToString()). ConfigureAwait(false);
                     return;
                 }
 
@@ -998,638 +1654,17 @@ namespace Iciclecreek.Terminal
 
                     // Determine selection mode based on click count
                     var clickCount = e.ClickCount;
-                    var mode = clickCount switch
-                    {
-                        2 => XT.Selection.SelectionMode.Word,
-                        3 => XT.Selection.SelectionMode.Line,
-                        _ => XT.Selection.SelectionMode.Normal
-                    };
 
-                    // Start selection - use viewport-relative row
-                    int viewportRow = row;
-                    _terminal.Selection.StartSelection(col, viewportRow, mode);
-                    _isSelecting = true;
-                    this.RequestInvalidate();
-                    e.Handled = true;
-                    return;
-                }
-
-                // Forward mouse event to application
-                if (_ptyConnection == null)
-                    return;
-
-                var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties);
-                var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
-
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Down, modifiers);
-                if (!string.IsNullOrEmpty(sequence))
-                {
-                    await SendToPtyAsync(sequence).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error handling mouse press: {ex.Message}");
-            }
-        }
-
-        protected override async void OnPointerReleased(PointerReleasedEventArgs e)
-        {
-            base.OnPointerReleased(e);
-
-            try
-            {
-                // If we were selecting, end selection
-                if (_isSelecting)
-                {
-                    _terminal.Selection.EndSelection();
-                    _isSelecting = false;
-                    e.Handled = true;
-                    return;
-                }
-
-                // Forward mouse event to application
-                if (_ptyConnection == null)
-                    return;
-
-                var point = e.GetPosition(this);
-                var col = (int)(point.X / _charWidth);
-                var row = (int)(point.Y / _charHeight);
-
-                var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties, e.InitialPressMouseButton);
-                var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
-
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Up, modifiers);
-                if (!string.IsNullOrEmpty(sequence))
-                {
-                    await SendToPtyAsync(sequence).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error handling mouse release: {ex.Message}");
-            }
-        }
-
-        protected override async void OnPointerMoved(PointerEventArgs e)
-        {
-            base.OnPointerMoved(e);
-
-            try
-            {
-                var point = e.GetPosition(this);
-                var col = (int)(point.X / _charWidth);
-                var row = (int)(point.Y / _charHeight);
-
-                // If we're selecting, update the selection
-                if (_isSelecting)
-                {
-                    int viewportRow = row;
-                    _terminal.Selection.UpdateSelection(col, viewportRow);
-                    this.RequestInvalidate();
-                    e.Handled = true;
-                    return;
-                }
-
-                // Forward mouse event to application
-                if (_ptyConnection == null)
-                    return;
-
-                var props = e.GetCurrentPoint(this).Properties;
-                var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
-                var button = ConvertPointerButton(props);
-                var eventType = (props.IsLeftButtonPressed || props.IsMiddleButtonPressed || props.IsRightButtonPressed)
-                    ? XT.Input.MouseEventType.Drag
-                    : XT.Input.MouseEventType.Move;
-
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
-                if (!string.IsNullOrEmpty(sequence))
-                {
-                    await SendToPtyAsync(sequence).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error handling mouse move: {ex.Message}");
-            }
-        }
-
-        protected override async void OnPointerWheelChanged(PointerWheelEventArgs e)
-        {
-            base.OnPointerWheelChanged(e);
-
-            // Number of lines to scroll per wheel notch
-            const int scrollLines = 3;
-
-            // Delta.Y is positive when scrolling up (towards user), negative when scrolling down
-            var delta = e.Delta.Y;
-
-            if (_ptyConnection != null && _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None)
-            {
-                var point = e.GetPosition(this);
-                var col = (int)(point.X / _charWidth);
-                var row = (int)(point.Y / _charHeight);
-                var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
-
-                var button = delta > 0 ? XT.Input.MouseButton.WheelUp : XT.Input.MouseButton.WheelDown;
-                var eventType = delta > 0 ? XT.Input.MouseEventType.WheelUp : XT.Input.MouseEventType.WheelDown;
-
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
-                if (!string.IsNullOrEmpty(sequence))
-                {
-                    await SendToPtyAsync(sequence).ConfigureAwait(false);
-                    e.Handled = true;
-                    return;
-                }
-            }
-
-            if (delta != 0)
-            {
-                // Scroll up (negative delta to ViewportY) when wheel scrolls up (positive delta)
-                // Scroll down (positive delta to ViewportY) when wheel scrolls down (negative delta)
-                int linesToScroll = (int)(-delta * scrollLines);
-
-                // Calculate new viewport position
-                int newViewportY = Math.Clamp(
-                    ViewportY + linesToScroll,
-                    0,
-                    MaxScrollback);
-
-                if (newViewportY != ViewportY)
-                {
-                    ViewportY = newViewportY;
-                }
-
-                e.Handled = true;
-            }
-        }
-
-        protected override async void OnGotFocus(GotFocusEventArgs e)
-        {
-            base.OnGotFocus(e);
-
-            Debug.WriteLine($"[TerminalView] OnGotFocus: Source={e.Source?.GetType().Name}");
-
-            // Reset blink state to visible when focused
-            _cursorBlinkOn = true;
-            if (CursorBlink)
-            {
-                _cursorBlinkTimer.Start();
-            }
-
-            if (_ptyConnection != null && _terminal.SendFocusEvents)
-            {
-                var sequence = _terminal.GenerateFocusEvent(true);
-                if (!string.IsNullOrEmpty(sequence))
-                {
-                    await SendToPtyAsync(sequence);
-                }
-            }
-
-            this.RequestInvalidate();
-        }
-
-        protected override async void OnLostFocus(RoutedEventArgs e)
-        {
-            base.OnLostFocus(e);
-
-            Debug.WriteLine($"[TerminalView] OnLostFocus");
-
-            // Stop blinking when not focused, but keep cursor visible (hollow block)
-            _cursorBlinkTimer.Stop();
-            _cursorBlinkOn = true;
-
-            // Clear any preedit text when focus is lost
-            _inputMethodClient?.ClearPreeditText();
-
-            if (_ptyConnection != null && _terminal.SendFocusEvents)
-            {
-                var sequence = _terminal.GenerateFocusEvent(false);
-                if (!string.IsNullOrEmpty(sequence))
-                {
-                    await SendToPtyAsync(sequence);
-                }
-            }
-
-            this.RequestInvalidate();
-        }
-
-        private void OnTextInputMethodClientRequested(object? sender, TextInputMethodClientRequestedEventArgs e)
-        {
-            e.Client = _inputMethodClient;
-        }
-
-        private void OnTerminalBufferChanged(object? sender, XT.Events.TerminalEvents.BufferChangedEventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var oldValue = _isAlternateBuffer;
-                _isAlternateBuffer = e.Buffer == XT.Common.BufferType.Alternate;
-
-                if (oldValue != _isAlternateBuffer)
-                {
-                    RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
-                }
-
-                RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
-                RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
-                RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
-                this.RequestInvalidate();
-            });
-        }
-
-        private void OnTerminalCursorStyleChanged(object? sender, XT.Events.TerminalEvents.CursorStyleChangedEventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (!Equals(CursorStyle, e.Style))
-                {
-                    SetValue(CursorStyleProperty, e.Style);
-                }
-
-                if (!Equals(CursorBlink, e.Blink))
-                {
-                    SetValue(CursorBlinkProperty, e.Blink);
-                }
-
-                this.RequestInvalidate();
-            });
-        }
-
-        private void OnTerminalTitleChanged(object? sender, XT.Events.TerminalEvents.TitleChangeEventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-
-                var args = new TitleChangedEventArgs(e.Title)
-                {
-                    RoutedEvent = TitleChangedEvent
-                };
-
-                RaiseEvent(args);
-                TitleChanged?.Invoke(this, args);
-            });
-        }
-
-        private void OnTerminalWindowMoved(object? sender, XT.Events.TerminalEvents.WindowMovedEventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new WindowMovedEventArgs(e.X, e.Y)
-                {
-                    RoutedEvent = WindowMovedEvent
-                };
-
-                RaiseEvent(args);
-                WindowMoved?.Invoke(this, args);
-            });
-        }
-
-        private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-
-                var args = new WindowResizedEventArgs(e.Width, e.Height)
-                {
-                    RoutedEvent = WindowResizedEvent
-                };
-
-                RaiseEvent(args);
-                WindowResized?.Invoke(this, args);
-            });
-        }
-
-        private void OnTerminalWindowMinimized(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(WindowMinimizedEvent);
-                RaiseEvent(args);
-                WindowMinimized?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalWindowMaximized(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(WindowMaximizedEvent);
-                RaiseEvent(args);
-                WindowMaximized?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalWindowRestored(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(WindowRestoredEvent);
-                RaiseEvent(args);
-                WindowRestored?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalWindowRaised(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(WindowRaisedEvent);
-                RaiseEvent(args);
-                WindowRaised?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalWindowLowered(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(WindowLoweredEvent);
-                RaiseEvent(args);
-                WindowLowered?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalWindowFullscreened(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(WindowFullscreenedEvent);
-                RaiseEvent(args);
-                WindowFullscreened?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalBellRang(object? sender, EventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                var args = new RoutedEventArgs(BellRangEvent);
-                RaiseEvent(args);
-                BellRang?.Invoke(this, EventArgs.Empty);
-            });
-        }
-
-        private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                // Raise routed event so any parent can handle it without custom plumbing.
-                var args = new WindowInfoRequestedEventArgs(e.Request)
-                {
-                    RoutedEvent = WindowInfoRequestedEvent
-                };
-
-                RaiseEvent(args);
-
-                // Keep CLR event for back-compat.
-                WindowInfoRequested?.Invoke(this, args);
-
-                // Copy response data back to the terminal's event args
-                if (args.Handled)
-                {
-                    e.Handled = true;
-                    e.IsIconified = args.IsIconified;
-                    e.X = args.X;
-                    e.Y = args.Y;
-                    e.WidthPixels = args.WidthPixels;
-                    e.HeightPixels = args.HeightPixels;
-                    e.CellWidth = args.CellWidth;
-                    e.CellHeight = args.CellHeight;
-                    e.Title = args.Title;
-                }
-            });
-        }
-
-        private async void OnTerminalDataReceived(object? sender, XT.Events.TerminalEvents.DataEventArgs e)
-        {
-            // Terminal wants to send data (typically in response to device status queries, etc.)
-            await SendToPtyAsync(e.Data).ConfigureAwait(false);
-        }
-
-        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
-
-        private async Task SendToPtyAsync(string data, CancellationToken ct = default)
-        {
-            // Capture the connection reference locally to avoid any potential race conditions
-            var ptyConnection = _ptyConnection;
-            if (ptyConnection == null || string.IsNullOrEmpty(data))
-                return;
-
-            await _semaphore.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                var bytes = Utf8NoBom.GetBytes(data);
-                await ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
-                await ptyConnection.WriterStream.FlushAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[{_instanceId}] Error writing to PTY: {ex.Message}");
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-        }
-
-        private XT.Input.Key? ConvertAvaloniaKeyToXTermKey(Key key)
-        {
-            return key switch
-            {
-                Key.Enter => XT.Input.Key.Enter,
-                Key.Back => XT.Input.Key.Backspace,
-                Key.Tab => XT.Input.Key.Tab,
-                Key.Escape => XT.Input.Key.Escape,
-                Key.Up => XT.Input.Key.UpArrow,
-                Key.Down => XT.Input.Key.DownArrow,
-                Key.Left => XT.Input.Key.LeftArrow,
-                Key.Right => XT.Input.Key.RightArrow,
-                Key.Home => XT.Input.Key.Home,
-                Key.End => XT.Input.Key.End,
-                Key.PageUp => XT.Input.Key.PageUp,
-                Key.PageDown => XT.Input.Key.PageDown,
-                Key.Insert => XT.Input.Key.Insert,
-                Key.Delete => XT.Input.Key.Delete,
-                Key.F1 => XT.Input.Key.F1,
-                Key.F2 => XT.Input.Key.F2,
-                Key.F3 => XT.Input.Key.F3,
-                Key.F4 => XT.Input.Key.F4,
-                Key.F5 => XT.Input.Key.F5,
-                Key.F6 => XT.Input.Key.F6,
-                Key.F7 => XT.Input.Key.F7,
-                Key.F8 => XT.Input.Key.F8,
-                Key.F9 => XT.Input.Key.F9,
-                Key.F10 => XT.Input.Key.F10,
-                Key.F11 => XT.Input.Key.F11,
-                Key.F12 => XT.Input.Key.F12,
-                _ => null
-            };
-        }
-
-        private XT.Input.KeyModifiers ConvertAvaloniaModifiers(KeyModifiers modifiers)
-        {
-            var result = XT.Input.KeyModifiers.None;
-
-            if (modifiers.HasFlag(KeyModifiers.Shift))
-                result |= XT.Input.KeyModifiers.Shift;
-            if (modifiers.HasFlag(KeyModifiers.Control))
-                result |= XT.Input.KeyModifiers.Control;
-            if (modifiers.HasFlag(KeyModifiers.Alt))
-                result |= XT.Input.KeyModifiers.Alt;
-
-            return result;
-        }
-
-        private XT.Input.MouseButton ConvertPointerButton(PointerPointProperties props, MouseButton? releasedButton = null)
-        {
-            if (props.IsLeftButtonPressed)
-                return XT.Input.MouseButton.Left;
-            if (props.IsMiddleButtonPressed)
-                return XT.Input.MouseButton.Middle;
-            if (props.IsRightButtonPressed)
-                return XT.Input.MouseButton.Right;
-
-            if (releasedButton.HasValue)
-            {
-                return releasedButton.Value switch
-                {
-                    MouseButton.Left => XT.Input.MouseButton.Left,
-                    MouseButton.Middle => XT.Input.MouseButton.Middle,
-                    MouseButton.Right => XT.Input.MouseButton.Right,
-                    _ => XT.Input.MouseButton.None
-                };
-            }
-
-            return XT.Input.MouseButton.None;
-        }
-
-        /// <summary>
-        /// Determines if the terminal should handle text selection vs forwarding mouse to app.
-        /// Selection is handled when: (1) app hasn't captured mouse, OR (2) Shift is held (override).
-        /// </summary>
-        private bool ShouldHandleSelection(KeyModifiers modifiers)
-        {
-            bool appWantsMouse = _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None;
-            bool shiftHeld = modifiers.HasFlag(KeyModifiers.Shift);
-
-            // Handle selection if app doesn't want mouse, OR if Shift override is active
-            return !appWantsMouse || shiftHeld;
-        }
-
-        private bool TryGetPrintableChar(KeyEventArgs e, out char character)
-        {
-            // Prefer the symbol provided by Avalonia (already respects layout)
-            if (!string.IsNullOrEmpty(e.KeySymbol) && e.KeySymbol.Length == 1 && !char.IsControl(e.KeySymbol[0]))
-            {
-                character = e.KeySymbol[0];
-                return true;
-            }
-
-            // Fallback mapping for cases where KeySymbol is empty (e.g., Consolonia, or Alt+<char> on some platforms)
-            var result = TryMapKeyToChar(e.Key, e.KeyModifiers, out character);
-            return result;
-        }
-
-        private bool TryMapKeyToChar(Key key, KeyModifiers modifiers, out char character)
-        {
-            character = default;
-            bool hasShift = modifiers.HasFlag(KeyModifiers.Shift);
-
-            // Letters A-Z
-            if (key >= Key.A && key <= Key.Z)
-            {
-                var offset = key - Key.A;
-                character = (char)((hasShift ? 'A' : 'a') + offset);
-                return true;
-            }
-
-            // Numbers 0-9 (with shift symbols for US keyboard)
-            if (key >= Key.D0 && key <= Key.D9)
-            {
-                if (hasShift)
-                {
-                    // Shift + number = symbol (US keyboard layout)
-                    character = key switch
-                    {
-                        Key.D1 => '!',
-                        Key.D2 => '@',
-                        Key.D3 => '#',
-                        Key.D4 => '$',
-                        Key.D5 => '%',
-                        Key.D6 => '^',
-                        Key.D7 => '&',
-                        Key.D8 => '*',
-                        Key.D9 => '(',
-                        Key.D0 => ')',
-                        _ => default
-                    };
-                }
-                else
-                {
-                    var offset = key - Key.D0;
-                    character = (char)('0' + offset);
-                }
-                return character != default;
-            }
-
-            // Numpad numbers
-            if (key >= Key.NumPad0 && key <= Key.NumPad9)
-            {
-                var offset = key - Key.NumPad0;
-                character = (char)('0' + offset);
-                return true;
-            }
-
-            // Common punctuation and OEM keys (US keyboard layout)
-            character = key switch
-            {
-                Key.Space => ' ',
-                Key.OemPeriod => hasShift ? '>' : '.',
-                Key.OemComma => hasShift ? '<' : ',',
-                Key.OemMinus => hasShift ? '_' : '-',
-                Key.OemPlus => hasShift ? '+' : '=',
-                Key.OemSemicolon => hasShift ? ':' : ';',
-                Key.OemQuotes => hasShift ? '"' : '\'',
-                Key.OemTilde => hasShift ? '~' : '`',
-                Key.OemOpenBrackets => hasShift ? '{' : '[',
-                Key.OemCloseBrackets => hasShift ? '}' : ']',
-                Key.OemPipe => hasShift ? '|' : '\\',
-                Key.OemBackslash => hasShift ? '|' : '\\',
-                Key.OemQuestion => hasShift ? '?' : '/',
-                Key.Multiply => '*',
-                Key.Add => '+',
-                Key.Subtract => '-',
-                Key.Divide => '/',
-                Key.Decimal => '.',
-                _ => default
-            };
-
-            return character != default;
-        }
-
-        private async void LaunchProcess()
-        {
-            CleanupProcess();
-
-            try
-            {
-                _processCts = new CancellationTokenSource();
-                _processExitHandled = false;  // Reset flag for new process
-
-                // Determine the process to launch based on OS if not explicitly set
-                string processToLaunch = Process;
-                if (string.IsNullOrEmpty(processToLaunch))
-                {
-                    processToLaunch = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash";
-                }
+                var startingDirectory = StartingDirectory ?? Environment.CurrentDirectory;
+                _terminal.CurrentDirectory = startingDirectory;
+                SetAndRaise(CurrentDirectoryProperty, ref _currentDirectory, startingDirectory);
 
                 var options = new PtyOptions
                 {
                     Name = processToLaunch,
                     Cols = _terminal.Cols,
                     Rows = _terminal.Rows,
-                    Cwd = _terminal.CurrentDirectory ?? Environment.CurrentDirectory,
+                    Cwd = startingDirectory,
                     App = processToLaunch
                 };
 
@@ -1654,6 +1689,22 @@ namespace Iciclecreek.Terminal
                     _terminal.WriteLine($"Error launching process: {ex.Message}\n");
                 });
             }
+        }
+
+        /// <summary>
+        /// Launch the terminal process with the specified parameters, updating the Process, Args, and StartingDirectory properties. 
+        /// If the process is already running, it will be terminated and replaced with a new instance using the updated properties.
+        /// </summary>
+        /// <param name="startingDirectory"></param>
+        /// <param name="process"></param>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        public virtual async Task LaunchProcess(string? startingDirectory, string process, params string[] args)
+        {
+            StartingDirectory = startingDirectory;
+            Process = process;
+            Args = args ?? Array.Empty<string>();
+            await LaunchProcess();
         }
 
         private async Task ReadPtyOutputAsync(CancellationToken cancellationToken)
@@ -1816,7 +1867,7 @@ namespace Iciclecreek.Terminal
             var scale = VisualRoot?.RenderScaling ?? 1.0;
             //Debug.WriteLine("======");
             //Debug.WriteLine(_terminal.Buffer.PrintViewport());
-            
+
             // Use the terminal buffer's ViewportY to determine what to render
             int viewportY = _terminal.Buffer.ViewportY;
             int viewportLines = _terminal.Rows;
@@ -1888,7 +1939,7 @@ namespace Iciclecreek.Terminal
                 }
                 return;
             }
-            
+
             // Build and cache text runs for this line
             textRuns = new List<CachedTextRun>();
 
@@ -1922,7 +1973,7 @@ namespace Iciclecreek.Terminal
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
                             break;
                         textBuilder.Append(currentCell.Content);
-                        cellCount += currentCell.Width;  
+                        cellCount += currentCell.Width;
 
                         // Skip the placeholder cell that follows a wide character
                         x += currentCell.Width;

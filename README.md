@@ -84,12 +84,21 @@ public partial class MainWindow : Window
 |----------|------|---------|-------------|
 | `Process` | `string` | `cmd.exe` (Windows) / `sh` (Unix) | The shell or process to launch |
 | `Args` | `IList<string>` | Empty | Command-line arguments for the process |
+| `StartingDirectory` | `string?` | Current working directory | The initial working directory used when launching the PTY process |
+| `CurrentDirectory` | `string?` | Read-only | The current working directory reported by the running terminal session via OSC 7 |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
 | `FontFamily` | `FontFamily` | Inherited | Terminal font family (use monospace fonts) |
 | `FontSize` | `double` | Inherited | Terminal font size |
 | `Foreground` | `IBrush` | Inherited | Default text color |
 | `Background` | `IBrush` | Inherited | Terminal background color |
 | `SelectionBrush` | `IBrush` | Semi-transparent blue | Text selection highlight color |
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
+| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
 
 **Events:**
 
@@ -140,6 +149,7 @@ var terminalWindow = new TerminalWindow
     Height = 600,
     FontFamily = new FontFamily("Cascadia Mono"),
     FontSize = 14,
+    StartingDirectory = Environment.CurrentDirectory,
     Process = "pwsh.exe",  // PowerShell Core
     Args = new[] { "-NoLogo" },
     CloseOnProcessExit = true
@@ -147,6 +157,14 @@ var terminalWindow = new TerminalWindow
 
 terminalWindow.Show();
 ```
+
+**Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
+| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
+
 
 **Additional Properties (beyond TerminalControl):**
 
