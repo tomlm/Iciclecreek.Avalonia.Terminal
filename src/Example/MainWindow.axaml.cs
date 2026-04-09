@@ -11,9 +11,9 @@ namespace Example
 
         private async void OnStart(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
-            Term1.IsVisible = true;
-            await Term1.LaunchProcess();
-            Term1.Focus();
+            Term2.IsVisible = true;
+            await Term2.LaunchProcess();
+            Term2.Focus();
         }
     }
 }

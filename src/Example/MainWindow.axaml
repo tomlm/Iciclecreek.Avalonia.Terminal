@@ -9,23 +9,24 @@
 		Title="Example">
 	<TabControl>
 		<TabItem Header="Tab 1">
+			<term:TerminalControl FontFamily="Cascadia Mono"
+								  FontSize="14" BufferSize="1000"/>
+		</TabItem>
+		<TabItem Header="Tab 2">
 			<Grid RowDefinitions="Auto, Auto, *" ColumnDefinitions="*,Auto">
-				<TextBox x:Name="MyDir" Text="c:\\" Margin="5"/>
+				<TextBox x:Name="MyDir" Text="c:\" Margin="5"/>
 				<Button Content="Start" Grid.Column="1" Click="OnStart"/>
 				<StackPanel Orientation="Horizontal" Grid.Row="1" Margin="5">
 					<TextBlock Text="Current Directory: "/>
-					<TextBlock Text="{Binding ElementName=Term1, Path=CurrentDirectory}"/>
+					<TextBlock Text="{Binding ElementName=Term2, Path=CurrentDirectory}"/>
 				</StackPanel>
-				<term:TerminalControl x:Name="Term1" IsVisible="false"
+				<term:TerminalControl x:Name="Term2" IsVisible="false"
 									  Grid.Row="2" Grid.ColumnSpan="2"
 									  StartingDirectory="{Binding #MyDir.Text}"
+									  Background="#202020"
 									  FontFamily="Cascadia Mono"
 									  FontSize="14" BufferSize="1000"/>
 			</Grid>
-		</TabItem>
-		<TabItem Header="Tab 2">
-			<term:TerminalControl FontFamily="Cascadia Mono"
-								  FontSize="14" BufferSize="1000"/>
 		</TabItem>
 		<TabItem Header="Tab 3">
 			<term:TerminalControl FontFamily="Cascadia Mono"
