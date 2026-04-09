@@ -107,6 +107,16 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public string? CurrentDirectory => _terminalControl?.CurrentDirectory;
 
+        /// <summary>
+        /// Gets the exit code of the launched process after it has terminated.
+        /// </summary>
+        public int ExitCode => _terminalControl!.ExitCode;
+
+        /// <summary>
+        /// Gets the operating system process identifier of the launched terminal process.
+        /// </summary>
+        public int Pid => _terminalControl!.Pid;
+
 
         /// <summary>
         /// Gets or sets whether the window should close when the process exits.

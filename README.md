@@ -86,6 +86,8 @@ public partial class MainWindow : Window
 | `Args` | `IList<string>` | Empty | Command-line arguments for the process |
 | `StartingDirectory` | `string?` | Current working directory | The initial working directory used when launching the PTY process |
 | `CurrentDirectory` | `string?` | Read-only | The current working directory reported by the running terminal session via OSC 7 |
+| `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
+| `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
 | `FontFamily` | `FontFamily` | Inherited | Terminal font family (use monospace fonts) |
 | `FontSize` | `double` | Inherited | Terminal font size |
@@ -99,6 +101,8 @@ public partial class MainWindow : Window
 |--------|-------------|
 | `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
 | `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
+| `Kill()` | Terminates the running terminal process |
+| `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
 
 **Events:**
 
@@ -164,15 +168,19 @@ terminalWindow.Show();
 |--------|-------------|
 | `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
 | `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
-
+| `Kill()` | Terminates the running terminal process |
+| `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
 
 **Additional Properties (beyond TerminalControl):**
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
+| `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `CloseOnProcessExit` | `bool` | `true` | Automatically close the window when the process exits |
 | `UpdateTitleFromTerminal` | `bool` | `true` | Update window title from terminal escape sequences |
 | `HandleWindowCommands` | `bool` | `true` | Handle window manipulation commands from the terminal |
+
 
 ## Links
 
