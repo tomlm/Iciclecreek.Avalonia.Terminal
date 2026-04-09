@@ -35,15 +35,10 @@
     <AvaloniaResource Include="Themes\**" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.9" />
-    <PackageReference Include="Iciclecreek.Avalonia.WindowManager" Version="3.0.15" />
+    <PackageReference Include="Avalonia" Version="11.3.12" />
     <PackageReference Include="Porta.Pty" Version="1.0.7" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
     <PackageReference Include="XTerm.NET" Version="1.0.12" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\..\..\XTerm.NET\src\XTerm.NET\XTerm.NET.csproj" />
-    <ProjectReference Include="..\..\..\Iciclecreek.Avalonia.WindowManager\source\Iciclecreek.Avalonia.WindowManager\Iciclecreek.Avalonia.WindowManager.csproj" />
   </ItemGroup>
 </Project>
