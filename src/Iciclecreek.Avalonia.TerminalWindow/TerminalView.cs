@@ -1613,7 +1613,7 @@ namespace Iciclecreek.Terminal
                     Name = processToLaunch,
                     Cols = _terminal.Cols,
                     Rows = _terminal.Rows,
-                    Cwd = Environment.CurrentDirectory,
+                    Cwd = _terminal.CurrentDirectory ?? Environment.CurrentDirectory,
                     App = processToLaunch
                 };
 
