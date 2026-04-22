@@ -9,8 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.0.4" />
-    <PackageReference Include="Consolonia" Version="11.3.10" />
+    <PackageReference Include="Consolonia" Version="11.3.12.4" />
   </ItemGroup>
 
 <ItemGroup>
