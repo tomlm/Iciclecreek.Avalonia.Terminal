@@ -10,9 +10,10 @@
 
   <ItemGroup>
     <PackageReference Include="Consolonia" Version="11.3.12.4" />
+    <PackageReference Include="Consolonia.ManagedWindows" Version="11.3.12.4" />
   </ItemGroup>
 
-<ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Iciclecreek.Avalonia.TerminalWindow\Iciclecreek.Avalonia.Terminal.csproj" />
   </ItemGroup>
 

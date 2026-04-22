@@ -3,15 +3,16 @@
 			 xmlns:console="https://github.com/jinek/consolonia"
 			 xmlns:wm="using:Consolonia.ManagedWindows"
 			 xmlns:demo="clr-namespace:Demo.Views;assembly=Demo"
-			 x:Class="Demo.Console.App"
+			 x:Class="Demo.Desktop.App"
 			 RequestedThemeVariant="Default">
 	<Application.Styles>
-		<console:ModernTheme />
+		<FluentTheme />
 		<Style Selector="demo|ManagedTerminalWindow">
 			<Setter Property="Foreground" Value="White"/>
 			<Setter Property="Background" Value="Black"/>
-			<Setter Property="FontSize" Value="1"/>
+			<Setter Property="FontFamily" Value="fonts:CascadiaCode#Cascadia Code"/>
+			<Setter Property="FontSize" Value="14"/>
 		</Style >
-		<wm:AutoManagedWindowStyles />
 	</Application.Styles>
+
 </Application>

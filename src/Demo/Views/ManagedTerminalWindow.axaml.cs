@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -415,7 +414,7 @@ namespace Demo.Views
                         break;
 
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
-                        var screen = Screens.ScreenFromWindow((WindowBase)(object)this);
+                        var screen = Screens.ScreenFromWindow((WindowBase)(object)this as WindowBase);
                         if (screen != null)
                         {
                             e.WidthPixels = (int)screen.Bounds.Width;
