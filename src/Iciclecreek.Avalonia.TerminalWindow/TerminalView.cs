@@ -38,7 +38,8 @@ namespace Iciclecreek.Terminal
         private IPtyConnection? _ptyConnection;
         private CancellationTokenSource? _processCts;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        private bool _processExitHandled;  // Prevent double notification
+        private int _processExitHandled;    // 0=false, 1=true — written via Interlocked
+        private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
         private DispatcherTimer _cursorBlinkTimer;
@@ -836,6 +837,28 @@ namespace Iciclecreek.Terminal
                 return;
             }
 
+            // When the process has exited, stop eating keyboard input so that Avalonia's
+            // normal focus navigation (Tab/Shift+Tab etc.) works again.  We still handle
+            // the copy shortcut so the user can copy terminal output after a run.
+            if (_processExitHandled != 0)
+            {
+                bool isCopy = e.Key == Key.C &&
+                              (e.KeyModifiers == KeyModifiers.Control ||
+                               e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift));
+                if (isCopy && _terminal.Selection.HasSelection)
+                {
+                    e.Handled = true;
+                    await CopyAsync();
+                    _terminal.Selection.ClearSelection();
+                    this.RequestInvalidate();
+                }
+                else
+                {
+                    base.OnKeyDown(e);
+                }
+                return;
+            }
+
             try
             {
                 // Handle Ctrl+C - copy if there's a selection, otherwise send SIGINT
@@ -964,7 +987,7 @@ namespace Iciclecreek.Terminal
 
             // Capture the connection reference locally
             var ptyConnection = _ptyConnection;
-            if (ptyConnection == null)
+            if (ptyConnection == null || _processExitHandled != 0)
             {
                 base.OnKeyUp(e);
                 return;
@@ -1005,7 +1028,7 @@ namespace Iciclecreek.Terminal
 
             // Capture the connection reference locally
             var ptyConnection = _ptyConnection;
-            if (ptyConnection == null || string.IsNullOrEmpty(e.Text))
+            if (ptyConnection == null || string.IsNullOrEmpty(e.Text) || _processExitHandled != 0)
             {
                 Debug.WriteLine($"[TerminalView] OnTextInput: No PTY or empty text");
                 base.OnTextInput(e);
@@ -1705,7 +1728,7 @@ namespace Iciclecreek.Terminal
             try
             {
                 _processCts = new CancellationTokenSource();
-                _processExitHandled = false;  // Reset flag for new process
+                Interlocked.Exchange(ref _processExitHandled, 0);  // Reset flag for new process
 
                 // Determine the process to launch based on OS if not explicitly set
                 string processToLaunch = Process;
@@ -1775,15 +1798,16 @@ namespace Iciclecreek.Terminal
                     var bytesRead = await _ptyConnection.ReaderStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
                     if (bytesRead == 0)
                     {
-                        // Process has exited - the ProcessExited event handler will handle notification
-                        // This is just a fallback in case the event doesn't fire
-                        if (!_processExitHandled)
+                        // Process has exited — fallback in case OnPtyProcessExited didn't fire first.
+                        if (Interlocked.Exchange(ref _processExitHandled, 1) == 0)
                         {
-                            _processExitHandled = true;
                             var exitCode = _ptyConnection?.ExitCode ?? 0;
 
-                            _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
-                            _terminal.Buffer.ScrollToBottom();
+                            lock (_terminalLock)
+                            {
+                                _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
+                                _terminal.Buffer.ScrollToBottom();
+                            }
 
                             this.RequestInvalidate();
                         }
@@ -1791,18 +1815,37 @@ namespace Iciclecreek.Terminal
                     }
 
                     var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    _terminal.Write(output);
+
+                    // Snapshot before write so we can detect buffer growth (MaxScrollback
+                    // increases when _terminal.Write adds lines; ScrollToBottom only moves
+                    // ViewportY and does not affect buffer length).
+                    var oldMax = MaxScrollback;
+                    var oldY = _terminal.Buffer.ViewportY;
+
+                    lock (_terminalLock)
+                    {
+                        _terminal.Write(output);
+                    }
 
                     // Auto-scroll to bottom when new content arrives, but only in normal buffer.
                     // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)
                     // handles its own cursor positioning and shouldn't be scrolled.
                     if (!_isAlternateBuffer)
                     {
-                        var y = _terminal.Buffer.ViewportY;
                         _terminal.Buffer.ScrollToBottom();
+                        var newY = _terminal.Buffer.ViewportY;
+                        var newMax = MaxScrollback;
 
-                        if (y != Terminal.Buffer.ViewportY)
-                            Dispatcher.UIThread.Post(() => RaisePropertyChanged(ViewportYProperty, y, _terminal.Buffer.ViewportY));
+                        if (oldMax != newMax || oldY != newY)
+                        {
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                if (oldMax != newMax)
+                                    RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax);
+                                if (oldY != newY)
+                                    RaisePropertyChanged(ViewportYProperty, oldY, newY);
+                            });
+                        }
                     }
 
                     // Notify IME of cursor position change after terminal processes data
@@ -1817,22 +1860,31 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                _terminal.WriteLine($"\nError reading from process: {ex.Message}\n");
-                _terminal.Buffer.ScrollToBottom();
+                // If the process has already exited the stream closing is expected — swallow silently.
+                if (_processExitHandled != 0)
+                    return;
+
+                lock (_terminalLock)
+                {
+                    _terminal.WriteLine($"\nError reading from process: {ex.Message}\n");
+                    _terminal.Buffer.ScrollToBottom();
+                }
+
                 this.RequestInvalidate();
             }
         }
 
         private void OnPtyProcessExited(object? sender, PtyExitedEventArgs e)
         {
-            // Handle process exit from the PTY event (more reliable than just detecting EOF)
-            // Use flag to prevent double notification from both event and EOF detection
-            if (_processExitHandled)
+            // Interlocked ensures only one of (event, EOF path, exception path) prints the message.
+            if (Interlocked.Exchange(ref _processExitHandled, 1) != 0)
                 return;
-            _processExitHandled = true;
 
-            _terminal.WriteLine($"\nProcess exited with code: {e.ExitCode}\n");
-            _terminal.Buffer.ScrollToBottom();
+            lock (_terminalLock)
+            {
+                _terminal.WriteLine($"\nProcess exited with code: {e.ExitCode}\n");
+                _terminal.Buffer.ScrollToBottom();
+            }
             this.RequestInvalidate();
 
             Dispatcher.UIThread.InvokeAsync(() =>
