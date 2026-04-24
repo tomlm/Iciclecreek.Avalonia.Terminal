@@ -1,4 +1,4 @@
-# Iciclecreek.Avalonia.Terminal
+# Iciclecreek.Avalonia.Terminal (Avalonia 11.X)
 ![Terminal Demo](https://raw.githubusercontent.com/tomlm/Iciclecreek.Avalonia.Terminal/main/terminal.gif)
 
 
