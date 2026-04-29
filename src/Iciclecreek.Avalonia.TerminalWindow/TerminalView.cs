@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
@@ -524,9 +525,7 @@ namespace Iciclecreek.Terminal
             if (clipboard == null)
                 return;
 
-#pragma warning disable CS0618 // Type or member is obsolete
-            var text = await clipboard.GetTextAsync();
-#pragma warning restore CS0618 // Type or member is obsolete
+            var text = await clipboard.TryGetTextAsync();
             if (!string.IsNullOrEmpty(text))
             {
                 // Wrap paste in bracketed paste sequences if mode is enabled
@@ -1271,7 +1270,7 @@ namespace Iciclecreek.Terminal
             }
         }
 
-        protected override async void OnGotFocus(GotFocusEventArgs e)
+        protected override async void OnGotFocus(FocusChangedEventArgs e)
         {
             base.OnGotFocus(e);
 
@@ -1296,7 +1295,7 @@ namespace Iciclecreek.Terminal
             this.RequestInvalidate();
         }
 
-        protected override async void OnLostFocus(RoutedEventArgs e)
+        protected override async void OnLostFocus(FocusChangedEventArgs e)
         {
             base.OnLostFocus(e);
 
@@ -1970,7 +1969,7 @@ namespace Iciclecreek.Terminal
 
         public override void Render(DrawingContext context)
         {
-            var scale = VisualRoot?.RenderScaling ?? 1.0;
+            var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
             //Debug.WriteLine("======");
             //Debug.WriteLine(_terminal.Buffer.PrintViewport());
 
