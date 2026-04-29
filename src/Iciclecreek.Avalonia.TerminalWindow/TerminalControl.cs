@@ -227,7 +227,7 @@ namespace Iciclecreek.Terminal
             await LaunchProcess();
         }
 
-        protected override void OnGotFocus(GotFocusEventArgs e)
+        protected override void OnGotFocus(FocusChangedEventArgs e)
         {
             base.OnGotFocus(e);
 
