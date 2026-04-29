@@ -1,6 +1,5 @@
-# Iciclecreek.Avalonia.Terminal
+# Iciclecreek.Avalonia.Terminal For Avalonia 12.x
 ![Terminal Demo](https://raw.githubusercontent.com/tomlm/Iciclecreek.Avalonia.Terminal/main/terminal.gif)
-
 
 A cross-platform XTerm terminal emulator control for [Avalonia UI](https://avaloniaui.net/) applications.
 
