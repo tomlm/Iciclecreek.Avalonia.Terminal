@@ -48,12 +48,19 @@ namespace Iciclecreek.Terminal
 
         // Selection state - tracks whether terminal is handling selection vs forwarding mouse to app
         private bool _isSelecting = false;
+        // When non-null, a single left-click has been pressed but the selection hasn't started yet.
+        // Selection start is deferred until pointer movement so that a plain click doesn't show a caret.
+        private (int Col, int Row)? _pendingSelectionStart = null;
 
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
         // Unique identifier for this terminal instance (for debugging)
         private readonly Guid _instanceId = Guid.NewGuid();
+
+        // When true, OnDetachedFromLogicalTree skips CleanupProcess so the PTY
+        // survives a visual-tree re-parent (e.g. floating window pop-out/dock-back).
+        private bool _suppressCleanupOnDetach;
 
         private sealed record CachedTextRun(FormattedText Text, int StartX, int CellCount, IBrush Background);
 
@@ -163,6 +170,25 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalView, int>(
                 nameof(CursorBlinkRate),
                 defaultValue: 530);
+
+        /// <summary>
+        /// When <see langword="false"/> (default), a plain single left-click does not
+        /// immediately show a selection highlight. The selection only starts once the
+        /// pointer moves, so casual clicks produce no visible caret artifact.
+        /// Set to <see langword="true"/> to restore the original behaviour where a
+        /// single-cell highlight appears on every click.
+        /// Double- and triple-click (word / line selection) are unaffected by this setting.
+        /// </summary>
+        public static readonly StyledProperty<bool> ShowCaretOnClickProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(ShowCaretOnClick),
+                defaultValue: false);
+
+        public bool ShowCaretOnClick
+        {
+            get => GetValue(ShowCaretOnClickProperty);
+            set => SetValue(ShowCaretOnClickProperty, value);
+        }
 
         public static readonly StyledProperty<XTerm.Options.TerminalOptions?> OptionsProperty =
             AvaloniaProperty.Register<TerminalControl, XTerm.Options.TerminalOptions?>(
@@ -776,7 +802,21 @@ namespace Iciclecreek.Terminal
         {
             _cursorBlinkTimer.Stop();
             _isSelecting = false;
+            _pendingSelectionStart = null;
         }
+
+        /// <summary>
+        /// Call before removing this view from one visual tree and adding it to another.
+        /// Prevents <see cref="OnDetachedFromLogicalTree"/> from killing the PTY process.
+        /// Must be paired with <see cref="EndReparent"/> once re-attached.
+        /// </summary>
+        public void BeginReparent() => _suppressCleanupOnDetach = true;
+
+        /// <summary>
+        /// Call after the view has been re-attached to a new visual tree to restore
+        /// normal cleanup behaviour and ensure render handlers are wired up.
+        /// </summary>
+        public void EndReparent() => _suppressCleanupOnDetach = false;
 
         protected override void OnDetachedFromLogicalTree(LogicalTreeAttachmentEventArgs e)
         {
@@ -797,7 +837,52 @@ namespace Iciclecreek.Terminal
             _terminal.BellRang -= OnTerminalBellRang;
             _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
-            CleanupProcess();
+
+            if (!_suppressCleanupOnDetach)
+                CleanupProcess();
+        }
+
+        protected override void OnAttachedToLogicalTree(LogicalTreeAttachmentEventArgs e)
+        {
+            base.OnAttachedToLogicalTree(e);
+
+            // _terminal is null during initial attachment (OnInitialized hasn't fired yet).
+            // Only re-subscribe when re-parenting after a prior detach.
+            if (_terminal == null) return;
+
+            // Re-subscribe terminal events that were unsubscribed on detach.
+            // Use -= before += to avoid double-subscription.
+            _terminal.DataReceived -= OnTerminalDataReceived;
+            _terminal.BufferChanged -= OnTerminalBufferChanged;
+            _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
+            _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.WindowMoved -= OnTerminalWindowMoved;
+            _terminal.WindowResized -= OnTerminalWindowResized;
+            _terminal.WindowMinimized -= OnTerminalWindowMinimized;
+            _terminal.WindowMaximized -= OnTerminalWindowMaximized;
+            _terminal.WindowRestored -= OnTerminalWindowRestored;
+            _terminal.WindowRaised -= OnTerminalWindowRaised;
+            _terminal.WindowLowered -= OnTerminalWindowLowered;
+            _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
+            _terminal.BellRang -= OnTerminalBellRang;
+            _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
+            _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
+
+            _terminal.DataReceived += OnTerminalDataReceived;
+            _terminal.BufferChanged += OnTerminalBufferChanged;
+            _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
+            _terminal.TitleChanged += OnTerminalTitleChanged;
+            _terminal.WindowMoved += OnTerminalWindowMoved;
+            _terminal.WindowResized += OnTerminalWindowResized;
+            _terminal.WindowMinimized += OnTerminalWindowMinimized;
+            _terminal.WindowMaximized += OnTerminalWindowMaximized;
+            _terminal.WindowRestored += OnTerminalWindowRestored;
+            _terminal.WindowRaised += OnTerminalWindowRaised;
+            _terminal.WindowLowered += OnTerminalWindowLowered;
+            _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
+            _terminal.BellRang += OnTerminalBellRang;
+            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
+            _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
         }
 
         private void OnCursorBlinkTick(object? sender, EventArgs e)
@@ -1111,11 +1196,22 @@ namespace Iciclecreek.Terminal
                         _ => XT.Selection.SelectionMode.Normal
                     };
 
-                    // Start selection - use viewport-relative row
-                    int viewportRow = row;
-                    _terminal.Selection.StartSelection(col, viewportRow, mode);
-                    _isSelecting = true;
-                    this.RequestInvalidate();
+                    if (mode == XT.Selection.SelectionMode.Normal && !ShowCaretOnClick)
+                    {
+                        // Defer single-click selection until the pointer actually moves;
+                        // this avoids showing a single-cell caret on every click.
+                        _pendingSelectionStart = (col, row);
+                        _isSelecting = true;
+                    }
+                    else
+                    {
+                        // Word / line select, or ShowCaretOnClick=true — start immediately.
+                        int viewportRow = row;
+                        _terminal.Selection.StartSelection(col, viewportRow, mode);
+                        _isSelecting = true;
+                        _pendingSelectionStart = null;
+                        this.RequestInvalidate();
+                    }
                     e.Handled = true;
                     return;
                 }
@@ -1148,7 +1244,16 @@ namespace Iciclecreek.Terminal
                 // If we were selecting, end selection
                 if (_isSelecting)
                 {
-                    _terminal.Selection.EndSelection();
+                    if (_pendingSelectionStart.HasValue)
+                    {
+                        // Pointer was never moved after the click — no visible selection was started,
+                        // so just clear the pending state without leaving any caret.
+                        _pendingSelectionStart = null;
+                    }
+                    else
+                    {
+                        _terminal.Selection.EndSelection();
+                    }
                     _isSelecting = false;
                     e.Handled = true;
                     return;
@@ -1191,6 +1296,12 @@ namespace Iciclecreek.Terminal
                 if (_isSelecting)
                 {
                     int viewportRow = row;
+                    if (_pendingSelectionStart.HasValue)
+                    {
+                        // First movement after a single click — now actually start the selection.
+                        _terminal.Selection.StartSelection(_pendingSelectionStart.Value.Col, _pendingSelectionStart.Value.Row, XT.Selection.SelectionMode.Normal);
+                        _pendingSelectionStart = null;
+                    }
                     _terminal.Selection.UpdateSelection(col, viewportRow);
                     this.RequestInvalidate();
                     e.Handled = true;

@@ -175,6 +175,26 @@ namespace Iciclecreek.Terminal
         public void Kill() => _terminalView!.Kill();
 
         /// <summary>
+        /// Call before removing this control from one visual tree and adding it to another
+        /// (e.g. moving between windows). Prevents the PTY process from being killed
+        /// during the detach. Pair with <see cref="EndReparent"/> after re-attaching.
+        /// </summary>
+        public void BeginReparent() => _terminalView?.BeginReparent();
+
+        /// <summary>
+        /// Call after the control has been re-attached to a new visual tree to restore
+        /// normal cleanup behaviour.
+        /// </summary>
+        public void EndReparent() => _terminalView?.EndReparent();
+
+        /// <inheritdoc cref="TerminalView.ShowCaretOnClickProperty"/>
+        public bool ShowCaretOnClick
+        {
+            get => _terminalView?.ShowCaretOnClick ?? false;
+            set { if (_terminalView != null) _terminalView.ShowCaretOnClick = value; }
+        }
+
+        /// <summary>
         /// Gets the exit code of the launched process after it has terminated.
         /// </summary>
         public int ExitCode => _terminalView!.ExitCode;
