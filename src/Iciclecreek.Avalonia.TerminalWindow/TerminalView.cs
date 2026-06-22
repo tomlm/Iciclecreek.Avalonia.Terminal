@@ -55,6 +55,9 @@ namespace Iciclecreek.Terminal
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
+        // Fires ShellReady exactly once after the first PTY output chunk.
+        private int _shellReadyFired; // 0=not yet, 1=fired
+
         // Unique identifier for this terminal instance (for debugging)
         private readonly Guid _instanceId = Guid.NewGuid();
 
@@ -319,6 +322,12 @@ namespace Iciclecreek.Terminal
             target.RemoveHandler(WindowInfoRequestedEvent, handler);
 
         #endregion
+
+        /// <summary>
+        /// Event raised once when the shell produces its first output (e.g. the prompt),
+        /// indicating it is ready to accept input.
+        /// </summary>
+        public event EventHandler? ShellReady;
 
         /// <summary>
         /// Event raised when the PTY process exits.
@@ -1888,6 +1897,7 @@ namespace Iciclecreek.Terminal
             {
                 _processCts = new CancellationTokenSource();
                 Interlocked.Exchange(ref _processExitHandled, 0);  // Reset flag for new process
+                Interlocked.Exchange(ref _shellReadyFired, 0);
 
                 // Determine the process to launch based on OS if not explicitly set
                 string processToLaunch = Process;
@@ -1990,6 +2000,9 @@ namespace Iciclecreek.Terminal
                     {
                         _terminal.Write(output);
                     }
+
+                    if (Interlocked.Exchange(ref _shellReadyFired, 1) == 0)
+                        Dispatcher.UIThread.Post(() => ShellReady?.Invoke(this, EventArgs.Empty));
 
                     // Auto-scroll to bottom when new content arrives, but only in normal buffer.
                     // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)

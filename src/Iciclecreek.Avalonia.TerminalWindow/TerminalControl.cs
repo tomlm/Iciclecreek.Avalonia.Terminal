@@ -59,6 +59,8 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        /// <inheritdoc cref="TerminalView.ShellReady"/>
+        public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
         /// <summary>
@@ -282,6 +284,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited -= OnTerminalViewProcessExited;
+                _terminalView.ShellReady -= OnTerminalViewShellReady;
             }
 
             SetCurrentDirectory(null);
@@ -297,6 +300,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
+                _terminalView.ShellReady += OnTerminalViewShellReady;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
                 // (no window event hooking needed)
             }
@@ -328,6 +332,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewProcessExited(object? sender, ProcessExitedEventArgs e)
         {
             ProcessExited?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewShellReady(object? sender, EventArgs e)
+        {
+            ShellReady?.Invoke(this, EventArgs.Empty);
         }
 
         private void SetCurrentDirectory(string? currentDirectory)
