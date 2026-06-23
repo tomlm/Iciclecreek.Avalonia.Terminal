@@ -2002,7 +2002,16 @@ namespace Iciclecreek.Terminal
                     }
 
                     if (Interlocked.Exchange(ref _shellReadyFired, 1) == 0)
-                        Dispatcher.UIThread.Post(() => ShellReady?.Invoke(this, EventArgs.Empty));
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            // Ignore queued callbacks from a previous process after LaunchProcess() resets state.
+                            if (_processCts?.Token != cancellationToken)
+                                return;
+
+                            ShellReady?.Invoke(this, EventArgs.Empty);
+                        });
+                    }
 
                     // Auto-scroll to bottom when new content arrives, but only in normal buffer.
                     // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)
