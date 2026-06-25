@@ -336,7 +336,7 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalViewShellReady(object? sender, EventArgs e)
         {
-            ShellReady?.Invoke(this, EventArgs.Empty);
+            ShellReady?.Invoke(this, e);
         }
 
         private void SetCurrentDirectory(string? currentDirectory)
