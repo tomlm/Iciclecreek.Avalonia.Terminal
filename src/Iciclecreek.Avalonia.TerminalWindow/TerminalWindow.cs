@@ -65,7 +65,13 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        /// <inheritdoc cref="TerminalView.ShellReady"/>
+        public event EventHandler? ShellReady;
+
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+
+        /// <inheritdoc cref="TerminalView.UrlClicked"/>
+        public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
 
         /// <summary>
@@ -201,6 +207,8 @@ namespace Iciclecreek.Terminal
 
             // Subscribe to terminal events.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
+            _terminalControl.ShellReady += OnTerminalControlShellReady;
+            _terminalControl.UrlClicked += OnTerminalControlUrlClicked;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -330,6 +338,8 @@ namespace Iciclecreek.Terminal
             {
                 _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
+                _terminalControl.ShellReady -= OnTerminalControlShellReady;
+                _terminalControl.UrlClicked -= OnTerminalControlUrlClicked;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -358,6 +368,16 @@ namespace Iciclecreek.Terminal
             // This avoids breaking the window chrome buttons while still reliably restoring
             // focus after clicking the title bar/background.
             Dispatcher.UIThread.Post(RestoreTerminalFocus, DispatcherPriority.Input);
+        }
+
+        private void OnTerminalControlShellReady(object? sender, EventArgs e)
+        {
+            ShellReady?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlUrlClicked(object? sender, UrlClickedEventArgs e)
+        {
+            UrlClicked?.Invoke(this, e);
         }
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
