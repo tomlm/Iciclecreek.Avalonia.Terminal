@@ -6,6 +6,7 @@ using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Rendering;
 using Avalonia.Threading;
 using Iciclecreek.Avalonia.Terminal;
 using Porta.Pty;
@@ -26,8 +27,20 @@ using XT = global::XTerm;
 namespace Iciclecreek.Terminal
 {
 
-    public class TerminalView : Control
+    public class TerminalView : Control, ICustomHitTest
     {
+        /// <summary>
+        /// Avalonia hit-tests what a control actually DREW, not the rectangle it occupies — the same
+        /// rule that makes a <c>Grid</c> with no Background invisible to the pointer. <see cref="Render"/> paints
+        /// glyph runs and per-cell background fills, and the fills are skipped for cells carrying no background of
+        /// their own, so a terminal is hit-testable only over the pixels that happen to have text on them. The
+        /// pointer landed on whatever sat BEHIND the view everywhere else: wheel events over blank space, over the
+        /// gap right of a short line, or below the last line never reached the terminal at all, which reads as a
+        /// terminal that only sometimes agrees to scroll. The whole rect is an input surface — click-to-focus,
+        /// selection drags and the wheel all depend on it.
+        /// </summary>
+        public bool HitTest(Point point) => new Rect(Bounds.Size).Contains(point);
+
         private XT.Terminal _terminal;
         private FormattedText _measureText;
         private string? _currentDirectory;
