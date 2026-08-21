@@ -1487,10 +1487,17 @@ namespace Iciclecreek.Terminal
 
             if (_ptyConnection != null && _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None)
             {
-                // The app owns the wheel — report notches to it. Accumulate the same way, so a trackpad's
-                // fractional stream turns into whole notches instead of one report per micro-event (which
-                // would fly a pager past the end) or none at all.
-                var notches = TakeWheelSteps(ref _wheelResidualApp, delta * scrollLines);
+                // The app owns the wheel — report NOTCHES to it, and notches are what Delta.Y already
+                // counts: one per detent. Accumulate so a trackpad's fractional stream turns into whole
+                // notches instead of one report per micro-event (which flies a pager past the end) or none
+                // at all.
+                //
+                // Deliberately NOT scaled by scrollLines. That multiplier is the local scrollback's "three
+                // lines per detent" convention and has no meaning here: an app receives discrete wheel
+                // reports and applies its own step. Scaling it sent three reports per detent, tripling the
+                // scroll speed of every mouse-tracking application — vim, less, htop — against a baseline
+                // of exactly one.
+                var notches = TakeWheelSteps(ref _wheelResidualApp, delta);
                 if (notches == 0)
                 {
                     e.Handled = true;
