@@ -66,7 +66,6 @@ namespace Iciclecreek.Terminal
         private CancellationTokenSource? _processCts;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         private int _processExitHandled;    // 0=false, 1=true — written via Interlocked
-        private int _shellReadyFired;       // 0=false, 1=true — written via Interlocked
         private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
@@ -351,12 +350,6 @@ namespace Iciclecreek.Terminal
         /// Event raised when the PTY process exits.
         /// </summary>
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
-
-        /// <summary>
-        /// Event raised once when the shell produces its first output (e.g. the prompt),
-        /// indicating it is ready to accept input.
-        /// </summary>
-        public event EventHandler? ShellReady;
 
         /// <summary>
         /// Event raised when a URL in the terminal is Ctrl+Clicked.
@@ -2323,9 +2316,6 @@ namespace Iciclecreek.Terminal
                     {
                         _terminal.Write(output);
                     }
-
-                    if (Interlocked.Exchange(ref _shellReadyFired, 1) == 0)
-                        Dispatcher.UIThread.Post(() => ShellReady?.Invoke(this, EventArgs.Empty));
 
                     // Auto-scroll to bottom when new content arrives, but only in normal buffer.
                     // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)

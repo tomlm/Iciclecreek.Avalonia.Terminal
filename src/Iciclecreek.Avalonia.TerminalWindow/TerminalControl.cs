@@ -59,7 +59,6 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
-        public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
