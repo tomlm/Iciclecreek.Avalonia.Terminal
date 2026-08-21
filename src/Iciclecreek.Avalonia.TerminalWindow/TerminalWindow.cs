@@ -65,6 +65,9 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        /// <inheritdoc cref="TerminalView.ShellReady"/>
+        public event EventHandler? ShellReady;
+
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
 
@@ -201,6 +204,7 @@ namespace Iciclecreek.Terminal
 
             // Subscribe to terminal events.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
+            _terminalControl.ShellReady += OnTerminalControlShellReady;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -330,6 +334,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
+                _terminalControl.ShellReady -= OnTerminalControlShellReady;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -358,6 +363,11 @@ namespace Iciclecreek.Terminal
             // This avoids breaking the window chrome buttons while still reliably restoring
             // focus after clicking the title bar/background.
             Dispatcher.UIThread.Post(RestoreTerminalFocus, DispatcherPriority.Input);
+        }
+
+        private void OnTerminalControlShellReady(object? sender, EventArgs e)
+        {
+            ShellReady?.Invoke(this, e);
         }
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)

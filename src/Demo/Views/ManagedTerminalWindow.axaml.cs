@@ -8,6 +8,7 @@ using Iciclecreek.Avalonia.WindowManager;
 using Iciclecreek.Terminal;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace Demo.Views
@@ -179,6 +180,7 @@ namespace Demo.Views
 
             // Subscribe to terminal events.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
+            _terminalControl.UrlClicked += OnTerminalUrlClicked;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -273,6 +275,7 @@ namespace Demo.Views
             if (_terminalControl != null)
             {
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
+                _terminalControl.UrlClicked -= OnTerminalUrlClicked;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -300,6 +303,29 @@ namespace Demo.Views
             if (CloseOnProcessExit)
             {
                 Close();
+            }
+        }
+
+        private async void OnTerminalUrlClicked(object? sender, UrlClickedEventArgs e)
+        {
+            // Only launch well-formed http(s) urls, never anything else the terminal may have matched.
+            if (!Uri.TryCreate(e.Url, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                return;
+            }
+
+            try
+            {
+                var launcher = TopLevel.GetTopLevel(this)?.Launcher;
+                if (launcher != null)
+                {
+                    await launcher.LaunchUriAsync(uri);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to launch {uri}: {ex.Message}");
             }
         }
 
