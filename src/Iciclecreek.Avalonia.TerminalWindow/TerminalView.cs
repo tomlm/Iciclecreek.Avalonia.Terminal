@@ -95,6 +95,13 @@ namespace Iciclecreek.Terminal
         // Selection start is deferred until pointer movement so that a plain click doesn't show a caret.
         private (int Col, int Row)? _pendingSelectionStart = null;
 
+        // Wheel accumulator. A notched mouse delivers Delta.Y = ±1 per detent, but a trackpad (and any
+        // precision mouse) delivers a stream of FRACTIONS — on macOS a slow two-finger drag is dozens of
+        // ~0.05 events. Truncating each event to an int on its own rounds every one of those to zero
+        // lines, so carry the remainder across events instead.
+        private double _wheelResidual;      // local scrollback path
+        private double _wheelResidualApp;   // mouse-reporting path (alt-buffer apps: less, vim, htop)
+
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
@@ -1492,32 +1499,53 @@ namespace Iciclecreek.Terminal
 
             // Delta.Y is positive when scrolling up (towards user), negative when scrolling down
             var delta = e.Delta.Y;
+            if (delta == 0)
+                return;
 
             if (_ptyConnection != null && _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None)
             {
+                // The app owns the wheel — report NOTCHES to it, and notches are what Delta.Y already
+                // counts: one per detent. Accumulate so a trackpad's fractional stream turns into whole
+                // notches instead of one report per micro-event (which flies a pager past the end) or none
+                // at all.
+                //
+                // Deliberately NOT scaled by scrollLines. That multiplier is the local scrollback's "three
+                // lines per detent" convention and has no meaning here: an app receives discrete wheel
+                // reports and applies its own step. Scaling it sent three reports per detent, tripling the
+                // scroll speed of every mouse-tracking application — vim, less, htop — against a baseline
+                // of exactly one.
+                var notches = TakeWheelSteps(ref _wheelResidualApp, delta);
+                if (notches == 0)
+                {
+                    e.Handled = true;
+                    return;
+                }
+
                 var point = e.GetPosition(this);
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
 
-                var button = delta > 0 ? XT.Input.MouseButton.WheelUp : XT.Input.MouseButton.WheelDown;
-                var eventType = delta > 0 ? XT.Input.MouseEventType.WheelUp : XT.Input.MouseEventType.WheelDown;
+                var button = notches > 0 ? XT.Input.MouseButton.WheelUp : XT.Input.MouseButton.WheelDown;
+                var eventType = notches > 0 ? XT.Input.MouseEventType.WheelUp : XT.Input.MouseEventType.WheelDown;
 
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
-                    await SendToPtyAsync(sequence).ConfigureAwait(false);
+                    // Mark handled BEFORE the await — after it the event has already finished bubbling.
                     e.Handled = true;
+                    var repeated = string.Concat(Enumerable.Repeat(sequence, Math.Min(Math.Abs(notches), 12)));
+                    await SendToPtyAsync(repeated).ConfigureAwait(false);
                     return;
                 }
             }
 
-            if (delta != 0)
-            {
-                // Scroll up (negative delta to ViewportY) when wheel scrolls up (positive delta)
-                // Scroll down (positive delta to ViewportY) when wheel scrolls down (negative delta)
-                int linesToScroll = (int)(-delta * scrollLines);
+            // Scroll up (negative delta to ViewportY) when wheel scrolls up (positive delta)
+            // Scroll down (positive delta to ViewportY) when wheel scrolls down (negative delta)
+            int linesToScroll = -TakeWheelSteps(ref _wheelResidual, delta * scrollLines);
 
+            if (linesToScroll != 0)
+            {
                 // Calculate new viewport position
                 int newViewportY = Math.Clamp(
                     ViewportY + linesToScroll,
@@ -1528,9 +1556,26 @@ namespace Iciclecreek.Terminal
                 {
                     ViewportY = newViewportY;
                 }
-
-                e.Handled = true;
             }
+
+            e.Handled = true;
+        }
+
+        /// <summary>
+        /// Add <paramref name="step"/> to a running remainder and hand back the whole steps that have
+        /// piled up, keeping the fraction for next time. A direction change drops the stale remainder so
+        /// a reversal answers on the first event rather than paying off the old direction's debt first.
+        /// </summary>
+        private static int TakeWheelSteps(ref double residual, double step)
+        {
+            if (residual != 0 && Math.Sign(step) != Math.Sign(residual))
+                residual = 0;
+
+            residual += step;
+
+            var whole = Math.Truncate(residual);
+            residual -= whole;
+            return (int)whole;
         }
 
         protected override async void OnGotFocus(FocusChangedEventArgs e)
