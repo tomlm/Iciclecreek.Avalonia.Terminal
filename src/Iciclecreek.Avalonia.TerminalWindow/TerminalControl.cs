@@ -39,10 +39,13 @@ namespace Iciclecreek.Terminal
                 nameof(Args),
                 defaultValue: System.Array.Empty<string>());
 
+        // Matches TerminalView and TerminalWindow, which both default to the current directory. A null here
+        // was not merely a different default: the control template binds this onto the view, so the null
+        // overwrote the view's own sensible default on the way through.
         public static readonly StyledProperty<string?> StartingDirectoryProperty =
             AvaloniaProperty.Register<TerminalControl, string?>(
                 nameof(StartingDirectory),
-                defaultValue: null);
+                defaultValue: Environment.CurrentDirectory);
 
         public static readonly DirectProperty<TerminalControl, string?> CurrentDirectoryProperty =
             AvaloniaProperty.RegisterDirect<TerminalControl, string?>(

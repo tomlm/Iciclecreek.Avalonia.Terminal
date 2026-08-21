@@ -489,6 +489,11 @@ namespace Iciclecreek.Terminal
             options.CursorBlink = CursorBlink;
             options.CursorBlinkRate = CursorBlinkRate;
 
+            // BufferSize may already have been set — by a template binding, or by a host that configured the
+            // view before it was initialised. The setter cannot reach the emulator that early because it does
+            // not exist yet, so the value is carried across here instead of being silently lost.
+            options.Scrollback = _bufferSize;
+
             // On Linux, the PTY doesn't convert LF to CRLF (ONLCR is disabled for raw mode),
             // so we need XTerm to handle LF as implicit CRLF
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -550,7 +555,12 @@ namespace Iciclecreek.Terminal
             get => _bufferSize;
             set
             {
-                _terminal.Options.Scrollback = value;
+                // _terminal does not exist until OnInitialized, and a value can legitimately arrive before
+                // then — a template binding is applied while the view is still initialising. Store it either
+                // way; BuildTerminal reads _bufferSize when it constructs the emulator.
+                if (_terminal != null)
+                    _terminal.Options.Scrollback = value;
+
                 SetAndRaise(BufferSizeProperty, ref _bufferSize, value);
                 this.RequestInvalidate();
             }

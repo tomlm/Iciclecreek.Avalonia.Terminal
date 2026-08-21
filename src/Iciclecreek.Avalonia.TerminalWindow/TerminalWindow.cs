@@ -162,16 +162,53 @@ namespace Iciclecreek.Terminal
 
         public TerminalWindow()
         {
+            // Content is built here rather than in OnInitialized. A control assigned to Content during
+            // OnInitialized never gets styled: its Template stays null, so TerminalControl's template is
+            // never applied, PART_TerminalView is never created, and the window shows nothing at all.
+            // Building it in the constructor puts it in place before initialisation, which is the same
+            // position it would occupy had a caller assigned Content themselves.
+            EnsureTerminalControl();
+
             // Set focus to terminal when window opens or is activated
             Opened += OnOpened;
             Activated += OnActivated;
             Deactivated += OnDeactivated;
         }
 
-        protected override void OnInitialized()
+        /// <summary>
+        /// Turn on the terminal capabilities whose commands this window handles.
+        /// </summary>
+        /// <remarks>
+        /// Without these flags the emulator never emits the sequences at all, so the eleven handlers wired in
+        /// <see cref="EnsureTerminalControl"/> are unreachable and every window-manipulation command silently
+        /// does nothing.
+        ///
+        /// <para>Applied to whatever <see cref="Options"/> currently is, every time it changes, rather than
+        /// once during construction. A caller's object initializer runs after this constructor, so a
+        /// one-shot configuration would be applied to an object the caller then replaces — which is precisely
+        /// how the flags came to be lost before.</para>
+        /// </remarks>
+        private static void EnableWindowCommands(XTerm.Options.TerminalOptions options)
         {
-            base.OnInitialized();
-            EnsureTerminalControl();
+            var windowOptions = options.WindowOptions;
+            windowOptions.GetWinPosition = true;
+            windowOptions.GetWinSizePixels = true;
+            windowOptions.GetWinSizeChars = true;
+            windowOptions.GetScreenSizePixels = true;
+            windowOptions.GetCellSizePixels = true;
+            windowOptions.GetIconTitle = true;
+            windowOptions.GetWinTitle = true;
+            windowOptions.GetWinState = true;
+            windowOptions.SetWinPosition = true;
+            windowOptions.SetWinSizePixels = true;
+            windowOptions.SetWinSizeChars = true;
+            windowOptions.RaiseWin = true;
+            windowOptions.LowerWin = true;
+            windowOptions.RefreshWin = true;
+            windowOptions.RestoreWin = true;
+            windowOptions.MaximizeWin = true;
+            windowOptions.MinimizeWin = true;
+            windowOptions.FullscreenWin = true;
         }
 
         private void EnsureTerminalControl()
@@ -180,25 +217,18 @@ namespace Iciclecreek.Terminal
                 return;
 
             _terminalControl = new TerminalControl();
-            _terminalControl.Options = this.Options ?? new XTerm.Options.TerminalOptions();
-            _terminalControl.Options.WindowOptions.GetWinPosition = true;
-            _terminalControl.Options.WindowOptions.GetWinSizePixels = true;
-            _terminalControl.Options.WindowOptions.GetWinSizeChars = true;
-            _terminalControl.Options.WindowOptions.GetScreenSizePixels = true;
-            _terminalControl.Options.WindowOptions.GetCellSizePixels = true;
-            _terminalControl.Options.WindowOptions.GetIconTitle = true;
-            _terminalControl.Options.WindowOptions.GetWinTitle = true;
-            _terminalControl.Options.WindowOptions.GetWinState = true;
-            _terminalControl.Options.WindowOptions.SetWinPosition = true;
-            _terminalControl.Options.WindowOptions.SetWinSizePixels = true;
-            _terminalControl.Options.WindowOptions.SetWinSizeChars = true;
-            _terminalControl.Options.WindowOptions.RaiseWin = true;
-            _terminalControl.Options.WindowOptions.LowerWin = true;
-            _terminalControl.Options.WindowOptions.RefreshWin = true;
-            _terminalControl.Options.WindowOptions.RestoreWin = true;
-            _terminalControl.Options.WindowOptions.MaximizeWin = true;
-            _terminalControl.Options.WindowOptions.MinimizeWin = true;
-            _terminalControl.Options.WindowOptions.FullscreenWin = true;
+
+            // Keep the window-command flags on whatever Options ends up being. Setting Content below attaches
+            // this window and triggers initialisation DURING construction, which is earlier than a caller's
+            // object initializer — so configuring once here would decorate an object they are about to
+            // replace. Observing the property instead means the flags follow the value.
+            Options ??= new XTerm.Options.TerminalOptions();
+            this.GetObservable(OptionsProperty).Subscribe(
+                new global::Avalonia.Reactive.AnonymousObserver<XTerm.Options.TerminalOptions?>(options =>
+                {
+                    if (options != null)
+                        EnableWindowCommands(options);
+                }));
 
             // Clicking the native title bar/chrome can steal keyboard focus away from the content
             // (especially on Linux). Restore focus on any pointer press within the window.
@@ -392,6 +422,12 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalTitleChanged(object? sender, TitleChangedEventArgs e)
         {
+            // UpdateTitleFromTerminal was registered but never read, so a host that turned it off to protect
+            // its own title bar had the title rewritten anyway, with nothing to indicate the setting was
+            // ignored. The event is left unhandled when opted out, so a host handler can still act on it.
+            if (!UpdateTitleFromTerminal)
+                return;
+
             if (!e.Handled)
             {
                 Title = e.Title;

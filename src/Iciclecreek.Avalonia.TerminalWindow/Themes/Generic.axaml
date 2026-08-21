@@ -20,7 +20,8 @@
                                        Process="{TemplateBinding Process}"
                                        StartingDirectory="{TemplateBinding StartingDirectory}"
                                        Args="{TemplateBinding Args}"
-                                       Options="{TemplateBinding Options}"/>                    
+                                       BufferSize="{TemplateBinding BufferSize}"
+                                       Options="{TemplateBinding Options}"/>
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"
                               Grid.Column="1"

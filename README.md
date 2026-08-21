@@ -81,7 +81,7 @@ public partial class MainWindow : Window
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `Process` | `string` | `cmd.exe` (Windows) / `sh` (Unix) | The shell or process to launch |
+| `Process` | `string` | `cmd.exe` (Windows) / `bash` (Unix) | The shell or process to launch |
 | `Args` | `IList<string>` | Empty | Command-line arguments for the process |
 | `StartingDirectory` | `string?` | Current working directory | The initial working directory used when launching the PTY process |
 | `CurrentDirectory` | `string?` | Read-only | The current working directory reported by the running terminal session via OSC 7 |
@@ -90,8 +90,8 @@ public partial class MainWindow : Window
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
 | `FontFamily` | `FontFamily` | Inherited | Terminal font family (use monospace fonts) |
 | `FontSize` | `double` | Inherited | Terminal font size |
-| `Foreground` | `IBrush` | Inherited | Default text color |
-| `Background` | `IBrush` | Inherited | Terminal background color |
+| `Foreground` | `IBrush` | `White` | Default text color |
+| `Background` | `IBrush` | `Black` | Terminal background color |
 | `SelectionBrush` | `IBrush` | Semi-transparent blue | Text selection highlight color |
 
 **Methods:**
