@@ -17,6 +17,7 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using XTerm.Buffer;
@@ -48,11 +49,17 @@ namespace Iciclecreek.Terminal
         private int _bufferSize = 1000;
         private bool _isAlternateBuffer;
 
+        // URL hover state
+        private static readonly Regex UrlRegex = new(@"https?://[^\s<>""'`\]\)\},;]+", RegexOptions.Compiled);
+        private (string Url, int BufferLine, int StartCol, int EndCol)? _hoveredLink;
+        private Cursor? _savedCursor;
+
         // Process management
         private IPtyConnection? _ptyConnection;
         private CancellationTokenSource? _processCts;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         private int _processExitHandled;    // 0=false, 1=true — written via Interlocked
+        private int _shellReadyFired;       // 0=false, 1=true — written via Interlocked
         private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
@@ -337,6 +344,17 @@ namespace Iciclecreek.Terminal
         /// Event raised when the PTY process exits.
         /// </summary>
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+
+        /// <summary>
+        /// Event raised once when the shell produces its first output (e.g. the prompt),
+        /// indicating it is ready to accept input.
+        /// </summary>
+        public event EventHandler? ShellReady;
+
+        /// <summary>
+        /// Event raised when a URL in the terminal is Ctrl+Clicked.
+        /// </summary>
+        public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
         /// <summary>
         /// Event raised when the terminal title changes.
@@ -1220,6 +1238,18 @@ namespace Iciclecreek.Terminal
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
 
+                // Ctrl+Click on a hovered URL
+                if (_hoveredLink.HasValue && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+                {
+                    var leftBtn = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
+                    if (leftBtn)
+                    {
+                        UrlClicked?.Invoke(this, new UrlClickedEventArgs(_hoveredLink.Value.Url));
+                        e.Handled = true;
+                        return;
+                    }
+                }
+
                 // Check if we should handle selection (app doesn't want mouse, or Shift override)
                 if (ShouldHandleSelection(e.KeyModifiers))
                 {
@@ -1370,6 +1400,10 @@ namespace Iciclecreek.Terminal
                     return;
                 }
 
+                // URL hover detection
+                int bufferLine = _terminal.Buffer.ViewportY + row;
+                UpdateHoveredUrl(bufferLine, col);
+
                 // Forward mouse event to application
                 if (_ptyConnection == null)
                     return;
@@ -1391,6 +1425,12 @@ namespace Iciclecreek.Terminal
             {
                 Debug.WriteLine($"Error handling mouse move: {ex.Message}");
             }
+        }
+
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            base.OnPointerExited(e);
+            ClearHoveredUrl();
         }
 
         protected override async void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -1796,6 +1836,77 @@ namespace Iciclecreek.Terminal
             return !appWantsMouse || shiftHeld;
         }
 
+        private string GetLineText(BufferLine line, int cols)
+        {
+            var sb = new StringBuilder(cols);
+            for (int x = 0; x < cols && x < line.Length; x++)
+            {
+                var cell = line[x];
+                if (cell.Width == 0) continue;
+                sb.Append(cell.Content ?? " ");
+            }
+            return sb.ToString();
+        }
+
+        private (string Url, int StartCol, int EndCol)? FindUrlAtColumn(int bufferLine, int col)
+        {
+            if (bufferLine < 0 || bufferLine >= _terminal.Buffer.Length)
+                return null;
+
+            var line = _terminal.Buffer.GetLine(bufferLine);
+            if (line == null) return null;
+
+            var text = GetLineText(line, _terminal.Cols);
+            foreach (Match m in UrlRegex.Matches(text))
+            {
+                if (col >= m.Index && col < m.Index + m.Length)
+                    return (m.Value, m.Index, m.Index + m.Length - 1);
+            }
+            return null;
+        }
+
+        private void UpdateHoveredUrl(int bufferLine, int col)
+        {
+            var found = FindUrlAtColumn(bufferLine, col);
+
+            if (found.HasValue)
+            {
+                var newHover = (found.Value.Url, bufferLine, found.Value.StartCol, found.Value.EndCol);
+                if (_hoveredLink.HasValue && _hoveredLink.Value == newHover)
+                    return;
+
+                ClearHoveredUrl();
+                _hoveredLink = newHover;
+                _savedCursor = Cursor;
+                Cursor = new Cursor(StandardCursorType.Hand);
+                InvalidateUrlLine(bufferLine);
+            }
+            else
+            {
+                ClearHoveredUrl();
+            }
+        }
+
+        private void ClearHoveredUrl()
+        {
+            if (!_hoveredLink.HasValue) return;
+            var oldLine = _hoveredLink.Value.BufferLine;
+            _hoveredLink = null;
+            if (_savedCursor != null)
+            {
+                Cursor = _savedCursor;
+                _savedCursor = null;
+            }
+            InvalidateUrlLine(oldLine);
+        }
+
+        private void InvalidateUrlLine(int bufferLine)
+        {
+            var line = _terminal.Buffer.GetLine(bufferLine);
+            if (line != null) line.Cache = null;
+            this.RequestInvalidate();
+        }
+
         private bool TryGetPrintableChar(KeyEventArgs e, out char character)
         {
             // Prefer the symbol provided by Avalonia (already respects layout)
@@ -2004,6 +2115,9 @@ namespace Iciclecreek.Terminal
                         _terminal.Write(output);
                     }
 
+                    if (Interlocked.Exchange(ref _shellReadyFired, 1) == 0)
+                        Dispatcher.UIThread.Post(() => ShellReady?.Invoke(this, EventArgs.Empty));
+
                     // Auto-scroll to bottom when new content arrives, but only in normal buffer.
                     // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)
                     // handles its own cursor positioning and shouldn't be scrolled.
@@ -2186,6 +2300,9 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // Render URL underline when hovering
+                RenderHoveredUrl(context, viewportY, scale);
+
                 // Render selection overlay
                 RenderSelection(context, viewportY, scale);
 
@@ -2302,6 +2419,22 @@ namespace Iciclecreek.Terminal
             // Cache the text runs (but not when ReverseVideo mode is active)
             if (!_terminal.ReverseVideo)
                 line.Cache = textRuns;
+        }
+
+        private void RenderHoveredUrl(DrawingContext context, int viewportY, double scale)
+        {
+            if (!_hoveredLink.HasValue) return;
+
+            var link = _hoveredLink.Value;
+            int screenRow = link.BufferLine - viewportY;
+            if (screenRow < 0 || screenRow >= _terminal.Rows) return;
+
+            var startX = Snap(link.StartCol * _charWidth, scale);
+            var endX = Snap((link.EndCol + 1) * _charWidth, scale);
+            var y = Snap((screenRow + 1) * _charHeight - 1, scale);
+
+            var pen = new Pen(Foreground, 1);
+            context.DrawLine(pen, new Point(startX, y), new Point(endX, y));
         }
 
         /// <summary>

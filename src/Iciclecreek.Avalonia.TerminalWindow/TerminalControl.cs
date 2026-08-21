@@ -59,7 +59,10 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+        /// <inheritdoc cref="TerminalView.UrlClicked"/>
+        public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
         /// <summary>
         /// Gets or sets the brush used to render selected terminal text.
@@ -282,6 +285,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited -= OnTerminalViewProcessExited;
+                _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
             }
 
             SetCurrentDirectory(null);
@@ -297,6 +301,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
+                _terminalView.UrlClicked += OnTerminalViewUrlClicked;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
                 // (no window event hooking needed)
             }
@@ -328,6 +333,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewProcessExited(object? sender, ProcessExitedEventArgs e)
         {
             ProcessExited?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewUrlClicked(object? sender, UrlClickedEventArgs e)
+        {
+            UrlClicked?.Invoke(this, e);
         }
 
         private void SetCurrentDirectory(string? currentDirectory)
