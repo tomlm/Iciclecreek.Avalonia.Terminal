@@ -70,6 +70,9 @@ namespace Iciclecreek.Terminal
 
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
+        /// <inheritdoc cref="TerminalView.UrlClicked"/>
+        public event EventHandler<UrlClickedEventArgs>? UrlClicked;
+
 
         /// <summary>
         /// Gets or sets the selection brush for the terminal.
@@ -205,6 +208,7 @@ namespace Iciclecreek.Terminal
             // Subscribe to terminal events.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
             _terminalControl.ShellReady += OnTerminalControlShellReady;
+            _terminalControl.UrlClicked += OnTerminalControlUrlClicked;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -335,6 +339,7 @@ namespace Iciclecreek.Terminal
                 _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
                 _terminalControl.ShellReady -= OnTerminalControlShellReady;
+                _terminalControl.UrlClicked -= OnTerminalControlUrlClicked;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -368,6 +373,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalControlShellReady(object? sender, EventArgs e)
         {
             ShellReady?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlUrlClicked(object? sender, UrlClickedEventArgs e)
+        {
+            UrlClicked?.Invoke(this, e);
         }
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
