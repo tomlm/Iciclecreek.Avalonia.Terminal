@@ -49,10 +49,17 @@ namespace Iciclecreek.Terminal
         private int _bufferSize = 1000;
         private bool _isAlternateBuffer;
 
-        // URL hover state
-        private static readonly Regex UrlRegex = new(@"https?://[^\s<>""'`\]\)\},;]+", RegexOptions.Compiled);
-        private (string Url, int BufferLine, int StartCol, int EndCol)? _hoveredLink;
+        // URL hover state.
+        // The pattern is deliberately permissive about trailing characters — `,` `;` `)` and friends are
+        // legal inside a url but usually sentence punctuation at the end — so TrimUrlEnd() decides where
+        // the url really stops.
+        private static readonly Regex UrlRegex = new(@"https?://[^\s<>""'`]+", RegexOptions.Compiled);
+        private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
+        private HoveredUrl? _hoveredLink;
         private Cursor? _savedCursor;
+        private bool _cursorOverridden;
+        private (int Line, int Col)? _lastHoverProbe;
+        private string? _pendingUrlClick;
 
         // Process management
         private IPtyConnection? _ptyConnection;
@@ -1238,13 +1245,17 @@ namespace Iciclecreek.Terminal
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
 
-                // Ctrl+Click on a hovered URL
-                if (_hoveredLink.HasValue && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+                // Ctrl+Click on a URL. Resolved from the press position rather than the hover state,
+                // which goes stale whenever the viewport moves without the pointer (wheel scroll, new
+                // output), and armed here but raised on release the way other terminals do it.
+                _pendingUrlClick = null;
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                    e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
                 {
-                    var leftBtn = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
-                    if (leftBtn)
+                    var pressed = FindUrlAtColumn(_terminal.Buffer.ViewportY + row, col);
+                    if (pressed != null)
                     {
-                        UrlClicked?.Invoke(this, new UrlClickedEventArgs(_hoveredLink.Value.Url));
+                        _pendingUrlClick = pressed.Url;
                         e.Handled = true;
                         return;
                     }
@@ -1333,6 +1344,25 @@ namespace Iciclecreek.Terminal
 
             try
             {
+                // Complete a Ctrl+Click armed on press. Handling the release too keeps a mouse-reporting
+                // application from seeing an "up" with no matching "down".
+                var pendingUrl = _pendingUrlClick;
+                _pendingUrlClick = null;
+                if (pendingUrl != null)
+                {
+                    var releasePoint = e.GetPosition(this);
+                    var releaseCol = (int)(releasePoint.X / _charWidth);
+                    var releaseRow = (int)(releasePoint.Y / _charHeight);
+                    var released = FindUrlAtColumn(_terminal.Buffer.ViewportY + releaseRow, releaseCol);
+
+                    // Only fire if the pointer is still on the same url it was pressed on.
+                    if (released != null && released.Url == pendingUrl)
+                        UrlClicked?.Invoke(this, new UrlClickedEventArgs(pendingUrl));
+
+                    e.Handled = true;
+                    return;
+                }
+
                 // If we were selecting, end selection
                 if (_isSelecting)
                 {
@@ -1387,6 +1417,10 @@ namespace Iciclecreek.Terminal
                 // If we're selecting, update the selection
                 if (_isSelecting)
                 {
+                    // Dragging out a selection isn't hovering — drop the hand cursor and underline
+                    // rather than leaving them stuck for the length of the drag.
+                    ClearHoveredUrl();
+
                     int viewportRow = row;
                     if (_pendingSelectionStart.HasValue)
                     {
@@ -1836,74 +1870,249 @@ namespace Iciclecreek.Terminal
             return !appWantsMouse || shiftHeld;
         }
 
-        private string GetLineText(BufferLine line, int cols)
+        /// <summary>
+        /// A url currently under the pointer, resolved to the buffer cells it occupies.
+        /// A url that wrapped across the right edge covers more than one segment.
+        /// </summary>
+        private sealed class HoveredUrl
         {
-            var sb = new StringBuilder(cols);
-            for (int x = 0; x < cols && x < line.Length; x++)
+            public HoveredUrl(string url, List<(int Line, int StartCol, int EndCol)> segments)
             {
-                var cell = line[x];
-                if (cell.Width == 0) continue;
-                sb.Append(cell.Content ?? " ");
+                Url = url;
+                Segments = segments;
             }
-            return sb.ToString();
+
+            public string Url { get; }
+
+            /// <summary>Inclusive cell ranges, one per buffer line the url spans.</summary>
+            public List<(int Line, int StartCol, int EndCol)> Segments { get; }
+
+            public bool Contains(int line, int col)
+            {
+                foreach (var s in Segments)
+                {
+                    if (s.Line == line && col >= s.StartCol && col <= s.EndCol)
+                        return true;
+                }
+                return false;
+            }
+
+            public bool SameAs(HoveredUrl? other)
+                => other != null &&
+                   Url == other.Url &&
+                   other.Segments.Count == Segments.Count &&
+                   other.Segments[0] == Segments[0];
         }
 
-        private (string Url, int StartCol, int EndCol)? FindUrlAtColumn(int bufferLine, int col)
+        /// <summary>
+        /// Flattens the logical line containing <paramref name="bufferLine"/> — following wrapped
+        /// continuations in both directions — into text, along with a map from each character back to
+        /// the cell it came from. The map is what keeps hit-testing honest: a wide (CJK/emoji) character
+        /// occupies two columns but contributes one entry, and a combining sequence contributes several
+        /// characters that all belong to the same column, so string offsets are never column numbers.
+        /// </summary>
+        private (string Text, List<(int Line, int Col)> Map)? BuildLogicalLine(int bufferLine)
         {
-            if (bufferLine < 0 || bufferLine >= _terminal.Buffer.Length)
+            var buffer = _terminal.Buffer;
+            if (bufferLine < 0 || bufferLine >= buffer.Length)
                 return null;
 
-            var line = _terminal.Buffer.GetLine(bufferLine);
-            if (line == null) return null;
+            // A line flagged IsWrapped is a continuation of the one above it, so walk back to the real start.
+            int start = bufferLine;
+            while (start > 0 && buffer.GetLine(start)?.IsWrapped == true)
+                start--;
 
-            var text = GetLineText(line, _terminal.Cols);
+            int end = bufferLine;
+            while (end + 1 < buffer.Length && buffer.GetLine(end + 1)?.IsWrapped == true)
+                end++;
+
+            var cols = _terminal.Cols;
+            var sb = new StringBuilder(cols * (end - start + 1));
+            var map = new List<(int Line, int Col)>(cols * (end - start + 1));
+
+            for (int lineIndex = start; lineIndex <= end; lineIndex++)
+            {
+                var line = buffer.GetLine(lineIndex);
+                if (line == null)
+                    continue;
+
+                for (int x = 0; x < cols; x++)
+                {
+                    // Placeholder cells trailing a wide character carry no content of their own.
+                    if (x >= line.Length)
+                    {
+                        sb.Append(' ');
+                        map.Add((lineIndex, x));
+                        continue;
+                    }
+
+                    var cell = line[x];
+                    if (cell.Width == 0)
+                        continue;
+
+                    var content = cell.Content;
+                    if (string.IsNullOrEmpty(content))
+                    {
+                        sb.Append(' ');
+                        map.Add((lineIndex, x));
+                        continue;
+                    }
+
+                    sb.Append(content);
+                    for (int i = 0; i < content.Length; i++)
+                        map.Add((lineIndex, x));
+                }
+            }
+
+            return (sb.ToString(), map);
+        }
+
+        /// <summary>
+        /// Trims trailing characters that are legal in a url but far more often sentence punctuation,
+        /// e.g. the period in "see https://example.com." Closing brackets survive only when the url
+        /// opened them itself, so "https://en.wikipedia.org/wiki/Foo_(bar)" stays intact while
+        /// "(see https://example.com)" does not swallow the closing paren.
+        /// </summary>
+        private static string TrimUrlEnd(string url)
+        {
+            while (url.Length > 0)
+            {
+                var last = url[url.Length - 1];
+                if (last is '.' or ',' or ';' or ':' or '!' or '?' or '\'' or '"')
+                {
+                    url = url.Substring(0, url.Length - 1);
+                    continue;
+                }
+
+                char open = last switch { ')' => '(', ']' => '[', '}' => '{', _ => '\0' };
+                if (open != '\0' && CountChar(url, open) < CountChar(url, last))
+                {
+                    url = url.Substring(0, url.Length - 1);
+                    continue;
+                }
+
+                break;
+            }
+
+            return url;
+        }
+
+        private static int CountChar(string text, char c)
+        {
+            int count = 0;
+            foreach (var ch in text)
+            {
+                if (ch == c)
+                    count++;
+            }
+            return count;
+        }
+
+        private HoveredUrl? FindUrlAtColumn(int bufferLine, int col)
+        {
+            var logical = BuildLogicalLine(bufferLine);
+            if (logical == null)
+                return null;
+
+            var (text, map) = logical.Value;
+
+            // Locate the character the pointer is over. Wide characters map two columns to one entry,
+            // so accept the entry that starts at or just before the hovered column.
+            int hitIndex = -1;
+            for (int i = 0; i < map.Count; i++)
+            {
+                if (map[i].Line == bufferLine && map[i].Col == col)
+                {
+                    hitIndex = i;
+                    break;
+                }
+            }
+
+            if (hitIndex < 0)
+                return null;
+
             foreach (Match m in UrlRegex.Matches(text))
             {
-                if (col >= m.Index && col < m.Index + m.Length)
-                    return (m.Value, m.Index, m.Index + m.Length - 1);
+                var url = TrimUrlEnd(m.Value);
+                if (url.Length == 0)
+                    continue;
+
+                int startIndex = m.Index;
+                int endIndex = m.Index + url.Length - 1;      // inclusive, after trimming
+                if (hitIndex < startIndex || hitIndex > endIndex)
+                    continue;
+
+                // Collapse the character range into one inclusive cell range per buffer line.
+                var segments = new List<(int Line, int StartCol, int EndCol)>();
+                for (int i = startIndex; i <= endIndex && i < map.Count; i++)
+                {
+                    var (line, cellCol) = map[i];
+                    if (segments.Count > 0)
+                    {
+                        var lastSegment = segments[segments.Count - 1];
+                        if (lastSegment.Line == line)
+                        {
+                            segments[segments.Count - 1] = (line, lastSegment.StartCol, Math.Max(lastSegment.EndCol, cellCol));
+                            continue;
+                        }
+                    }
+                    segments.Add((line, cellCol, cellCol));
+                }
+
+                return segments.Count > 0 ? new HoveredUrl(url, segments) : null;
             }
+
             return null;
         }
 
         private void UpdateHoveredUrl(int bufferLine, int col)
         {
+            // Pointer moves arrive far more often than they cross a cell boundary; scanning the line
+            // again for the same cell would be pure waste.
+            if (_lastHoverProbe is { } probe && probe.Line == bufferLine && probe.Col == col)
+                return;
+            _lastHoverProbe = (bufferLine, col);
+
             var found = FindUrlAtColumn(bufferLine, col);
-
-            if (found.HasValue)
+            if (found == null)
             {
-                var newHover = (found.Value.Url, bufferLine, found.Value.StartCol, found.Value.EndCol);
-                if (_hoveredLink.HasValue && _hoveredLink.Value == newHover)
-                    return;
-
                 ClearHoveredUrl();
-                _hoveredLink = newHover;
+                return;
+            }
+
+            if (found.SameAs(_hoveredLink))
+                return;
+
+            ClearHoveredUrl();
+            _hoveredLink = found;
+
+            if (!_cursorOverridden)
+            {
                 _savedCursor = Cursor;
-                Cursor = new Cursor(StandardCursorType.Hand);
-                InvalidateUrlLine(bufferLine);
+                _cursorOverridden = true;
             }
-            else
-            {
-                ClearHoveredUrl();
-            }
+            SetCurrentValue(CursorProperty, HandCursor);
+            this.RequestInvalidate();
         }
 
         private void ClearHoveredUrl()
         {
-            if (!_hoveredLink.HasValue) return;
-            var oldLine = _hoveredLink.Value.BufferLine;
-            _hoveredLink = null;
-            if (_savedCursor != null)
-            {
-                Cursor = _savedCursor;
-                _savedCursor = null;
-            }
-            InvalidateUrlLine(oldLine);
-        }
+            _lastHoverProbe = null;
 
-        private void InvalidateUrlLine(int bufferLine)
-        {
-            var line = _terminal.Buffer.GetLine(bufferLine);
-            if (line != null) line.Cache = null;
+            // The cursor override is undone even when no link is current: Cursor defaults to null, so a
+            // saved-value-only restore would leave the hand cursor stuck for the life of the control.
+            if (_cursorOverridden)
+            {
+                SetCurrentValue(CursorProperty, _savedCursor);
+                _savedCursor = null;
+                _cursorOverridden = false;
+            }
+
+            if (_hoveredLink == null)
+                return;
+
+            _hoveredLink = null;
+            // The underline is an overlay drawn after the text runs, so the cached runs stay valid.
             this.RequestInvalidate();
         }
 
@@ -2423,18 +2632,22 @@ namespace Iciclecreek.Terminal
 
         private void RenderHoveredUrl(DrawingContext context, int viewportY, double scale)
         {
-            if (!_hoveredLink.HasValue) return;
+            var link = _hoveredLink;
+            if (link == null) return;
 
-            var link = _hoveredLink.Value;
-            int screenRow = link.BufferLine - viewportY;
-            if (screenRow < 0 || screenRow >= _terminal.Rows) return;
+            Pen? pen = null;
+            foreach (var segment in link.Segments)
+            {
+                int screenRow = segment.Line - viewportY;
+                if (screenRow < 0 || screenRow >= _terminal.Rows) continue;
 
-            var startX = Snap(link.StartCol * _charWidth, scale);
-            var endX = Snap((link.EndCol + 1) * _charWidth, scale);
-            var y = Snap((screenRow + 1) * _charHeight - 1, scale);
+                var startX = Snap(segment.StartCol * _charWidth, scale);
+                var endX = Snap((segment.EndCol + 1) * _charWidth, scale);
+                var y = Snap((screenRow + 1) * _charHeight - 1, scale);
 
-            var pen = new Pen(Foreground, 1);
-            context.DrawLine(pen, new Point(startX, y), new Point(endX, y));
+                pen ??= new Pen(Foreground, 1);
+                context.DrawLine(pen, new Point(startX, y), new Point(endX, y));
+            }
         }
 
         /// <summary>
