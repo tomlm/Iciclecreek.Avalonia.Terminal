@@ -2224,6 +2224,50 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Drive this view from a PTY the CALLER owns, instead of one the view spawns.
+        /// </summary>
+        /// <remarks>
+        /// <para>The view already knows how to render a PTY and report its exit; what it cannot currently do is
+        /// take one it did not create. A host that keeps connections alive across UI changes — a pane that is
+        /// closed and reopened, a session moved between tabs, a process that must outlive the control showing
+        /// it — has to own the <see cref="IPtyConnection"/> itself, and today there is no way to hand it over.</para>
+        /// <para>Ownership follows the caller. An attached connection is NOT killed when the view is cleaned
+        /// up: it is unsubscribed and disposed, which detaches this view without stopping the process behind
+        /// it. A connection the view spawned through <see cref="LaunchProcess()"/> is killed as before.</para>
+        /// <para>It also makes the exit paths testable. A test can hand the view a connection whose child has
+        /// exited but not yet been reaped — the window the EOF/reap handling exists for — and assert what gets
+        /// reported, instead of racing a real shell and hoping to land in it.</para>
+        /// </remarks>
+        public void AttachConnection(IPtyConnection connection)
+        {
+            ArgumentNullException.ThrowIfNull(connection);
+
+            CleanupProcess();
+            _externalConnection = true;
+            _processCts = new CancellationTokenSource();
+
+            // Same ordering as the spawn path: publish the connection, SUBSCRIBE, then start the reader. An
+            // attached connection may already have a live process behind it, so an exit can arrive immediately
+            // — subscribing after the reader starts is a window in which it is missed entirely.
+            InstallConnection(connection);
+            connection.ProcessExited += OnPtyProcessExited;
+            _ = Task.Run(() => ReadPtyOutputAsync(connection, _processCts.Token), _processCts.Token);
+        }
+
+        /// <summary>True while the connection belongs to an outside owner — see <see cref="AttachConnection"/>.</summary>
+        private bool _externalConnection;
+
+        /// <summary>
+        /// True while a PTY is attached and its process has not been reported as exited. A view that has never
+        /// launched, or whose process has ended, is false.
+        /// </summary>
+        /// <remarks>
+        /// A host that shows a terminal only once there is something to show needs to ask this — the alternative
+        /// is tracking it in parallel from <see cref="ProcessExited"/> and guessing at the starting state.
+        /// </remarks>
+        public bool IsLive => _ptyConnection != null && Volatile.Read(ref _processExitHandled) == 0;
+
+        /// <summary>
         /// Launch the terminal process with the current Process, Args, and StartingDirectory properties. If the process is already running, it will be
         /// terminated and replaced with a new instance using the updated properties. 
         /// </summary>
@@ -2232,6 +2276,7 @@ namespace Iciclecreek.Terminal
         public async Task LaunchProcess()
         {
             CleanupProcess();
+            _externalConnection = false;   // this view owns what it spawns
 
             try
             {
@@ -2504,7 +2549,16 @@ namespace Iciclecreek.Terminal
                 {
                     // Unsubscribe from event before cleanup
                     _ptyConnection.ProcessExited -= OnPtyProcessExited;
-                    _ptyConnection.Kill();
+
+                    // An ATTACHED connection belongs to its owner — never kill it. Closing or re-parenting a
+                    // view must not stop the process behind it. Dispose still runs: on an attached connection
+                    // that IS the detach (it drops this view's subscription), so a closed view leaves nothing
+                    // streaming behind it.
+                    if (!_externalConnection)
+                    {
+                        _ptyConnection.Kill();
+                    }
+
                     _ptyConnection.Dispose();
                 }
                 catch
