@@ -1239,14 +1239,19 @@ namespace Iciclecreek.Terminal
                 var row = (int)(point.Y / _charHeight);
 
                 // Ctrl+Click on a hovered URL
-                if (_hoveredLink.HasValue && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
                 {
                     var leftBtn = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
                     if (leftBtn)
                     {
-                        UrlClicked?.Invoke(this, new UrlClickedEventArgs(_hoveredLink.Value.Url));
-                        e.Handled = true;
-                        return;
+                        int bufferLineClick = _terminal.Buffer.ViewportY + row;
+                        var urlAtClick = FindUrlAtColumn(bufferLineClick, col);
+                        if (urlAtClick.HasValue)
+                        {
+                            UrlClicked?.Invoke(this, new UrlClickedEventArgs(urlAtClick.Value.Url));
+                            e.Handled = true;
+                            return;
+                        }
                     }
                 }
 
@@ -1892,18 +1897,13 @@ namespace Iciclecreek.Terminal
             if (!_hoveredLink.HasValue) return;
             var oldLine = _hoveredLink.Value.BufferLine;
             _hoveredLink = null;
-            if (_savedCursor != null)
-            {
-                Cursor = _savedCursor;
-                _savedCursor = null;
-            }
+            Cursor = _savedCursor;
+            _savedCursor = null;
             InvalidateUrlLine(oldLine);
         }
 
         private void InvalidateUrlLine(int bufferLine)
         {
-            var line = _terminal.Buffer.GetLine(bufferLine);
-            if (line != null) line.Cache = null;
             this.RequestInvalidate();
         }
 
@@ -2012,6 +2012,7 @@ namespace Iciclecreek.Terminal
             {
                 _processCts = new CancellationTokenSource();
                 Interlocked.Exchange(ref _processExitHandled, 0);  // Reset flag for new process
+                Interlocked.Exchange(ref _shellReadyFired, 0);     // Reset flag for new process
 
                 // Determine the process to launch based on OS if not explicitly set
                 string processToLaunch = Process;

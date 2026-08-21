@@ -285,6 +285,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited -= OnTerminalViewProcessExited;
+                _terminalView.ShellReady -= OnTerminalViewShellReady;
                 _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
             }
 
@@ -301,6 +302,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
+                _terminalView.ShellReady += OnTerminalViewShellReady;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
                 // (no window event hooking needed)
@@ -333,6 +335,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewProcessExited(object? sender, ProcessExitedEventArgs e)
         {
             ProcessExited?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewShellReady(object? sender, EventArgs e)
+        {
+            ShellReady?.Invoke(this, e);
         }
 
         private void OnTerminalViewUrlClicked(object? sender, UrlClickedEventArgs e)
