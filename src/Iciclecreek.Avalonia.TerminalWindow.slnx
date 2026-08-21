@@ -3,4 +3,5 @@
   <Project Path="Demo/Demo.csproj" />
   <Project Path="Example/Example.csproj" />
   <Project Path="Iciclecreek.Avalonia.TerminalWindow/Iciclecreek.Avalonia.Terminal.csproj" />
+  <Project Path="Iciclecreek.Avalonia.Terminal.Tests/Iciclecreek.Avalonia.Terminal.Tests.csproj" />
 </Solution>

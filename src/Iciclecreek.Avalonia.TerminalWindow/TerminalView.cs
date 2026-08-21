@@ -65,7 +65,20 @@ namespace Iciclecreek.Terminal
         private IPtyConnection? _ptyConnection;
         private CancellationTokenSource? _processCts;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        private int _processExitHandled;    // 0=false, 1=true — written via Interlocked
+        private int _processExitHandled;    // 0=false, 1=true — claimed via TryClaimExit
+
+        /// <summary>
+        /// Guards the PAIR (<see cref="_ptyConnection"/>, <see cref="_processExitHandled"/>). They have to move
+        /// together, or a read loop belonging to a DEAD connection can report an exit against a LIVE one.
+        ///
+        /// <para>The loop's ownership test is its <c>while</c> condition, evaluated BEFORE the read. A relaunch
+        /// can replace the connection while that read is pending — and Porta.Pty's Unix reader wraps a
+        /// synchronous FileStream, so cancellation does not reliably interrupt it. When the old stream is closed
+        /// the read completes, and the stale loop walks into the exit path holding a connection nobody owns any
+        /// more. Because the relaunch also reset the flag for the new process, its claim SUCCEEDS: the freshly
+        /// started terminal immediately prints the previous process's exit code.</para>
+        /// </summary>
+        private readonly object _exitGate = new object();
 
         /// <summary>Ceiling on waiting for an already-exited child to be reaped so its real exit
         /// code is readable. See the EOF branch of <see cref="ReadPtyOutputAsync"/>.</summary>
@@ -2223,7 +2236,9 @@ namespace Iciclecreek.Terminal
             try
             {
                 _processCts = new CancellationTokenSource();
-                Interlocked.Exchange(ref _processExitHandled, 0);  // Reset flag for new process
+                // NOT reset here: the interlock is armed by InstallConnection, together with the connection
+                // itself. Arming it early opens a window in which the OUTGOING connection is still the live one
+                // AND the flag is clear, which is the same defect with the operands swapped.
 
                 // Determine the process to launch based on OS if not explicitly set
                 string processToLaunch = Process;
@@ -2251,7 +2266,7 @@ namespace Iciclecreek.Terminal
                 }
 
                 var spawned = await PtyProvider.SpawnAsync(options, _processCts.Token);
-                _ptyConnection = spawned;
+                InstallConnection(spawned);
 
                 // Subscribe to process exit event for reliable exit detection
                 spawned.ProcessExited += OnPtyProcessExited;
@@ -2329,7 +2344,10 @@ namespace Iciclecreek.Terminal
                         // code, and the one we would otherwise read is 0 — the single wrong answer
                         // that reads as SUCCESS. Better to leave the interlock unclaimed so the real
                         // event can still report if it arrives than to invent an outcome.
-                        if (reaped && Interlocked.Exchange(ref _processExitHandled, 1) == 0)
+                        // TryClaimExit rather than a bare interlock: this loop may have been waiting on a read
+                        // while a relaunch replaced the connection, in which case the exit it is holding belongs
+                        // to a process this view has already moved on from.
+                        if (reaped && TryClaimExit(connection))
                         {
                             var exitCode = connection.ExitCode;
 
@@ -2426,10 +2444,39 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// Make <paramref name="connection"/> the live one and arm the exit interlock for it, atomically.
+        /// Null clears both — the teardown case.
+        /// </summary>
+        private void InstallConnection(IPtyConnection? connection)
+        {
+            lock (_exitGate)
+            {
+                _ptyConnection = connection;
+                Interlocked.Exchange(ref _processExitHandled, 0);
+            }
+        }
+
+        /// <summary>
+        /// Claim the right to report the exit OF THIS CONNECTION. False when somebody already reported it, and
+        /// false when the connection is no longer the live one — a stale loop must not speak for its successor.
+        /// </summary>
+        private bool TryClaimExit(IPtyConnection connection)
+        {
+            lock (_exitGate)
+            {
+                if (!ReferenceEquals(_ptyConnection, connection)) return false;
+                return Interlocked.Exchange(ref _processExitHandled, 1) == 0;
+            }
+        }
+
         private void OnPtyProcessExited(object? sender, PtyExitedEventArgs e)
         {
             // Interlocked ensures only one of (event, EOF path, exception path) prints the message.
-            if (Interlocked.Exchange(ref _processExitHandled, 1) != 0)
+            // Claims for the connection that raised it, so a late event from a replaced connection cannot
+            // speak for its successor either. A null sender predates this and is treated as the live one.
+            if (sender is IPtyConnection origin ? !TryClaimExit(origin)
+                                                : Interlocked.Exchange(ref _processExitHandled, 1) != 0)
                 return;
 
             lock (_terminalLock)
@@ -2466,7 +2513,9 @@ namespace Iciclecreek.Terminal
                 }
                 finally
                 {
-                    _ptyConnection = null;
+                    // Cleared with the flag, under the gate: a loop still unwinding must not find a null
+                    // connection paired with a clear flag and conclude it owns the exit.
+                    InstallConnection(null);
                 }
             }
 

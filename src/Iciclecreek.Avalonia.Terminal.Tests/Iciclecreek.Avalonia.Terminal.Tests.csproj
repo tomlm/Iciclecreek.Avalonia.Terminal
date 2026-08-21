@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- NUnit over the standard VSTest bridge, deliberately: it needs no global.json and no change to how the
+       repo builds, so `dotnet test src/Iciclecreek.Avalonia.TerminalWindow.slnx` — which BuildAndRunTests.yml
+       already runs — starts executing these without touching the workflow.
+
+       Avalonia.Headless.NUnit supplies [AvaloniaTest], which runs each body on a headless UI thread. That is
+       what lets a TerminalView be constructed at all: it is a TemplatedControl and needs a rendering platform
+       plus a base theme before it realises anything. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="4.5.1" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+    <PackageReference Include="Avalonia.Headless.NUnit" Version="12.0.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Iciclecreek.Avalonia.TerminalWindow\Iciclecreek.Avalonia.Terminal.csproj" />
+  </ItemGroup>
+
+</Project>
