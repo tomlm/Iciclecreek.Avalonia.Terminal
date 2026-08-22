@@ -184,6 +184,47 @@ public class ExitReportingTests
         window.Close();
     });
 
+    /// <summary>
+    /// A child that misses the read loop's grace period but reaps a moment later must still be
+    /// reported, with its real code.
+    ///
+    /// <para>This is the guard for the wedge. The EOF path used to give up when the grace period
+    /// expired: the interlock stayed unclaimed, and if the PTY layer's own event never fired either
+    /// — which this fake models, and which the layer genuinely does — then NO ProcessExited was
+    /// raised at all. The trade recorded at the time was "no wrong exit code beats a wrong one",
+    /// but the cost was not the number, it was the notification. Avalloy's TerminalWell stayed in
+    /// TerminalPhase.Live forever and every test waiting for it to settle timed out at 20s. It
+    /// surfaced as a load-sensitive CI flake, because a dead child only misses a 1000ms reap when
+    /// the box is heavily contended.</para>
+    ///
+    /// <para>Modelled rather than raced, for the same reason as the test above: racing a real shell
+    /// reproduces this only under load, and a guard that needs luck is not a guard.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_child_that_reaps_late_is_still_reported() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        Pump(window);
+
+        var reported = new List<ProcessExitedEventArgs>();
+        view.ProcessExited += (_, e) => reported.Add(e);
+
+        // Misses the read loop's grace period, reaps on a later attempt — exactly a loaded box.
+        var connection = new ExitedButNotYetReaped(realExitCode: 3, reapsOnCall: 3);
+        view.AttachConnection(connection);
+
+        await WaitUntil(() => reported.Count > 0,
+            "the exit is reported even though the reap missed the read loop's grace period");
+
+        Assert.That(reported, Has.Count.EqualTo(1), "one exit, reported once");
+        Assert.That(reported[0].ExitCodeKnown, Is.True, "the child did reap, so the code is trustworthy");
+        Assert.That(reported[0].ExitCode, Is.EqualTo(3),
+            "a late reap still yields the REAL code — giving up was what lost it");
+
+        window.Close();
+    });
+
     // ── The relaunch race ───────────────────────────────────────────────────────────────────────
 
 

@@ -83,6 +83,13 @@ namespace Iciclecreek.Terminal
         /// <summary>Ceiling on waiting for an already-exited child to be reaped so its real exit
         /// code is readable. See the EOF branch of <see cref="ReadPtyOutputAsync"/>.</summary>
         private const int ExitReapGraceMs = 1000;
+
+        /// <summary>How long the BACKGROUND wait keeps trying after the read loop's grace period expires.
+        /// The child is dead by definition, so this is a ceiling on patience, not an expected cost.</summary>
+        private const int ExitReapCeilingMs = 30_000;
+
+        /// <summary>Poll slice for that wait. Short enough to report promptly, long enough not to spin.</summary>
+        private const int ExitReapPollMs = 100;
         private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
@@ -2579,8 +2586,23 @@ namespace Iciclecreek.Terminal
 
                         // A child that will not reap inside the grace period leaves no trustworthy
                         // code, and the one we would otherwise read is 0 — the single wrong answer
-                        // that reads as SUCCESS. Better to leave the interlock unclaimed so the real
-                        // event can still report if it arrives than to invent an outcome.
+                        // that reads as SUCCESS. So it is still not reported here.
+                        //
+                        // It is NOT abandoned either. Leaving the interlock unclaimed means no
+                        // ProcessExited is raised AT ALL if the pty layer's own event never fires
+                        // — and a host that is never told the process ended cannot leave the state
+                        // it entered when the process started. Trading "no wrong exit code" for
+                        // "no notification" loses more than it saves; the notification is the part
+                        // a host cannot reconstruct.
+                        //
+                        // The child is dead by definition, so the reap WILL land — the grace period
+                        // is only a ceiling on how long this READ LOOP waits for it. Hand the wait
+                        // off, so the loop ends now and the host still hears about it.
+                        if (!reaped)
+                        {
+                            ReapInBackground(connection);
+                        }
+
                         // TryClaimExit rather than a bare interlock: this loop may have been waiting on a read
                         // while a relaunch replaced the connection, in which case the exit it is holding belongs
                         // to a process this view has already moved on from.
@@ -2705,6 +2727,68 @@ namespace Iciclecreek.Terminal
                 if (!ReferenceEquals(_ptyConnection, connection)) return false;
                 return Interlocked.Exchange(ref _processExitHandled, 1) == 0;
             }
+        }
+
+        /// <summary>
+        /// Keep waiting for a child that did not reap inside <see cref="ExitReapGraceMs"/>, off the
+        /// read loop, and report the exit when it finally lands.
+        /// </summary>
+        /// <remarks>
+        /// <para>The read loop must not block on this — it is the thing that would otherwise be
+        /// pumping output — but the exit still has to be reported, or the host is left believing a
+        /// dead process is running.</para>
+        /// <para>Claims the same interlock, so if <see cref="OnPtyProcessExited"/> gets there first
+        /// with the authoritative code, this stays silent. If the ceiling expires the exit IS still
+        /// reported, with <see cref="ProcessExitedEventArgs.ExitCodeKnown"/> false — "ended, outcome
+        /// unreadable" is honest, whereas 0 would read as success and silence reads as running.</para>
+        /// <para>The connection may be disposed underneath this at any point (a relaunch, a close).
+        /// That is not an error worth surfacing: it means the exit is moot.</para>
+        /// </remarks>
+        private void ReapInBackground(IPtyConnection connection)
+        {
+            _ = Task.Run(async () =>
+            {
+                var deadline = DateTime.UtcNow.AddMilliseconds(ExitReapCeilingMs);
+                var reaped = false;
+
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (Volatile.Read(ref _processExitHandled) != 0) return;   // someone else reported it
+                    try
+                    {
+                        if (connection.WaitForExit(ExitReapPollMs)) { reaped = true; break; }
+                    }
+                    catch
+                    {
+                        return;   // disposed / gone — nothing left to report about
+                    }
+                    await Task.Yield();
+                }
+
+                if (!TryClaimExit(connection)) return;
+
+                int? code = null;
+                if (reaped)
+                {
+                    try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
+                }
+
+                lock (_terminalLock)
+                {
+                    _terminal.WriteLine(code is { } c
+                        ? $"\nProcess exited with code: {c}\n"
+                        : "\nProcess exited\n");
+                    _terminal.Buffer.ScrollToBottom();
+                }
+                this.RequestInvalidate();
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    ProcessExited?.Invoke(this, code is { } c
+                        ? new ProcessExitedEventArgs(c)
+                        : ProcessExitedEventArgs.UnknownCode());
+                });
+            });
         }
 
         private void OnPtyProcessExited(object? sender, PtyExitedEventArgs e)
