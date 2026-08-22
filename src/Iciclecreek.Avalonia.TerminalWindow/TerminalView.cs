@@ -146,10 +146,24 @@ namespace Iciclecreek.Terminal
                 nameof(CurrentDirectory),
                 o => o.CurrentDirectory);
 
+        /// <summary>
+        /// The font a terminal falls back to when nothing else is specified: a monospace stack, tried in
+        /// order, ending at the platform's generic monospace family.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="FontFamily.Default"/> is the system UI font, which is proportional — and a terminal
+        /// rendered in a proportional font is not merely ugly, it is wrong. The cell grid is derived from a
+        /// single measured advance width, so glyphs that do not share that width drift out of their columns
+        /// and box drawing, alignment and cursor positioning all come apart. A terminal control has to be
+        /// usable without the consumer knowing to style it.
+        /// </remarks>
+        public static readonly FontFamily DefaultFontFamily = new FontFamily(
+            "Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New,monospace");
+
         public static readonly StyledProperty<FontFamily> FontFamilyProperty =
             AvaloniaProperty.Register<TerminalView, FontFamily>(
                 nameof(FontFamily),
-                defaultValue: FontFamily.Default);
+                defaultValue: DefaultFontFamily);
 
         public static readonly StyledProperty<double> FontSizeProperty =
             AvaloniaProperty.Register<TerminalView, double>(
@@ -489,6 +503,11 @@ namespace Iciclecreek.Terminal
             options.CursorBlink = CursorBlink;
             options.CursorBlinkRate = CursorBlinkRate;
 
+            // BufferSize may already have been set — by a template binding, or by a host that configured the
+            // view before it was initialised. The setter cannot reach the emulator that early because it does
+            // not exist yet, so the value is carried across here instead of being silently lost.
+            options.Scrollback = _bufferSize;
+
             // On Linux, the PTY doesn't convert LF to CRLF (ONLCR is disabled for raw mode),
             // so we need XTerm to handle LF as implicit CRLF
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -550,7 +569,12 @@ namespace Iciclecreek.Terminal
             get => _bufferSize;
             set
             {
-                _terminal.Options.Scrollback = value;
+                // _terminal does not exist until OnInitialized, and a value can legitimately arrive before
+                // then — a template binding is applied while the view is still initialising. Store it either
+                // way; BuildTerminal reads _bufferSize when it constructs the emulator.
+                if (_terminal != null)
+                    _terminal.Options.Scrollback = value;
+
                 SetAndRaise(BufferSizeProperty, ref _bufferSize, value);
                 this.RequestInvalidate();
             }

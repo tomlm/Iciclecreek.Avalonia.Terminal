@@ -81,17 +81,17 @@ public partial class MainWindow : Window
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `Process` | `string` | `cmd.exe` (Windows) / `sh` (Unix) | The shell or process to launch |
+| `Process` | `string` | `cmd.exe` (Windows) / `bash` (Unix) | The shell or process to launch |
 | `Args` | `IList<string>` | Empty | Command-line arguments for the process |
 | `StartingDirectory` | `string?` | Current working directory | The initial working directory used when launching the PTY process |
 | `CurrentDirectory` | `string?` | Read-only | The current working directory reported by the running terminal session via OSC 7 |
 | `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
 | `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
-| `FontFamily` | `FontFamily` | Inherited | Terminal font family (use monospace fonts) |
+| `FontFamily` | `FontFamily` | Monospace stack | Terminal font family. Defaults to `Cascadia Mono` and friends, falling back to the platform's generic monospace — a terminal must not inherit a proportional UI font. Set it to override |
 | `FontSize` | `double` | Inherited | Terminal font size |
-| `Foreground` | `IBrush` | Inherited | Default text color |
-| `Background` | `IBrush` | Inherited | Terminal background color |
+| `Foreground` | `IBrush` | `White` | Default text color |
+| `Background` | `IBrush` | `Black` | Terminal background color |
 | `SelectionBrush` | `IBrush` | Semi-transparent blue | Text selection highlight color |
 
 **Methods:**
@@ -128,8 +128,7 @@ public partial class MainWindow : Window
                          Background="Black"
                          Foreground="White"
                          CloseOnProcessExit="True"
-                         UpdateTitleFromTerminal="True"
-                         HandleWindowCommands="True"/>
+                         UpdateTitleFromTerminal="True"/>
 ```
 
 **Or create programmatically:**
@@ -170,7 +169,10 @@ terminalWindow.Show();
 | `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `CloseOnProcessExit` | `bool` | `true` | Automatically close the window when the process exits |
 | `UpdateTitleFromTerminal` | `bool` | `true` | Update window title from terminal escape sequences |
-| `HandleWindowCommands` | `bool` | `true` | Handle window manipulation commands from the terminal |
+
+Window manipulation commands from the terminal (resize, move, minimize, maximize, raise, lower, fullscreen) are always handled. Handle the corresponding bubbling event from `TerminalView` and mark it `Handled` to suppress the default behaviour for any of them.
+
+`TerminalWindow` also exposes the whole of `TerminalControl`'s surface — `BufferSize`, `ShowCaretOnClick`, `Terminal`, `Kill()`, `WaitForExit(int)`, `BeginReparent()` and `EndReparent()` — forwarding each to the control it hosts.
 
 **Events:**
 

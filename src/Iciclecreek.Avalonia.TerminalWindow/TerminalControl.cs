@@ -39,10 +39,13 @@ namespace Iciclecreek.Terminal
                 nameof(Args),
                 defaultValue: System.Array.Empty<string>());
 
+        // Matches TerminalView and TerminalWindow, which both default to the current directory. A null here
+        // was not merely a different default: the control template binds this onto the view, so the null
+        // overwrote the view's own sensible default on the way through.
         public static readonly StyledProperty<string?> StartingDirectoryProperty =
             AvaloniaProperty.Register<TerminalControl, string?>(
                 nameof(StartingDirectory),
-                defaultValue: null);
+                defaultValue: Environment.CurrentDirectory);
 
         public static readonly DirectProperty<TerminalControl, string?> CurrentDirectoryProperty =
             AvaloniaProperty.RegisterDirect<TerminalControl, string?>(
@@ -58,6 +61,15 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalControl, XTerm.Options.TerminalOptions?>(
                 nameof(Options),
                 defaultValue: null);
+
+        // A real StyledProperty rather than a forwarder to _terminalView. As a forwarder its setter was
+        // guarded by `if (_terminalView != null)`, so any value set before the template was applied — which
+        // includes every value set from XAML or an object initializer — was silently dropped and never
+        // re-applied. Registered here, the value survives and reaches the view through the template.
+        public static readonly StyledProperty<bool> ShowCaretOnClickProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(ShowCaretOnClick),
+                defaultValue: false);
 
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
@@ -133,6 +145,11 @@ namespace Iciclecreek.Terminal
 
             // TerminalControl is focusable - it will delegate to inner TerminalView
             FocusableProperty.OverrideDefaultValue<TerminalControl>(true);
+
+            // A terminal must not fall back to the proportional system UI font — see
+            // TerminalView.DefaultFontFamily. This is a DEFAULT, so an inherited value or an explicit
+            // style from the host still wins; it only decides what happens when nobody said anything.
+            FontFamilyProperty.OverrideDefaultValue<TerminalControl>(TerminalView.DefaultFontFamily);
         }
 
         private static void LoadDefaultStyles()
@@ -194,8 +211,8 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.ShowCaretOnClickProperty"/>
         public bool ShowCaretOnClick
         {
-            get => _terminalView?.ShowCaretOnClick ?? false;
-            set { if (_terminalView != null) _terminalView.ShowCaretOnClick = value; }
+            get => GetValue(ShowCaretOnClickProperty);
+            set => SetValue(ShowCaretOnClickProperty, value);
         }
 
         /// <summary>

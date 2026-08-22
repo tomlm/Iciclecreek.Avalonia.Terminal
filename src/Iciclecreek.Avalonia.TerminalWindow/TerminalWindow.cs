@@ -65,6 +65,16 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        public static readonly StyledProperty<int> BufferSizeProperty =
+            AvaloniaProperty.Register<TerminalWindow, int>(
+                nameof(BufferSize),
+                defaultValue: 1000);
+
+        public static readonly StyledProperty<bool> ShowCaretOnClickProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(ShowCaretOnClick),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
 
@@ -116,6 +126,44 @@ namespace Iciclecreek.Terminal
         public string? CurrentDirectory => _terminalControl?.CurrentDirectory;
 
         /// <summary>
+        /// Gets or sets the terminal scrollback buffer size in lines.
+        /// </summary>
+        public int BufferSize
+        {
+            get => GetValue(BufferSizeProperty);
+            set => SetValue(BufferSizeProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.ShowCaretOnClickProperty"/>
+        public bool ShowCaretOnClick
+        {
+            get => GetValue(ShowCaretOnClickProperty);
+            set => SetValue(ShowCaretOnClickProperty, value);
+        }
+
+        /// <summary>
+        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
+        /// </summary>
+        public XTerm.Terminal Terminal => _terminalControl!.Terminal;
+
+        /// <summary>
+        /// Waits for the terminal process to exit, with a timeout in milliseconds.
+        /// </summary>
+        /// <param name="ms">The maximum amount of time to wait, in milliseconds.</param>
+        public void WaitForExit(int ms) => _terminalControl!.WaitForExit(ms);
+
+        /// <summary>
+        /// Terminates the running terminal process.
+        /// </summary>
+        public void Kill() => _terminalControl!.Kill();
+
+        /// <inheritdoc cref="TerminalControl.BeginReparent"/>
+        public void BeginReparent() => _terminalControl?.BeginReparent();
+
+        /// <inheritdoc cref="TerminalControl.EndReparent"/>
+        public void EndReparent() => _terminalControl?.EndReparent();
+
+        /// <summary>
         /// Gets the exit code of the launched process after it has terminated.
         /// </summary>
         public int ExitCode => _terminalControl!.ExitCode;
@@ -158,20 +206,62 @@ namespace Iciclecreek.Terminal
         {
             BackgroundProperty.OverrideDefaultValue<TerminalWindow>(Brushes.Black);
             ForegroundProperty.OverrideDefaultValue<TerminalWindow>(Brushes.White);
+
+            // Without this a bare TerminalWindow renders the shell in the proportional system UI font. The
+            // demo only looked right because its App.axaml styles ManagedTerminalWindow specifically —
+            // TerminalWindow matched no selector and fell through to the UI font.
+            FontFamilyProperty.OverrideDefaultValue<TerminalWindow>(TerminalView.DefaultFontFamily);
         }
 
         public TerminalWindow()
         {
+            // Content is built here rather than in OnInitialized. A control assigned to Content during
+            // OnInitialized never gets styled: its Template stays null, so TerminalControl's template is
+            // never applied, PART_TerminalView is never created, and the window shows nothing at all.
+            // Building it in the constructor puts it in place before initialisation, which is the same
+            // position it would occupy had a caller assigned Content themselves.
+            EnsureTerminalControl();
+
             // Set focus to terminal when window opens or is activated
             Opened += OnOpened;
             Activated += OnActivated;
             Deactivated += OnDeactivated;
         }
 
-        protected override void OnInitialized()
+        /// <summary>
+        /// Turn on the terminal capabilities whose commands this window handles.
+        /// </summary>
+        /// <remarks>
+        /// Without these flags the emulator never emits the sequences at all, so the eleven handlers wired in
+        /// <see cref="EnsureTerminalControl"/> are unreachable and every window-manipulation command silently
+        /// does nothing.
+        ///
+        /// <para>Applied to whatever <see cref="Options"/> currently is, every time it changes, rather than
+        /// once during construction. A caller's object initializer runs after this constructor, so a
+        /// one-shot configuration would be applied to an object the caller then replaces — which is precisely
+        /// how the flags came to be lost before.</para>
+        /// </remarks>
+        private static void EnableWindowCommands(XTerm.Options.TerminalOptions options)
         {
-            base.OnInitialized();
-            EnsureTerminalControl();
+            var windowOptions = options.WindowOptions;
+            windowOptions.GetWinPosition = true;
+            windowOptions.GetWinSizePixels = true;
+            windowOptions.GetWinSizeChars = true;
+            windowOptions.GetScreenSizePixels = true;
+            windowOptions.GetCellSizePixels = true;
+            windowOptions.GetIconTitle = true;
+            windowOptions.GetWinTitle = true;
+            windowOptions.GetWinState = true;
+            windowOptions.SetWinPosition = true;
+            windowOptions.SetWinSizePixels = true;
+            windowOptions.SetWinSizeChars = true;
+            windowOptions.RaiseWin = true;
+            windowOptions.LowerWin = true;
+            windowOptions.RefreshWin = true;
+            windowOptions.RestoreWin = true;
+            windowOptions.MaximizeWin = true;
+            windowOptions.MinimizeWin = true;
+            windowOptions.FullscreenWin = true;
         }
 
         private void EnsureTerminalControl()
@@ -180,25 +270,26 @@ namespace Iciclecreek.Terminal
                 return;
 
             _terminalControl = new TerminalControl();
-            _terminalControl.Options = this.Options ?? new XTerm.Options.TerminalOptions();
-            _terminalControl.Options.WindowOptions.GetWinPosition = true;
-            _terminalControl.Options.WindowOptions.GetWinSizePixels = true;
-            _terminalControl.Options.WindowOptions.GetWinSizeChars = true;
-            _terminalControl.Options.WindowOptions.GetScreenSizePixels = true;
-            _terminalControl.Options.WindowOptions.GetCellSizePixels = true;
-            _terminalControl.Options.WindowOptions.GetIconTitle = true;
-            _terminalControl.Options.WindowOptions.GetWinTitle = true;
-            _terminalControl.Options.WindowOptions.GetWinState = true;
-            _terminalControl.Options.WindowOptions.SetWinPosition = true;
-            _terminalControl.Options.WindowOptions.SetWinSizePixels = true;
-            _terminalControl.Options.WindowOptions.SetWinSizeChars = true;
-            _terminalControl.Options.WindowOptions.RaiseWin = true;
-            _terminalControl.Options.WindowOptions.LowerWin = true;
-            _terminalControl.Options.WindowOptions.RefreshWin = true;
-            _terminalControl.Options.WindowOptions.RestoreWin = true;
-            _terminalControl.Options.WindowOptions.MaximizeWin = true;
-            _terminalControl.Options.WindowOptions.MinimizeWin = true;
-            _terminalControl.Options.WindowOptions.FullscreenWin = true;
+
+            // Set as a LOCAL value, not a default. A default loses to inheritance, and the application theme
+            // puts a proportional font (FluentTheme uses Inter) on every window — which then flows down into
+            // the terminal and breaks the cell grid. A local value outranks that. A host assigning FontFamily
+            // themselves still wins, because their assignment happens after this constructor. The trade is
+            // that a Style targeting TerminalWindow will NOT win, since a local value outranks a style
+            // setter — set the property directly to choose a different font.
+            FontFamily = TerminalView.DefaultFontFamily;
+
+            // Keep the window-command flags on whatever Options ends up being. Setting Content below attaches
+            // this window and triggers initialisation DURING construction, which is earlier than a caller's
+            // object initializer — so configuring once here would decorate an object they are about to
+            // replace. Observing the property instead means the flags follow the value.
+            Options ??= new XTerm.Options.TerminalOptions();
+            this.GetObservable(OptionsProperty).Subscribe(
+                new global::Avalonia.Reactive.AnonymousObserver<XTerm.Options.TerminalOptions?>(options =>
+                {
+                    if (options != null)
+                        EnableWindowCommands(options);
+                }));
 
             // Clicking the native title bar/chrome can steal keyboard focus away from the content
             // (especially on Linux). Restore focus on any pointer press within the window.
@@ -234,6 +325,8 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.StartingDirectoryProperty, this.GetObservable(StartingDirectoryProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
+            _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
+            _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
 
             Content = _terminalControl;
         }
@@ -392,6 +485,12 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalTitleChanged(object? sender, TitleChangedEventArgs e)
         {
+            // UpdateTitleFromTerminal was registered but never read, so a host that turned it off to protect
+            // its own title bar had the title rewritten anyway, with nothing to indicate the setting was
+            // ignored. The event is left unhandled when opted out, so a host handler can still act on it.
+            if (!UpdateTitleFromTerminal)
+                return;
+
             if (!e.Handled)
             {
                 Title = e.Title;

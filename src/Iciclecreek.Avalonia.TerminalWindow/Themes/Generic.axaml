@@ -2,9 +2,14 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Iciclecreek.Terminal">
     
+    <!-- FontFamily is set here rather than only as a default value, because a default LOSES to an inherited
+         one: FluentTheme puts a proportional font (Inter) on the tree and it flows straight down into the
+         terminal. A terminal in a proportional font is broken, not just ugly - the cell grid comes from one
+         measured advance width. A host setting FontFamily directly still wins over this setter. -->
     <Style Selector="local|TerminalControl">
         <Setter Property="Background" Value="Black"/>
         <Setter Property="Foreground" Value="White"/>
+        <Setter Property="FontFamily" Value="Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New,monospace"/>
         <Setter Property="FocusAdorner" Value="{x:Null}"/>
         <Setter Property="Template">
             <ControlTemplate>
@@ -20,7 +25,9 @@
                                        Process="{TemplateBinding Process}"
                                        StartingDirectory="{TemplateBinding StartingDirectory}"
                                        Args="{TemplateBinding Args}"
-                                       Options="{TemplateBinding Options}"/>                    
+                                       BufferSize="{TemplateBinding BufferSize}"
+                                       ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
+                                       Options="{TemplateBinding Options}"/>
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"
                               Grid.Column="1"
@@ -30,5 +37,5 @@
             </ControlTemplate>
         </Setter>
     </Style>
-    
+
 </Styles>
