@@ -39,6 +39,6 @@
     <PackageReference Include="Porta.Pty" Version="1.0.7" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
-    <PackageReference Include="XTerm.NET" Version="1.0.14" />
+    <PackageReference Include="XTerm.NET" Version="1.0.16" />
   </ItemGroup>
 </Project>

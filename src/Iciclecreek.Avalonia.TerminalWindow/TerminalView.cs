@@ -2948,6 +2948,21 @@ namespace Iciclecreek.Terminal
 
                 for (int y = startLine; y < endLine; y++)
                 {
+                    // The buffer can SHRINK underneath a render. CSI 3 J — what cmd.exe's `cls` sends —
+                    // discards the entire scrollback, and it arrives on the PTY thread, so the bounds
+                    // captured above can point past the end by the time we reach this line.
+                    //
+                    // This could not happen before: the buffer only ever grew, or dropped a single line at
+                    // a time once it hit capacity, so a stale index stayed valid. A wholesale discard can
+                    // remove hundreds at once. Without this check GetLine throws IndexOutOfRangeException,
+                    // the catch below swallows it, and the REST OF THE FRAME is lost — plus anyone running
+                    // under a debugger gets a first-chance break every time they clear the screen.
+                    //
+                    // Breaking out costs at most one dropped frame: the write that trimmed the buffer
+                    // requests another render, and that one sees consistent bounds.
+                    if (y >= _terminal.Buffer.Length)
+                        break;
+
                     var line = _terminal.Buffer.GetLine(y);
                     if (line == null)
                         continue;
