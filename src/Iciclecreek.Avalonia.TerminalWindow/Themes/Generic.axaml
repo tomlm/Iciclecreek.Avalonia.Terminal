@@ -26,6 +26,7 @@
                                        StartingDirectory="{TemplateBinding StartingDirectory}"
                                        Args="{TemplateBinding Args}"
                                        BufferSize="{TemplateBinding BufferSize}"
+                                       ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
                                        Options="{TemplateBinding Options}"/>
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"

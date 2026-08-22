@@ -128,8 +128,7 @@ public partial class MainWindow : Window
                          Background="Black"
                          Foreground="White"
                          CloseOnProcessExit="True"
-                         UpdateTitleFromTerminal="True"
-                         HandleWindowCommands="True"/>
+                         UpdateTitleFromTerminal="True"/>
 ```
 
 **Or create programmatically:**
@@ -170,7 +169,10 @@ terminalWindow.Show();
 | `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `CloseOnProcessExit` | `bool` | `true` | Automatically close the window when the process exits |
 | `UpdateTitleFromTerminal` | `bool` | `true` | Update window title from terminal escape sequences |
-| `HandleWindowCommands` | `bool` | `true` | Handle window manipulation commands from the terminal |
+
+Window manipulation commands from the terminal (resize, move, minimize, maximize, raise, lower, fullscreen) are always handled. Handle the corresponding bubbling event from `TerminalView` and mark it `Handled` to suppress the default behaviour for any of them.
+
+`TerminalWindow` also exposes the whole of `TerminalControl`'s surface — `BufferSize`, `ShowCaretOnClick`, `Terminal`, `Kill()`, `WaitForExit(int)`, `BeginReparent()` and `EndReparent()` — forwarding each to the control it hosts.
 
 **Events:**
 

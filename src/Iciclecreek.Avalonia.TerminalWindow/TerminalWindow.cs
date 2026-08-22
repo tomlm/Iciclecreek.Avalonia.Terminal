@@ -65,6 +65,16 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        public static readonly StyledProperty<int> BufferSizeProperty =
+            AvaloniaProperty.Register<TerminalWindow, int>(
+                nameof(BufferSize),
+                defaultValue: 1000);
+
+        public static readonly StyledProperty<bool> ShowCaretOnClickProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(ShowCaretOnClick),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
 
@@ -114,6 +124,44 @@ namespace Iciclecreek.Terminal
         /// Gets the current working directory reported by the terminal session.
         /// </summary>
         public string? CurrentDirectory => _terminalControl?.CurrentDirectory;
+
+        /// <summary>
+        /// Gets or sets the terminal scrollback buffer size in lines.
+        /// </summary>
+        public int BufferSize
+        {
+            get => GetValue(BufferSizeProperty);
+            set => SetValue(BufferSizeProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.ShowCaretOnClickProperty"/>
+        public bool ShowCaretOnClick
+        {
+            get => GetValue(ShowCaretOnClickProperty);
+            set => SetValue(ShowCaretOnClickProperty, value);
+        }
+
+        /// <summary>
+        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
+        /// </summary>
+        public XTerm.Terminal Terminal => _terminalControl!.Terminal;
+
+        /// <summary>
+        /// Waits for the terminal process to exit, with a timeout in milliseconds.
+        /// </summary>
+        /// <param name="ms">The maximum amount of time to wait, in milliseconds.</param>
+        public void WaitForExit(int ms) => _terminalControl!.WaitForExit(ms);
+
+        /// <summary>
+        /// Terminates the running terminal process.
+        /// </summary>
+        public void Kill() => _terminalControl!.Kill();
+
+        /// <inheritdoc cref="TerminalControl.BeginReparent"/>
+        public void BeginReparent() => _terminalControl?.BeginReparent();
+
+        /// <inheritdoc cref="TerminalControl.EndReparent"/>
+        public void EndReparent() => _terminalControl?.EndReparent();
 
         /// <summary>
         /// Gets the exit code of the launched process after it has terminated.
@@ -277,6 +325,8 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.StartingDirectoryProperty, this.GetObservable(StartingDirectoryProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
+            _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
+            _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
 
             Content = _terminalControl;
         }

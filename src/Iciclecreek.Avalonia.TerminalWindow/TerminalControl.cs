@@ -62,6 +62,15 @@ namespace Iciclecreek.Terminal
                 nameof(Options),
                 defaultValue: null);
 
+        // A real StyledProperty rather than a forwarder to _terminalView. As a forwarder its setter was
+        // guarded by `if (_terminalView != null)`, so any value set before the template was applied — which
+        // includes every value set from XAML or an object initializer — was silently dropped and never
+        // re-applied. Registered here, the value survives and reaches the view through the template.
+        public static readonly StyledProperty<bool> ShowCaretOnClickProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(ShowCaretOnClick),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
@@ -202,8 +211,8 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.ShowCaretOnClickProperty"/>
         public bool ShowCaretOnClick
         {
-            get => _terminalView?.ShowCaretOnClick ?? false;
-            set { if (_terminalView != null) _terminalView.ShowCaretOnClick = value; }
+            get => GetValue(ShowCaretOnClickProperty);
+            set => SetValue(ShowCaretOnClickProperty, value);
         }
 
         /// <summary>
