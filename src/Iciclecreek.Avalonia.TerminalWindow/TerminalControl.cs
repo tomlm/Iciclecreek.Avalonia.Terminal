@@ -136,6 +136,11 @@ namespace Iciclecreek.Terminal
 
             // TerminalControl is focusable - it will delegate to inner TerminalView
             FocusableProperty.OverrideDefaultValue<TerminalControl>(true);
+
+            // A terminal must not fall back to the proportional system UI font — see
+            // TerminalView.DefaultFontFamily. This is a DEFAULT, so an inherited value or an explicit
+            // style from the host still wins; it only decides what happens when nobody said anything.
+            FontFamilyProperty.OverrideDefaultValue<TerminalControl>(TerminalView.DefaultFontFamily);
         }
 
         private static void LoadDefaultStyles()

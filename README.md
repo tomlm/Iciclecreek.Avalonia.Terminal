@@ -88,7 +88,7 @@ public partial class MainWindow : Window
 | `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
 | `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
-| `FontFamily` | `FontFamily` | Inherited | Terminal font family (use monospace fonts) |
+| `FontFamily` | `FontFamily` | Monospace stack | Terminal font family. Defaults to `Cascadia Mono` and friends, falling back to the platform's generic monospace — a terminal must not inherit a proportional UI font. Set it to override |
 | `FontSize` | `double` | Inherited | Terminal font size |
 | `Foreground` | `IBrush` | `White` | Default text color |
 | `Background` | `IBrush` | `Black` | Terminal background color |

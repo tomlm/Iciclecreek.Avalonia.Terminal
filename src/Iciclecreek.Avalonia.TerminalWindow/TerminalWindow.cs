@@ -158,6 +158,11 @@ namespace Iciclecreek.Terminal
         {
             BackgroundProperty.OverrideDefaultValue<TerminalWindow>(Brushes.Black);
             ForegroundProperty.OverrideDefaultValue<TerminalWindow>(Brushes.White);
+
+            // Without this a bare TerminalWindow renders the shell in the proportional system UI font. The
+            // demo only looked right because its App.axaml styles ManagedTerminalWindow specifically —
+            // TerminalWindow matched no selector and fell through to the UI font.
+            FontFamilyProperty.OverrideDefaultValue<TerminalWindow>(TerminalView.DefaultFontFamily);
         }
 
         public TerminalWindow()
@@ -217,6 +222,14 @@ namespace Iciclecreek.Terminal
                 return;
 
             _terminalControl = new TerminalControl();
+
+            // Set as a LOCAL value, not a default. A default loses to inheritance, and the application theme
+            // puts a proportional font (FluentTheme uses Inter) on every window — which then flows down into
+            // the terminal and breaks the cell grid. A local value outranks that. A host assigning FontFamily
+            // themselves still wins, because their assignment happens after this constructor. The trade is
+            // that a Style targeting TerminalWindow will NOT win, since a local value outranks a style
+            // setter — set the property directly to choose a different font.
+            FontFamily = TerminalView.DefaultFontFamily;
 
             // Keep the window-command flags on whatever Options ends up being. Setting Content below attaches
             // this window and triggers initialisation DURING construction, which is earlier than a caller's

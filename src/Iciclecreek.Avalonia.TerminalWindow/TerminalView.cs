@@ -146,10 +146,24 @@ namespace Iciclecreek.Terminal
                 nameof(CurrentDirectory),
                 o => o.CurrentDirectory);
 
+        /// <summary>
+        /// The font a terminal falls back to when nothing else is specified: a monospace stack, tried in
+        /// order, ending at the platform's generic monospace family.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="FontFamily.Default"/> is the system UI font, which is proportional — and a terminal
+        /// rendered in a proportional font is not merely ugly, it is wrong. The cell grid is derived from a
+        /// single measured advance width, so glyphs that do not share that width drift out of their columns
+        /// and box drawing, alignment and cursor positioning all come apart. A terminal control has to be
+        /// usable without the consumer knowing to style it.
+        /// </remarks>
+        public static readonly FontFamily DefaultFontFamily = new FontFamily(
+            "Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New,monospace");
+
         public static readonly StyledProperty<FontFamily> FontFamilyProperty =
             AvaloniaProperty.Register<TerminalView, FontFamily>(
                 nameof(FontFamily),
-                defaultValue: FontFamily.Default);
+                defaultValue: DefaultFontFamily);
 
         public static readonly StyledProperty<double> FontSizeProperty =
             AvaloniaProperty.Register<TerminalView, double>(

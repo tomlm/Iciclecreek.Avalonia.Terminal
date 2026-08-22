@@ -11,11 +11,19 @@
 		Title="Avalonia XTerm Terminal">
 	<DockPanel>
 		<Menu DockPanel.Dock="Top">
-			<MenuItem Header="_Process">
-				<MenuItem Header="_New" Click="OnNewClicked"/>
-				<MenuItem Header="_Run" Click="OnStartClicked"/>
-				<Separator/>
+			<MenuItem Header="_File">
 				<MenuItem Header="E_xit" Click="OnExitClicked"/>
+			</MenuItem>
+			<!-- ManagedTerminalWindow: hosted inside the WindowsPanel below, not a native OS window. -->
+			<MenuItem Header="_Managed Window">
+				<MenuItem Header="_New" Click="OnNewManagedClicked"/>
+				<MenuItem Header="_Run..." Click="OnRunManagedClicked"/>
+			</MenuItem>
+			<!-- TerminalWindow: a real top-level OS window. Exercising it here is the point — it had no
+			     consumer anywhere in this repo, which is how it shipped unable to render a terminal. -->
+			<MenuItem Header="_Terminal Window">
+				<MenuItem Header="_New" Click="OnNewTerminalWindowClicked"/>
+				<MenuItem Header="_Run..." Click="OnRunTerminalWindowClicked"/>
 			</MenuItem>
 		</Menu>
 
