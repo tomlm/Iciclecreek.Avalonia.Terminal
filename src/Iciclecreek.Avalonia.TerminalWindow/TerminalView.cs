@@ -83,6 +83,14 @@ namespace Iciclecreek.Terminal
         /// <summary>Ceiling on waiting for an already-exited child to be reaped so its real exit
         /// code is readable. See the EOF branch of <see cref="ReadPtyOutputAsync"/>.</summary>
         private const int ExitReapGraceMs = 1000;
+
+        /// <summary>Ceiling on the OFF-read-loop wait for a child that missed the grace period. A dead
+        /// child reaps in microseconds, so this only runs when something pathological is going on; it
+        /// exists so that case ends in a report rather than in silence.</summary>
+        private const int ExitReapCeilingMs = 30_000;
+
+        /// <summary>Poll slice for that wait. Short enough to report promptly, long enough not to spin.</summary>
+        private const int ExitReapPollMs = 100;
         private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
@@ -2481,12 +2489,26 @@ namespace Iciclecreek.Terminal
 
                         // A child that will not reap inside the grace period leaves no trustworthy
                         // code, and the one we would otherwise read is 0 — the single wrong answer
-                        // that reads as SUCCESS. Better to leave the interlock unclaimed so the real
-                        // event can still report if it arrives than to invent an outcome.
+                        // that reads as SUCCESS. So this loop still does not invent an outcome.
+                        //
+                        // But leaving the interlock unclaimed and returning means NO ProcessExited is
+                        // raised at all if the pty layer's own event never fires either, and a host
+                        // that is never told the process ended cannot leave the state it entered when
+                        // it started. Seen downstream as a terminal pane showing a finished shell as
+                        // running, indefinitely. That was traded away for "no wrong exit code" without
+                        // noticing the cost was the notification itself, not just the number.
+                        //
+                        // The child is dead by definition, so the reap WILL land — the grace period is
+                        // only a ceiling on how long this READ LOOP is willing to wait for it. Hand the
+                        // wait off, so the loop ends now and the host still hears about it.
                         // TryClaimExit rather than a bare interlock: this loop may have been waiting on a read
                         // while a relaunch replaced the connection, in which case the exit it is holding belongs
                         // to a process this view has already moved on from.
-                        if (reaped && TryClaimExit(connection))
+                        if (!reaped)
+                        {
+                            ReapInBackground(connection);
+                        }
+                        else if (TryClaimExit(connection))
                         {
                             var exitCode = connection.ExitCode;
 
@@ -2587,6 +2609,76 @@ namespace Iciclecreek.Terminal
         /// Make <paramref name="connection"/> the live one and arm the exit interlock for it, atomically.
         /// Null clears both — the teardown case.
         /// </summary>
+        /// <summary>
+        /// Wait, off the read loop, for a child that has ended but has not been reaped — and report the
+        /// exit either way.
+        /// </summary>
+        /// <remarks>
+        /// <para>The read loop must not block on this: it is the thing that would otherwise be pumping
+        /// output. But the exit still has to be reported, or the host is left believing a dead process
+        /// is running.</para>
+        /// <para>Claims the same interlock, so if <see cref="OnPtyProcessExited"/> gets there first with
+        /// the authoritative code, this stays silent. If the ceiling expires the exit IS still reported,
+        /// with <see cref="ProcessExitedEventArgs.ExitCodeKnown"/> false — "ended, outcome unreadable"
+        /// is honest, where 0 would read as success and silence reads as still running.</para>
+        /// <para>The connection may be disposed underneath this at any point — a relaunch, a close. That
+        /// is not an error worth surfacing: it means the exit is moot.</para>
+        /// </remarks>
+        private void ReapInBackground(IPtyConnection connection)
+        {
+            _ = Task.Run(async () =>
+            {
+                var deadline = DateTime.UtcNow.AddMilliseconds(ExitReapCeilingMs);
+                var reaped = false;
+
+                while (DateTime.UtcNow < deadline)
+                {
+                    // Someone else reported it — or this connection is no longer the live one, which
+                    // makes the exit moot AND makes reporting it actively wrong.
+                    if (Volatile.Read(ref _processExitHandled) != 0) return;
+                    lock (_exitGate)
+                    {
+                        if (!ReferenceEquals(_ptyConnection, connection)) return;
+                    }
+
+                    try
+                    {
+                        if (connection.WaitForExit(ExitReapPollMs)) { reaped = true; break; }
+                    }
+                    catch
+                    {
+                        return;   // disposed / gone — nothing left to report about
+                    }
+
+                    await Task.Yield();
+                }
+
+                if (!TryClaimExit(connection)) return;
+
+                int? code = null;
+                if (reaped)
+                {
+                    try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
+                }
+
+                lock (_terminalLock)
+                {
+                    _terminal.WriteLine(code is { } c
+                        ? $"\nProcess exited with code: {c}\n"
+                        : "\nProcess exited\n");
+                    _terminal.Buffer.ScrollToBottom();
+                }
+                this.RequestInvalidate();
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    ProcessExited?.Invoke(this, code is { } c
+                        ? new ProcessExitedEventArgs(c)
+                        : ProcessExitedEventArgs.UnknownCode());
+                });
+            });
+        }
+
         private void InstallConnection(IPtyConnection? connection)
         {
             lock (_exitGate)

@@ -147,14 +147,13 @@ public class ExitReportingTests
     /// because the alternative — claiming on a failed reap — silently reasserts the very bug this
     /// change exists to fix, and does so in the case nobody would think to try by hand.</para>
     ///
-    /// <para>The deferral here is PERMANENT, which is what this test asserts: while the child has not
-    /// been reaped, the read loop stays silent and leaves the exit to the authoritative event.</para>
+    /// <para>What this asserts is the WINDOW, not silence forever: while the child has not reaped, the
+    /// read loop says nothing and leaves the exit to the authoritative event, which is the whole point
+    /// of not claiming the interlock on a failed reap.</para>
     ///
-    /// <para>That is deliberate for this change and not the end state. A child that never reaps then
-    /// produces no <c>ProcessExited</c> at all, so a host is never told the process ended and cannot
-    /// leave the state it entered when it started — observed for real downstream, with a terminal pane
-    /// stuck showing a finished shell as running. Bounding the wait needs a way to say "it ended, the
-    /// code is unknown", which is API this branch does not add; it belongs in its own change.</para>
+    /// <para>The wait is bounded now rather than permanent, so this checks the first 200ms — the part
+    /// that must not change. What happens after the ceiling is <see
+    /// cref="A_child_that_reaps_late_is_still_reported"/>.</para>
     /// </summary>
     [AvaloniaTest]
     public Task A_child_that_will_not_reap_defers_to_the_real_event() => RunAsync(async () =>
@@ -216,6 +215,46 @@ public class ExitReportingTests
 
         attached.Release();
         await Task.Yield();
+        window.Close();
+    });
+
+    /// <summary>
+    /// A child that misses the read loop's grace period and reaps a moment later is still reported,
+    /// with its REAL code.
+    ///
+    /// <para>This is the case that used to end in silence. The loop declined to invent an exit code —
+    /// correctly, since the only one available would have been 0, which reads as success — but it also
+    /// returned, so if the pty layer's own event never fired, no <c>ProcessExited</c> was raised at
+    /// all. A host is then never told the process ended and cannot leave the state it entered when it
+    /// started; downstream that showed up as a terminal pane displaying a finished shell as running,
+    /// indefinitely.</para>
+    ///
+    /// <para>The child is dead by definition at EOF, so the reap does land — the grace period only
+    /// bounded how long the READ LOOP was willing to wait. Handing the wait off keeps the loop
+    /// responsive and still reports, and because the reap succeeds, the code is the real one rather
+    /// than an "unknown".</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_child_that_reaps_late_is_still_reported() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        Pump(window);
+
+        var reported = new List<ProcessExitedEventArgs>();
+        view.ProcessExited += (_, e) => reported.Add(e);
+
+        // Misses the grace period, reaps on a later attempt — exactly what a loaded box does.
+        view.AttachConnection(new ExitedButNotYetReaped(realExitCode: 3, reapsOnCall: 3));
+
+        await WaitUntil(() => reported.Count > 0,
+            "the exit is reported even though the reap missed the read loop's grace period");
+
+        Assert.That(reported, Has.Count.EqualTo(1), "one exit, reported once");
+        Assert.That(reported[0].ExitCodeKnown, Is.True, "the child did reap, so the code is trustworthy");
+        Assert.That(reported[0].ExitCode, Is.EqualTo(3),
+            "a late reap still yields the REAL code — giving up early was what lost it");
+
         window.Close();
     });
 
