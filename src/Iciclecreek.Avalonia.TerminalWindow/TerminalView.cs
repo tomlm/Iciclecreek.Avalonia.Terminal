@@ -1152,12 +1152,19 @@ namespace Iciclecreek.Terminal
         // True when the key is a modifier pressed on its own (no associated character),
         // e.g. the ⌘/Ctrl/Shift/Alt keys. Used so a bare modifier press doesn't clear
         // an active selection before the rest of a copy shortcut is typed.
+        //
+        // The lock keys belong here by the same test this list already applies — they produce no character,
+        // so pressing one is not typing — and they were simply missed. They matter more now than they did
+        // when the list was written, because auto-scroll also resumes on anything not in it: with them
+        // absent, tapping CapsLock while reading scrollback both drops the selection and jumps the view
+        // back to the prompt.
         private static bool IsModifierKey(Key key) => key switch
         {
             Key.LeftShift or Key.RightShift or
             Key.LeftCtrl or Key.RightCtrl or
             Key.LeftAlt or Key.RightAlt or
-            Key.LWin or Key.RWin => true,
+            Key.LWin or Key.RWin or
+            Key.CapsLock or Key.NumLock or Key.Scroll => true,
             _ => false,
         };
 
