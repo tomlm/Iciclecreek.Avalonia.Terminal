@@ -468,6 +468,24 @@ namespace Iciclecreek.Terminal
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
         /// <summary>
+        /// Event raised for each chunk of output the terminal receives from the PTY process.
+        /// </summary>
+        /// <remarks>
+        /// <para>Raised on the UI THREAD, so a handler may touch UI directly. The cost is that chunks
+        /// arrive marshalled and slightly late; a consumer that needs the tightest possible latency —
+        /// matching a dev server's "listening on :port" line, say — is better served reading the buffer
+        /// itself than by this event.</para>
+        /// <para>The payload is UTF-8 decoded TEXT, not raw bytes, and it is the text as it came off the
+        /// pty: escape sequences included, chunked arbitrarily rather than by line.</para>
+        /// <para>A throwing handler is caught and swallowed. An unhandled exception on the dispatcher would
+        /// take the application down, and sniffing output is exactly the place arbitrary host code runs. The
+        /// catch wraps the whole invocation, so a handler that throws also suppresses handlers subscribed
+        /// AFTER it for that chunk — isolating each would cost a <c>GetInvocationList()</c> allocation per
+        /// chunk, which is the per-chunk overhead this event is otherwise careful to avoid.</para>
+        /// </remarks>
+        public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
+
+        /// <summary>
         /// Event raised when a URL in the terminal is Ctrl+Clicked.
         /// </summary>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
@@ -2655,6 +2673,24 @@ namespace Iciclecreek.Terminal
                     }
 
                     var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+
+                    // Guarded so an unsubscribed terminal pays nothing: without it every chunk allocates a
+                    // closure and queues a dispatcher callback for no subscriber. The ?.Invoke inside still
+                    // covers the race where the last handler unsubscribes between here and delivery.
+                    if (OutputReceived != null)
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            // Same guard ShellReady uses: the callback can still be queued when a relaunch
+                            // swaps the process out underneath it, and without this a consumer sees the old
+                            // process's bytes attributed to the new one.
+                            if (_processCts?.Token != cancellationToken)
+                                return;
+
+                            try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
+                            catch { /* a sniffer must never take the app down */ }
+                        });
+                    }
 
                     // Snapshot before write so we can detect buffer growth (MaxScrollback
                     // increases when _terminal.Write adds lines; ScrollToBottom only moves

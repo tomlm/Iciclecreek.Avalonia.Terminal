@@ -119,6 +119,8 @@ namespace Iciclecreek.Terminal
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
+        /// <inheritdoc cref="TerminalView.OutputReceived"/>
+        public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
 
@@ -425,6 +427,7 @@ namespace Iciclecreek.Terminal
             // Subscribe to terminal events.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
             _terminalControl.ShellReady += OnTerminalControlShellReady;
+            _terminalControl.OutputReceived += OnTerminalControlOutputReceived;
             _terminalControl.UrlClicked += OnTerminalControlUrlClicked;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
@@ -565,6 +568,7 @@ namespace Iciclecreek.Terminal
                 _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
                 _terminalControl.ShellReady -= OnTerminalControlShellReady;
+                _terminalControl.OutputReceived -= OnTerminalControlOutputReceived;
                 _terminalControl.UrlClicked -= OnTerminalControlUrlClicked;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
@@ -599,6 +603,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalControlShellReady(object? sender, EventArgs e)
         {
             ShellReady?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlOutputReceived(object? sender, OutputReceivedEventArgs e)
+        {
+            OutputReceived?.Invoke(this, e);
         }
 
         private void OnTerminalControlUrlClicked(object? sender, UrlClickedEventArgs e)

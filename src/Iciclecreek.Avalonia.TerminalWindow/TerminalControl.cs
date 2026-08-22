@@ -111,6 +111,8 @@ namespace Iciclecreek.Terminal
         public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
+        /// <inheritdoc cref="TerminalView.OutputReceived"/>
+        public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
         /// <summary>
@@ -463,6 +465,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited -= OnTerminalViewProcessExited;
                 _terminalView.ShellReady -= OnTerminalViewShellReady;
+                _terminalView.OutputReceived -= OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
             }
 
@@ -480,6 +483,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
                 _terminalView.ShellReady += OnTerminalViewShellReady;
+                _terminalView.OutputReceived += OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
                 // (no window event hooking needed)
@@ -536,6 +540,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewShellReady(object? sender, EventArgs e)
         {
             ShellReady?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewOutputReceived(object? sender, OutputReceivedEventArgs e)
+        {
+            OutputReceived?.Invoke(this, e);
         }
 
         private void OnTerminalViewUrlClicked(object? sender, UrlClickedEventArgs e)
