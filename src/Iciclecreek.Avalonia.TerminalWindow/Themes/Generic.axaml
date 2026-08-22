@@ -27,6 +27,8 @@
                                        Args="{TemplateBinding Args}"
                                        BufferSize="{TemplateBinding BufferSize}"
                                        ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
+                                       VerbatimCommandLine="{TemplateBinding VerbatimCommandLine}"
+                                       EnvironmentVariables="{TemplateBinding EnvironmentVariables}"
                                        Options="{TemplateBinding Options}"/>
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"

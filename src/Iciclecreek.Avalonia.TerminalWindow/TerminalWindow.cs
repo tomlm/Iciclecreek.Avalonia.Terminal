@@ -75,6 +75,18 @@ namespace Iciclecreek.Terminal
                 nameof(ShowCaretOnClick),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
+        public static readonly StyledProperty<bool> VerbatimCommandLineProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(VerbatimCommandLine),
+                defaultValue: false);
+
+        /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
+        public static readonly StyledProperty<IDictionary<string, string>?> EnvironmentVariablesProperty =
+            AvaloniaProperty.Register<TerminalWindow, IDictionary<string, string>?>(
+                nameof(EnvironmentVariables),
+                defaultValue: null);
+
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
 
@@ -139,6 +151,20 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(ShowCaretOnClickProperty);
             set => SetValue(ShowCaretOnClickProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
+        public bool VerbatimCommandLine
+        {
+            get => GetValue(VerbatimCommandLineProperty);
+            set => SetValue(VerbatimCommandLineProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
+        public IDictionary<string, string>? EnvironmentVariables
+        {
+            get => GetValue(EnvironmentVariablesProperty);
+            set => SetValue(EnvironmentVariablesProperty, value);
         }
 
         /// <summary>
@@ -327,6 +353,8 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
+            _terminalControl.Bind(TerminalControl.VerbatimCommandLineProperty, this.GetObservable(VerbatimCommandLineProperty));
+            _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
 
             Content = _terminalControl;
         }

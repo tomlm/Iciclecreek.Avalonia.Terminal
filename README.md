@@ -88,6 +88,8 @@ public partial class MainWindow : Window
 | `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
 | `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
+| `VerbatimCommandLine` | `bool` | `false` | When `false`, each entry in `Args` reaches the process as a distinct argument, quoted so it arrives exactly as written. Set `true` to join the entries into one command line and let the process parse it itself. **Windows only** — Unix passes an argument vector to `exec`, so there is nothing to build |
+| `EnvironmentVariables` | `IDictionary<string,string>?` | `null` | Extra environment variables for the launched process. **Merged** into the environment it would otherwise inherit, not substituted for it, so setting one variable does not cost you `PATH`. `TERM` is already set to `xterm-256color` by the PTY layer |
 | `FontFamily` | `FontFamily` | Monospace stack | Terminal font family. Defaults to `Cascadia Mono` and friends, falling back to the platform's generic monospace — a terminal must not inherit a proportional UI font. Set it to override |
 | `FontSize` | `double` | Inherited | Terminal font size |
 | `Foreground` | `IBrush` | `White` | Default text color |
@@ -172,7 +174,7 @@ terminalWindow.Show();
 
 Window manipulation commands from the terminal (resize, move, minimize, maximize, raise, lower, fullscreen) are always handled. Handle the corresponding bubbling event from `TerminalView` and mark it `Handled` to suppress the default behaviour for any of them.
 
-`TerminalWindow` also exposes the whole of `TerminalControl`'s surface — `BufferSize`, `ShowCaretOnClick`, `Terminal`, `Kill()`, `WaitForExit(int)`, `BeginReparent()` and `EndReparent()` — forwarding each to the control it hosts.
+`TerminalWindow` also exposes the whole of `TerminalControl`'s surface — `BufferSize`, `ShowCaretOnClick`, `VerbatimCommandLine`, `EnvironmentVariables`, `Terminal`, `Kill()`, `WaitForExit(int)`, `BeginReparent()` and `EndReparent()` — forwarding each to the control it hosts.
 
 **Events:**
 

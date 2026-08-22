@@ -71,6 +71,18 @@ namespace Iciclecreek.Terminal
                 nameof(ShowCaretOnClick),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
+        public static readonly StyledProperty<bool> VerbatimCommandLineProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(VerbatimCommandLine),
+                defaultValue: false);
+
+        /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
+        public static readonly StyledProperty<IDictionary<string, string>?> EnvironmentVariablesProperty =
+            AvaloniaProperty.Register<TerminalControl, IDictionary<string, string>?>(
+                nameof(EnvironmentVariables),
+                defaultValue: null);
+
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
@@ -213,6 +225,20 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(ShowCaretOnClickProperty);
             set => SetValue(ShowCaretOnClickProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
+        public bool VerbatimCommandLine
+        {
+            get => GetValue(VerbatimCommandLineProperty);
+            set => SetValue(VerbatimCommandLineProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
+        public IDictionary<string, string>? EnvironmentVariables
+        {
+            get => GetValue(EnvironmentVariablesProperty);
+            set => SetValue(EnvironmentVariablesProperty, value);
         }
 
         /// <summary>
