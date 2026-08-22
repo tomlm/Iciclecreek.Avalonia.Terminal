@@ -331,6 +331,22 @@ namespace Iciclecreek.Terminal
         /// resuming there means merely moving the mouse over a mouse-reporting app snaps a user who is
         /// reading scrollback back to the bottom. Only the keyboard entry points call this.
         /// </remarks>
+        /// <summary>
+        /// The scrollback ring dropped <paramref name="count"/> lines off the top, so every absolute index
+        /// below shifted by that much. A following view is about to be scrolled to the bottom anyway; a view
+        /// parked up in the scrollback is moved down by the same amount, so the content the user is reading
+        /// stays under their eye instead of sliding upward as output arrives.
+        /// </summary>
+        private void OnBufferTrimmed(int count)
+        {
+            if (_followBottom || count <= 0)
+                return;
+
+            var y = _terminal.Buffer.ViewportY;
+            if (y > 0)
+                _terminal.Buffer.ViewportY = Math.Max(0, y - count);
+        }
+
         private void FollowTail()
         {
             if (_isAlternateBuffer || !_autoScroll)
@@ -697,6 +713,15 @@ namespace Iciclecreek.Terminal
             }
 
             _terminal = new XT.Terminal(options);
+
+            // The normal buffer's ring evicts its oldest lines once the scrollback fills, and every absolute
+            // index shifts down with it. A view parked in the scrollback has to move with the eviction or the
+            // content slides upward under the user while output keeps arriving.
+            //
+            // Subscribed HERE and not in OnAttachedToLogicalTree with the others: the buffer object outlives
+            // detach/re-attach, so re-subscribing there would add a second handler on every re-parent and
+            // move a parked viewport by a multiple of the evicted count.
+            _terminal.Buffer.Trimmed += OnBufferTrimmed;
 
             _terminal.DataReceived += OnTerminalDataReceived;
             _terminal.BufferChanged += OnTerminalBufferChanged;

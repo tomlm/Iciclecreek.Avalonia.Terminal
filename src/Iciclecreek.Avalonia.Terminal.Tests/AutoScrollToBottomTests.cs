@@ -250,5 +250,54 @@ public class AutoScrollToBottomTests
         window.Close();
     }
 
+    /// <summary>
+    /// Once the scrollback ring is FULL it drops its oldest lines, and every absolute index shifts down with
+    /// them. A parked viewport keeps its ViewportY, so without compensation the content under the user's eye
+    /// slides upward while output keeps arriving — they drift off what they were reading even though the
+    /// follow is correctly paused.
+    ///
+    /// <para>A small BufferSize is what makes this testable: it reaches the eviction threshold in a hundred
+    /// lines rather than a thousand. The push is sized to evict PAST the parked position but not past the
+    /// parked CONTENT — once the ring drops the line the user is reading, it is genuinely gone and no
+    /// compensation can help, which is a limit of the buffer rather than of this fix.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_parked_viewport_rides_out_scrollback_eviction() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "", BufferSize = 120 };
+        var window = Show(view);
+        var connection = new PushConnection();
+        view.AttachConnection(connection);
+
+        await PushAndSettle(view, connection, Lines(100, "old"));
+
+        view.ViewportY = view.MaxScrollback - 20;
+        var parkedY = view.ViewportY;
+        var parkedText = TopVisibleLine(view);
+        Assert.That(parkedText, Does.StartWith("old "), "sanity: parked over the earlier output");
+
+        // Enough to drive the ring past capacity and force eviction.
+        await PushAndSettle(view, connection, Lines(90, "new"));
+
+        Assert.That(view.ViewportY, Is.LessThan(parkedY),
+            "sanity: the ring evicted, so the compensation had something to do");
+        Assert.That(TopVisibleLine(view), Is.EqualTo(parkedText),
+            "the line under the user must not slide away as the ring evicts beneath it");
+
+        connection.Done();
+        window.Close();
+    });
+
+    /// <summary>The text of the first row the viewport shows, trailing blanks trimmed.</summary>
+    private static string TopVisibleLine(TerminalView view)
+    {
+        var line = view.Terminal.Buffer.GetLine(view.Terminal.Buffer.ViewportY);
+        if (line == null) return string.Empty;
+        var sb = new StringBuilder();
+        for (int x = 0; x < line.Length; x++)
+            sb.Append(string.IsNullOrEmpty(line[x].Content) ? " " : line[x].Content);
+        return sb.ToString().TrimEnd();
+    }
+
     private static Task Run(Func<Task> body) => body();
 }
