@@ -486,11 +486,30 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// True while a scrollbar-driven scroll is being applied to the view, so the resulting property
+        /// change does not write the scrollbar's own value back underneath the user's drag.
+        /// </summary>
+        private bool _applyingScrollBarValue;
+
         private void OnScrollBarScroll(object? sender, ScrollEventArgs e)
         {
-            if (_terminalView != null)
+            if (_terminalView == null)
+                return;
+
+            // Round rather than truncate. A cast rounds toward zero, and zero is the TOP of the buffer, so
+            // every drag event used to leak up to a whole line upwards — and because Avalonia's Track applies
+            // a drag incrementally (Value = Value + delta, not a value captured when the drag began) that
+            // leak compounded, and the thumb outran the cursor. Downward drags lost the same line against
+            // their direction, so they lagged instead of raced, which is why only one direction looked wrong.
+            _applyingScrollBarValue = true;
+            try
             {
-                _terminalView.ViewportY = (int)e.NewValue;
+                _terminalView.ViewportY = (int)Math.Round(e.NewValue);
+            }
+            finally
+            {
+                _applyingScrollBarValue = false;
             }
         }
 
@@ -549,8 +568,17 @@ namespace Iciclecreek.Terminal
             _scrollBar.Minimum = 0;
             _scrollBar.Maximum = maxScrollback;
             _scrollBar.ViewportSize = viewportLines;
-            _scrollBar.Value = currentScroll;
             _scrollBar.IsVisible = maxScrollback > 0;
+
+            // Not while the user is dragging. ViewportY raises its change synchronously, so this method runs
+            // inside OnScrollBarScroll — and writing Value here would replace the fractional position the
+            // Track is mid-drag on with a whole-line one. Avalonia applies the next drag delta on top of
+            // whatever Value currently is, so that replacement becomes the base for the rest of the gesture
+            // and the error accumulates rather than cancelling out.
+            if (!_applyingScrollBarValue)
+            {
+                _scrollBar.Value = currentScroll;
+            }
         }
     }
 }
