@@ -109,6 +109,15 @@ namespace Iciclecreek.Terminal
         private double _wheelResidual;      // local scrollback path
         private double _wheelResidualApp;   // mouse-reporting path (alt-buffer apps: less, vim, htop)
 
+        // True while the view sits at the tail, which is the only state in which new output should drag
+        // the viewport along. Sampled from the buffer before each write — see AutoScrollToBottomProperty.
+        private bool _followBottom = true;
+
+        // AutoScrollToBottom mirrored for the reader thread. The write path runs OFF the UI thread (the
+        // Dispatcher.UIThread.Post beside it is the giveaway), so reading the StyledProperty there would be
+        // a cross-thread GetValue. Kept in step by OnPropertyChanged.
+        private volatile bool _autoScroll = true;
+
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
@@ -288,6 +297,54 @@ namespace Iciclecreek.Terminal
         // Styled properties are UI-thread-affine, so the read task reads this mirror rather than the
         // property. Kept in step by OnPropertyChanged.
         private volatile bool _outputOnReadTask;
+
+        /// <summary>
+        /// When <see langword="true"/> (default), new output drags the viewport along so the terminal keeps
+        /// showing the tail. Scrolling back pauses that until the view returns to the bottom; typing resumes
+        /// it. Set to <see langword="false"/> and the terminal never scrolls itself.
+        /// </summary>
+        /// <remarks>
+        /// Follow state is SAMPLED from the buffer immediately before each write rather than tracked as a
+        /// flag. A flag has to be cleared by every path that can move the viewport, and missing one — the
+        /// scrollbar, a programmatic <see cref="ViewportY"/> set, a resize — is invisible until somebody
+        /// scrolls that exact way. Sampling covers all of them by construction.
+        /// </remarks>
+        public static readonly StyledProperty<bool> AutoScrollToBottomProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(AutoScrollToBottom),
+                defaultValue: true);
+
+        /// <inheritdoc cref="AutoScrollToBottomProperty"/>
+        public bool AutoScrollToBottom
+        {
+            get => GetValue(AutoScrollToBottomProperty);
+            set => SetValue(AutoScrollToBottomProperty, value);
+        }
+
+        /// <summary>
+        /// Return the view to the tail and resume following — what typing does implicitly. A no-op in the
+        /// alternate buffer, which has no scrollback of its own, and when auto-scroll is off.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately NOT called from <c>SendToPtyAsync</c>. That writer is not limited to typed input —
+        /// it also carries mouse-tracking reports, terminal query responses and focus notifications — so
+        /// resuming there means merely moving the mouse over a mouse-reporting app snaps a user who is
+        /// reading scrollback back to the bottom. Only the keyboard entry points call this.
+        /// </remarks>
+        private void FollowTail()
+        {
+            if (_isAlternateBuffer || !_autoScroll)
+                return;
+
+            _followBottom = true;
+
+            // Through the ViewportY PROPERTY, not Buffer.ScrollToBottom(), so the change notification is
+            // raised and a host scrollbar does not keep showing a stale position until something unrelated
+            // moves the viewport again.
+            var max = MaxScrollback;
+            if (ViewportY < max)
+                ViewportY = max;
+        }
 
         /// <summary>
         /// When <see langword="false"/> (default), each entry in <see cref="Args"/> reaches the process as a
@@ -984,6 +1041,13 @@ namespace Iciclecreek.Terminal
 
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
+            // BEFORE the _terminal null-check below, deliberately. That guard returns early while the view
+            // is still initialising, which is exactly when an object initialiser or a template binding sets
+            // this — mirroring after it would silently drop the value and leave the reader following the
+            // default forever.
+            if (change.Property == AutoScrollToBottomProperty)
+                _autoScroll = change.GetNewValue<bool>();
+
             base.OnPropertyChanged(change);
 
             // _terminal and _cursorBlinkTimer are built in OnInitialized, and a cursor property can arrive
@@ -1259,6 +1323,12 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // Typing means "put me back at the prompt" — every terminal jumps to the tail on input,
+                // and without it a user who scrolled up types blind. Past the bare modifiers for the same
+                // reason the selection-clear below skips them: pressing Ctrl on its own is not typing.
+                if (!IsModifierKey(e.Key))
+                    FollowTail();
+
                 // Clear selection for any other keystroke - but ignore bare modifier
                 // presses. Pressing ⌘/Ctrl/Shift on its own fires a KeyDown before the
                 // shortcut's letter arrives; clearing here would lose the selection
@@ -1422,6 +1492,8 @@ namespace Iciclecreek.Terminal
                 _terminal.Selection.ClearSelection();
                 this.RequestInvalidate();
             }
+
+            FollowTail();   // typing returns the view to the prompt
 
             try
             {
@@ -2697,7 +2769,8 @@ namespace Iciclecreek.Terminal
                             lock (_terminalLock)
                             {
                                 _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
-                                _terminal.Buffer.ScrollToBottom();
+                                if (_autoScroll)
+                                    _terminal.Buffer.ScrollToBottom();
                             }
 
                             this.RequestInvalidate();
@@ -2753,6 +2826,14 @@ namespace Iciclecreek.Terminal
                     var oldMax = MaxScrollback;
                     var oldY = _terminal.Buffer.ViewportY;
 
+                    // Sampled BEFORE the write. Ordering is the subtle part: once _terminal.Write has run
+                    // YBase has already advanced, so a view that genuinely WAS at the tail reads as
+                    // not-following and the terminal stops following its own output.
+                    //
+                    // Alternate-buffer apps (vim, htop) position their own cursor and the scroll below is
+                    // skipped for them regardless, so they count as following.
+                    _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
+
                     lock (_terminalLock)
                     {
                         _terminal.Write(output);
@@ -2780,7 +2861,26 @@ namespace Iciclecreek.Terminal
                     // handles its own cursor positioning and shouldn't be scrolled.
                     if (!_isAlternateBuffer)
                     {
-                        _terminal.Buffer.ScrollToBottom();
+                        if (_followBottom)
+                        {
+                            _terminal.Buffer.ScrollToBottom();
+                        }
+                        else if (!_autoScroll && _terminal.Buffer.ViewportY != oldY)
+                        {
+                            // Gating ScrollToBottom is NOT enough to mean "never auto-scrolls", which is what
+                            // this property advertises. The emulator advances ViewportY itself as YBase grows
+                            // whenever the view is sitting at the bottom, so with the scroll merely skipped a
+                            // terminal with auto-scroll off still tracked the tail exactly — measured at
+                            // ViewportY == MaxScrollback after every chunk, indistinguishable from on.
+                            //
+                            // ScrollToBottom only ever mattered for a view that had been scrolled AWAY, which
+                            // is why skipping it looks sufficient and is not. Holding the position here is
+                            // what actually hands the viewport to the host.
+                            _terminal.Buffer.ViewportY = Math.Min(oldY, MaxScrollback);
+                        }
+
+                        // Read and notified either way: a view parked in the scrollback still needs its
+                        // scrollbar to learn that the buffer grew underneath it.
                         var newY = _terminal.Buffer.ViewportY;
                         var newMax = MaxScrollback;
 
@@ -2815,7 +2915,8 @@ namespace Iciclecreek.Terminal
                 lock (_terminalLock)
                 {
                     _terminal.WriteLine($"\nError reading from process: {ex.Message}\n");
-                    _terminal.Buffer.ScrollToBottom();
+                    if (_autoScroll)
+                        _terminal.Buffer.ScrollToBottom();
                 }
 
                 this.RequestInvalidate();
@@ -2897,7 +2998,8 @@ namespace Iciclecreek.Terminal
                     _terminal.WriteLine(code is { } c
                         ? $"\nProcess exited with code: {c}\n"
                         : "\nProcess exited\n");
-                    _terminal.Buffer.ScrollToBottom();
+                    if (_autoScroll)
+                        _terminal.Buffer.ScrollToBottom();
                 }
                 this.RequestInvalidate();
 
@@ -2922,7 +3024,8 @@ namespace Iciclecreek.Terminal
             lock (_terminalLock)
             {
                 _terminal.WriteLine($"\nProcess exited with code: {e.ExitCode}\n");
-                _terminal.Buffer.ScrollToBottom();
+                if (_autoScroll)
+                    _terminal.Buffer.ScrollToBottom();
             }
             this.RequestInvalidate();
 
