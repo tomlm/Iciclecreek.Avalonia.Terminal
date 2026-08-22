@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using XTerm;
 
@@ -86,6 +87,31 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalWindow, IDictionary<string, string>?>(
                 nameof(EnvironmentVariables),
                 defaultValue: null);
+
+        public static readonly StyledProperty<TextDecorationLocation?> TextDecorationsProperty =
+            AvaloniaProperty.Register<TerminalWindow, TextDecorationLocation?>(
+                nameof(TextDecorations),
+                defaultValue: null);
+
+        public static readonly StyledProperty<Color> CursorColorProperty =
+            AvaloniaProperty.Register<TerminalWindow, Color>(
+                nameof(CursorColor),
+                defaultValue: Colors.White);
+
+        public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
+            AvaloniaProperty.Register<TerminalWindow, XTerm.Common.CursorStyle>(
+                nameof(CursorStyle),
+                defaultValue: XTerm.Common.CursorStyle.Bar);
+
+        public static readonly StyledProperty<bool> CursorBlinkProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(CursorBlink),
+                defaultValue: true);
+
+        public static readonly StyledProperty<int> CursorBlinkRateProperty =
+            AvaloniaProperty.Register<TerminalWindow, int>(
+                nameof(CursorBlinkRate),
+                defaultValue: 530);
 
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
@@ -182,6 +208,80 @@ namespace Iciclecreek.Terminal
         /// Terminates the running terminal process.
         /// </summary>
         public void Kill() => _terminalControl!.Kill();
+
+        /// <inheritdoc cref="TerminalView.SendInputAsync"/>
+        public Task SendInputAsync(string text, CancellationToken cancellationToken = default)
+            => _terminalControl?.SendInputAsync(text, cancellationToken) ?? Task.CompletedTask;
+
+        /// <inheritdoc cref="TerminalControl.TextDecorations"/>
+        public TextDecorationLocation? TextDecorations
+        {
+            get => GetValue(TextDecorationsProperty);
+            set => SetValue(TextDecorationsProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorColorProperty"/>
+        public Color CursorColor
+        {
+            get => GetValue(CursorColorProperty);
+            set => SetValue(CursorColorProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorStyleProperty"/>
+        public XTerm.Common.CursorStyle CursorStyle
+        {
+            get => GetValue(CursorStyleProperty);
+            set => SetValue(CursorStyleProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorBlinkProperty"/>
+        public bool CursorBlink
+        {
+            get => GetValue(CursorBlinkProperty);
+            set => SetValue(CursorBlinkProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorBlinkRateProperty"/>
+        public int CursorBlinkRate
+        {
+            get => GetValue(CursorBlinkRateProperty);
+            set => SetValue(CursorBlinkRateProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalControl.ViewportY"/>
+        public int ViewportY
+        {
+            get => _terminalControl?.ViewportY ?? 0;
+            set { if (_terminalControl != null) _terminalControl.ViewportY = value; }
+        }
+
+        /// <inheritdoc cref="TerminalView.MaxScrollback"/>
+        public int MaxScrollback => _terminalControl?.MaxScrollback ?? 0;
+
+        /// <inheritdoc cref="TerminalControl.ViewportLines"/>
+        public int ViewportLines => _terminalControl?.ViewportLines ?? 0;
+
+        /// <inheritdoc cref="TerminalControl.IsAlternateBuffer"/>
+        public bool IsAlternateBuffer => _terminalControl?.IsAlternateBuffer ?? false;
+
+        /// <inheritdoc cref="TerminalControl.CopyAsync"/>
+        public Task<bool> CopyAsync() => _terminalControl?.CopyAsync() ?? Task.FromResult(false);
+
+        /// <inheritdoc cref="TerminalControl.PasteAsync"/>
+        public Task PasteAsync() => _terminalControl?.PasteAsync() ?? Task.CompletedTask;
+
+        /// <inheritdoc cref="TerminalView.AttachConnection"/>
+        public void AttachConnection(Porta.Pty.IPtyConnection connection)
+        {
+            EnsureTerminalControl();
+            _terminalControl!.AttachConnection(connection);
+        }
+
+        /// <inheritdoc cref="TerminalView.DetachConnection"/>
+        public Porta.Pty.IPtyConnection? DetachConnection() => _terminalControl?.DetachConnection();
+
+        /// <inheritdoc cref="TerminalView.IsLive"/>
+        public bool IsLive => _terminalControl?.IsLive ?? false;
 
         /// <inheritdoc cref="TerminalControl.BeginReparent"/>
         public void BeginReparent() => _terminalControl?.BeginReparent();
@@ -355,6 +455,11 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
             _terminalControl.Bind(TerminalControl.VerbatimCommandLineProperty, this.GetObservable(VerbatimCommandLineProperty));
             _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
+            _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
+            _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
+            _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
+            _terminalControl.Bind(TerminalControl.CursorBlinkProperty, this.GetObservable(CursorBlinkProperty));
+            _terminalControl.Bind(TerminalControl.CursorBlinkRateProperty, this.GetObservable(CursorBlinkRateProperty));
 
             Content = _terminalControl;
         }

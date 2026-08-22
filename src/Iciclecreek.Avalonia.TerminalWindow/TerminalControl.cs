@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Iciclecreek.Terminal
@@ -82,6 +83,29 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalControl, IDictionary<string, string>?>(
                 nameof(EnvironmentVariables),
                 defaultValue: null);
+
+        // Cursor appearance. Real StyledProperties with the same defaults as TerminalView's, reaching the
+        // view through the template — a forwarder would drop anything set before the template applied, which
+        // for appearance properties is most of the time.
+        public static readonly StyledProperty<Color> CursorColorProperty =
+            AvaloniaProperty.Register<TerminalControl, Color>(
+                nameof(CursorColor),
+                defaultValue: Colors.White);
+
+        public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
+            AvaloniaProperty.Register<TerminalControl, XTerm.Common.CursorStyle>(
+                nameof(CursorStyle),
+                defaultValue: XTerm.Common.CursorStyle.Bar);
+
+        public static readonly StyledProperty<bool> CursorBlinkProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(CursorBlink),
+                defaultValue: true);
+
+        public static readonly StyledProperty<int> CursorBlinkRateProperty =
+            AvaloniaProperty.Register<TerminalControl, int>(
+                nameof(CursorBlinkRate),
+                defaultValue: 530);
 
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
@@ -206,6 +230,115 @@ namespace Iciclecreek.Terminal
         /// Terminates the running terminal process.
         /// </summary>
         public void Kill() => _terminalView!.Kill();
+
+        /// <inheritdoc cref="TerminalView.SendInputAsync"/>
+        /// <remarks>
+        /// Null-safe on the inner view deliberately. A host can hold a reference to this control before its
+        /// template has been applied, and a method that exists to inject text should not be the one that
+        /// throws a NullReferenceException for being called a moment early. Every forwarder below follows
+        /// the same rule.
+        /// </remarks>
+        public Task SendInputAsync(string text, CancellationToken cancellationToken = default)
+            => _terminalView?.SendInputAsync(text, cancellationToken) ?? Task.CompletedTask;
+
+        /// <summary>
+        /// Text decorations applied to terminal text.
+        /// </summary>
+        /// <remarks>
+        /// The static property was registered from the start but had no CLR property and no template
+        /// binding, so it was reachable from XAML, silently stored, and read by nothing. It compiled only
+        /// because <c>nameof(TextDecorations)</c> resolved to the <see cref="Avalonia.Media.TextDecorations"/>
+        /// static class rather than to a member of this type.
+        /// </remarks>
+        public TextDecorationLocation? TextDecorations
+        {
+            get => GetValue(TextDecorationsProperty);
+            set => SetValue(TextDecorationsProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorColorProperty"/>
+        public Color CursorColor
+        {
+            get => GetValue(CursorColorProperty);
+            set => SetValue(CursorColorProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorStyleProperty"/>
+        public XTerm.Common.CursorStyle CursorStyle
+        {
+            get => GetValue(CursorStyleProperty);
+            set => SetValue(CursorStyleProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorBlinkProperty"/>
+        public bool CursorBlink
+        {
+            get => GetValue(CursorBlinkProperty);
+            set => SetValue(CursorBlinkProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CursorBlinkRateProperty"/>
+        public int CursorBlinkRate
+        {
+            get => GetValue(CursorBlinkRateProperty);
+            set => SetValue(CursorBlinkRateProperty, value);
+        }
+
+        /// <summary>
+        /// The absolute line index of the top of the viewport. 0 is the top of the scrollback.
+        /// </summary>
+        /// <remarks>
+        /// Live state rather than configuration, so this forwards to the view instead of being a styled
+        /// property: there is nothing meaningful to remember for a terminal that does not exist yet. Reads
+        /// as 0 and ignores writes until the template has been applied.
+        /// </remarks>
+        public int ViewportY
+        {
+            get => _terminalView?.ViewportY ?? 0;
+            set { if (_terminalView != null) _terminalView.ViewportY = value; }
+        }
+
+        /// <inheritdoc cref="TerminalView.MaxScrollback"/>
+        public int MaxScrollback => _terminalView?.MaxScrollback ?? 0;
+
+        /// <summary>The number of lines visible in the viewport.</summary>
+        public int ViewportLines => _terminalView?.ViewportLines ?? 0;
+
+        /// <summary>
+        /// True while a full-screen application (vim, htop, less) is using the alternate screen buffer.
+        /// </summary>
+        public bool IsAlternateBuffer => _terminalView?.IsAlternateBuffer ?? false;
+
+        /// <summary>Copies the current selection to the clipboard. False when there was nothing selected.</summary>
+        public Task<bool> CopyAsync() => _terminalView?.CopyAsync() ?? Task.FromResult(false);
+
+        /// <summary>Pastes text from the clipboard into the terminal.</summary>
+        public Task PasteAsync() => _terminalView?.PasteAsync() ?? Task.CompletedTask;
+
+        /// <inheritdoc cref="TerminalView.AttachConnection"/>
+        /// <exception cref="InvalidOperationException">The template has not been applied yet.</exception>
+        /// <remarks>
+        /// This one throws rather than silently doing nothing, unlike the other forwarders. Handing over
+        /// ownership of a live PTY and having it quietly ignored would leave the caller believing a process
+        /// is being displayed when it is not — the failure is worth hearing about. <see cref="LaunchProcess()"/>
+        /// takes the same position for the same reason.
+        /// </remarks>
+        public void AttachConnection(Porta.Pty.IPtyConnection connection)
+        {
+            if (_terminalView == null)
+                ApplyTemplate();
+
+            if (_terminalView == null)
+                throw new InvalidOperationException("TerminalControl template has not been applied yet.");
+
+            _terminalView.AttachConnection(connection);
+        }
+
+        /// <inheritdoc cref="TerminalView.DetachConnection"/>
+        public Porta.Pty.IPtyConnection? DetachConnection() => _terminalView?.DetachConnection();
+
+        /// <inheritdoc cref="TerminalView.IsLive"/>
+        public bool IsLive => _terminalView?.IsLive ?? false;
 
         /// <summary>
         /// Call before removing this control from one visual tree and adding it to another

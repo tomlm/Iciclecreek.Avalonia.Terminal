@@ -27,6 +27,11 @@
                                        Args="{TemplateBinding Args}"
                                        BufferSize="{TemplateBinding BufferSize}"
                                        ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
+                                       TextDecorations="{TemplateBinding TextDecorations}"
+                                       CursorColor="{TemplateBinding CursorColor}"
+                                       CursorStyle="{TemplateBinding CursorStyle}"
+                                       CursorBlink="{TemplateBinding CursorBlink}"
+                                       CursorBlinkRate="{TemplateBinding CursorBlinkRate}"
                                        VerbatimCommandLine="{TemplateBinding VerbatimCommandLine}"
                                        EnvironmentVariables="{TemplateBinding EnvironmentVariables}"
                                        Options="{TemplateBinding Options}"/>

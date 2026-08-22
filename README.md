@@ -95,6 +95,16 @@ public partial class MainWindow : Window
 | `Foreground` | `IBrush` | `White` | Default text color |
 | `Background` | `IBrush` | `Black` | Terminal background color |
 | `SelectionBrush` | `IBrush` | Semi-transparent blue | Text selection highlight color |
+| `TextDecorations` | `TextDecorationLocation?` | `null` | Text decorations applied to terminal text |
+| `CursorColor` | `Color` | `White` | Cursor color |
+| `CursorStyle` | `CursorStyle` | `Bar` | Cursor shape — `Bar`, `Block` or `Underline` |
+| `CursorBlink` | `bool` | `true` | Whether the cursor blinks |
+| `CursorBlinkRate` | `int` | `530` | Blink interval in milliseconds |
+| `ViewportY` | `int` | Live | Absolute line index of the top of the viewport. Settable, to drive your own scrollbar |
+| `MaxScrollback` | `int` | Read-only | Largest valid `ViewportY` — total buffer lines minus visible lines |
+| `ViewportLines` | `int` | Read-only | Number of lines visible |
+| `IsAlternateBuffer` | `bool` | Read-only | True while a full-screen application (vim, htop, less) is using the alternate screen buffer |
+| `IsLive` | `bool` | Read-only | True while a PTY is attached and its process has not exited |
 
 **Methods:**
 
@@ -103,6 +113,11 @@ public partial class MainWindow : Window
 | `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
 | `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
 | `Kill()` | Terminates the running terminal process |
+| `SendInputAsync(string text, CancellationToken)` | Sends text to the running process as if typed. Sent verbatim, so append `\r` to submit a command: `SendInputAsync("ls -la\r")`. Does nothing when no process is running |
+| `CopyAsync()` | Copies the selection to the clipboard. Returns false when nothing was selected |
+| `PasteAsync()` | Pastes clipboard text into the terminal |
+| `AttachConnection(IPtyConnection)` | Drives the terminal from a PTY the caller owns. Throws if the template has not been applied |
+| `DetachConnection()` | Stops following the current connection and hands it back, without stopping the process |
 | `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
 
 **Events:**
@@ -161,6 +176,11 @@ terminalWindow.Show();
 | `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
 | `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
 | `Kill()` | Terminates the running terminal process |
+| `SendInputAsync(string text, CancellationToken)` | Sends text to the running process as if typed. Sent verbatim, so append `\r` to submit a command: `SendInputAsync("ls -la\r")`. Does nothing when no process is running |
+| `CopyAsync()` | Copies the selection to the clipboard. Returns false when nothing was selected |
+| `PasteAsync()` | Pastes clipboard text into the terminal |
+| `AttachConnection(IPtyConnection)` | Drives the terminal from a PTY the caller owns. Throws if the template has not been applied |
+| `DetachConnection()` | Stops following the current connection and hands it back, without stopping the process |
 | `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
 
 **Additional Properties (beyond TerminalControl):**
@@ -174,7 +194,7 @@ terminalWindow.Show();
 
 Window manipulation commands from the terminal (resize, move, minimize, maximize, raise, lower, fullscreen) are always handled. Handle the corresponding bubbling event from `TerminalView` and mark it `Handled` to suppress the default behaviour for any of them.
 
-`TerminalWindow` also exposes the whole of `TerminalControl`'s surface — `BufferSize`, `ShowCaretOnClick`, `VerbatimCommandLine`, `EnvironmentVariables`, `Terminal`, `Kill()`, `WaitForExit(int)`, `BeginReparent()` and `EndReparent()` — forwarding each to the control it hosts.
+`TerminalWindow` exposes everything `TerminalControl` does, forwarding each member to the control it hosts, and `TerminalControl` in turn exposes everything `TerminalView` does. A test walks all three surfaces by reflection and fails if they drift apart, so a member added to the view without a forwarder breaks the build rather than going unnoticed.
 
 **Events:**
 
