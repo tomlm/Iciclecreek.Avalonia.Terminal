@@ -186,6 +186,39 @@ public class ExitReportingTests
 
     // ── The relaunch race ───────────────────────────────────────────────────────────────────────
 
+
+    /// <summary>
+    /// <see cref="TerminalView.DetachConnection"/> gives the implicit detach a name: it hands the
+    /// connection back, leaves the process running, and leaves the view with nothing attached.
+    ///
+    /// <para>The assertions are the same three the attached-connection guard makes, which is the point —
+    /// the named operation and the side effect of cleanup must agree, or having both is worse than
+    /// having one.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task DetachConnection_hands_the_connection_back_alive() => RunAsync(async () =>
+    {
+        var view = new TerminalView();
+        var window = Show(view);
+        Pump(window);
+
+        var attached = new ParkedUntilReleased(realExitCode: 0);
+        view.AttachConnection(attached);
+        Assert.That(view.IsLive, Is.True, "the view was just handed a live connection");
+
+        var returned = view.DetachConnection();
+
+        Assert.That(returned, Is.SameAs(attached), "the caller gets back exactly what it handed over");
+        Assert.That(attached.Disposed, Is.False,
+            "detaching must not dispose — disposing a pty ends the child, which is the opposite of detaching");
+        Assert.That(view.IsLive, Is.False, "the view is following nothing now");
+        Assert.That(view.DetachConnection(), Is.Null, "nothing left to detach");
+
+        attached.Release();
+        await Task.Yield();
+        window.Close();
+    });
+
     /// <summary>
     /// A connection whose reader BLOCKS until it is released, then returns EOF — which is what a real one does
     /// when a relaunch disposes it out from under a parked read. On Unix the reader wraps a synchronous

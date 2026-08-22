@@ -2276,9 +2276,11 @@ namespace Iciclecreek.Terminal
         /// take one it did not create. A host that keeps connections alive across UI changes — a pane that is
         /// closed and reopened, a session moved between tabs, a process that must outlive the control showing
         /// it — has to own the <see cref="IPtyConnection"/> itself, and today there is no way to hand it over.</para>
-        /// <para>Ownership follows the caller. An attached connection is NOT killed when the view is cleaned
-        /// up: it is unsubscribed and disposed, which detaches this view without stopping the process behind
-        /// it. A connection the view spawned through <see cref="LaunchProcess()"/> is killed as before.</para>
+        /// <para>Ownership follows the caller. An attached connection is neither killed NOR disposed when the
+        /// view is cleaned up — it is unsubscribed and its reader stopped, which detaches this view without
+        /// stopping the process behind it. (Disposing would stop it: closing the pty ends the child on every
+        /// platform.) A connection the view spawned through <see cref="LaunchProcess()"/> is killed and disposed
+        /// as before. <see cref="DetachConnection"/> does the same thing on demand.</para>
         /// <para>It also makes the exit paths testable. A test can hand the view a connection whose child has
         /// exited but not yet been reaped — the window the EOF/reap handling exists for — and assert what gets
         /// reported, instead of racing a real shell and hoping to land in it.</para>
@@ -2297,6 +2299,40 @@ namespace Iciclecreek.Terminal
             InstallConnection(connection);
             connection.ProcessExited += OnPtyProcessExited;
             _ = Task.Run(() => ReadPtyOutputAsync(connection, _processCts.Token), _processCts.Token);
+        }
+
+        /// <summary>
+        /// Stop following the current connection and hand it back, without stopping the process behind it.
+        /// </summary>
+        /// <returns>The connection that was detached, or <c>null</c> if none was attached.</returns>
+        /// <remarks>
+        /// <para>Detaching already happens implicitly — closing the view, or attaching a replacement, does it —
+        /// but only as a side effect of cleanup, where it is easy to get wrong. It was wrong here until
+        /// recently: cleanup disposed the connection and a comment called that the detach, when disposing is
+        /// what ends the child. Giving the operation a name is what makes that mistake visible next time.</para>
+        /// <para>Ownership passes to the caller for whatever it returns, including a connection this view
+        /// spawned itself — detaching one of those hands over a process the view would otherwise have killed,
+        /// so the caller must dispose it when done. The view is left with nothing attached and
+        /// <see cref="IsLive"/> false.</para>
+        /// </remarks>
+        public IPtyConnection? DetachConnection()
+        {
+            IPtyConnection? connection;
+            lock (_exitGate)
+            {
+                connection = _ptyConnection;
+            }
+
+            if (connection is null)
+            {
+                return null;
+            }
+
+            // Marked external BEFORE cleanup, which is what makes cleanup let it live: the same flag the
+            // attach path sets, meaning exactly the same thing — this process is somebody else's now.
+            _externalConnection = true;
+            CleanupProcess();
+            return connection;
         }
 
         /// <summary>True while the connection belongs to an outside owner — see <see cref="AttachConnection"/>.</summary>
