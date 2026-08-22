@@ -110,9 +110,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
-        /// <inheritdoc cref="TerminalView.UrlClicked"/>
         /// <inheritdoc cref="TerminalView.OutputReceived"/>
         public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
+        /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
         /// <summary>

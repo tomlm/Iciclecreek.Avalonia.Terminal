@@ -293,18 +293,30 @@ public class OutputReceivedTests
     /// The opt-in has to be a STYLED property on the wrapper, not a forwarder onto the inner view: a
     /// forwarder drops anything set before the template runs, which is the normal timing for XAML attributes
     /// and object initialisers — leaving a consumer on UI-thread delivery having asked for the read task.
+    ///
+    /// <para>Asserted on the DELIVERY THREAD rather than by reading the property back. Reading it back only
+    /// proves the wrapper's own styled property holds the value, which it does whether or not anything
+    /// carries it to the inner view — so that version passes with the template binding in Generic.axaml
+    /// deleted, which is the single line this test exists to protect.</para>
     /// </summary>
     [AvaloniaTest]
-    public void TerminalControl_keeps_the_opt_in_set_before_its_template_runs()
+    public Task TerminalControl_carries_the_opt_in_set_before_its_template_runs() => Run(async () =>
     {
         var control = new TerminalControl { Process = "", OutputReceivedOnReadTask = true };
         Assert.That(control.OutputReceivedOnReadTask, Is.True, "set before the template is applied");
 
         var window = Show(control);
-        Assert.That(control.OutputReceivedOnReadTask, Is.True, "and still true once it has");
+
+        bool? onUiThread = null;
+        control.OutputReceived += (_, _) => onUiThread ??= Dispatcher.UIThread.CheckAccess();
+
+        control.AttachConnection(new ScriptedOutput("anything"));
+
+        await WaitUntil(() => onUiThread is not null, "the event was raised");
+        Assert.That(onUiThread, Is.False, "the opt-in reached the inner view, not just the wrapper");
 
         window.Close();
-    }
+    });
 
     private static Task Run(Func<Task> body) => body();
 }
