@@ -262,6 +262,34 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// When <see langword="true"/>, <see cref="OutputReceived"/> is raised directly on the background
+        /// read task instead of being marshalled to the UI thread. Default is <see langword="false"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Opt in when latency and ordering matter more than convenience — matching a dev server's
+        /// "listening on :port" line to know when to open a browser, say. The dispatcher hop coalesces
+        /// chunks and delivers them a frame or more late, which is fine for logging and not fine for that.</para>
+        /// <para>The cost is that a handler then runs on the read task and MUST NOT touch UI without
+        /// marshalling itself, and must not block — the loop that raises it is the one pumping output, so a
+        /// slow handler stalls the terminal. The default is the safe one for exactly that reason.</para>
+        /// </remarks>
+        public static readonly StyledProperty<bool> OutputReceivedOnReadTaskProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(OutputReceivedOnReadTask),
+                defaultValue: false);
+
+        /// <inheritdoc cref="OutputReceivedOnReadTaskProperty"/>
+        public bool OutputReceivedOnReadTask
+        {
+            get => GetValue(OutputReceivedOnReadTaskProperty);
+            set => SetValue(OutputReceivedOnReadTaskProperty, value);
+        }
+
+        // Styled properties are UI-thread-affine, so the read task reads this mirror rather than the
+        // property. Kept in step by OnPropertyChanged.
+        private volatile bool _outputOnReadTask;
+
+        /// <summary>
         /// When <see langword="false"/> (default), each entry in <see cref="Args"/> reaches the process as a
         /// distinct argument, quoted as necessary so it arrives exactly as written. Set to
         /// <see langword="true"/> to hand the process one command line built by joining the entries with
@@ -471,10 +499,10 @@ namespace Iciclecreek.Terminal
         /// Event raised for each chunk of output the terminal receives from the PTY process.
         /// </summary>
         /// <remarks>
-        /// <para>Raised on the UI THREAD, so a handler may touch UI directly. The cost is that chunks
-        /// arrive marshalled and slightly late; a consumer that needs the tightest possible latency —
-        /// matching a dev server's "listening on :port" line, say — is better served reading the buffer
-        /// itself than by this event.</para>
+        /// <para>Raised on the UI THREAD by default, so a handler may touch UI directly. The cost is that
+        /// chunks arrive marshalled and slightly late; a consumer that needs the tightest possible latency —
+        /// matching a dev server's "listening on :port" line, say — can set
+        /// <see cref="OutputReceivedOnReadTask"/> and take delivery on the read task instead.</para>
         /// <para>The payload is UTF-8 decoded TEXT, not raw bytes, and it is the text as it came off the
         /// pty: escape sequences included, chunked arbitrarily rather than by line.</para>
         /// <para>A throwing handler is caught and swallowed. An unhandled exception on the dispatcher would
@@ -592,6 +620,12 @@ namespace Iciclecreek.Terminal
             options.CursorStyle = CursorStyle;
             options.CursorBlink = CursorBlink;
             options.CursorBlinkRate = CursorBlinkRate;
+
+            // Same reason BufferSize is carried across below: OnPropertyChanged returns early until the
+            // emulator exists, so a value set in an object initialiser or an early template binding never
+            // reaches the mirror. Seeding here is what makes `new TerminalView { OutputReceivedOnReadTask
+            // = true }` actually take effect.
+            _outputOnReadTask = OutputReceivedOnReadTask;
 
             // BufferSize may already have been set — by a template binding, or by a host that configured the
             // view before it was initialised. The setter cannot reach the emulator that early because it does
@@ -978,6 +1012,10 @@ namespace Iciclecreek.Terminal
                     _cursorBlinkTimer.Stop();
                     _cursorBlinkOn = true;  // Reset to visible when blinking stops
                 }
+            }
+            else if (change.Property == OutputReceivedOnReadTaskProperty)
+            {
+                _outputOnReadTask = (bool)change.NewValue!;
             }
             else if (change.Property == CursorBlinkRateProperty)
             {
@@ -2679,17 +2717,34 @@ namespace Iciclecreek.Terminal
                     // covers the race where the last handler unsubscribes between here and delivery.
                     if (OutputReceived != null)
                     {
-                        Dispatcher.UIThread.Post(() =>
+                        if (_outputOnReadTask)
                         {
-                            // Same guard ShellReady uses: the callback can still be queued when a relaunch
-                            // swaps the process out underneath it, and without this a consumer sees the old
-                            // process's bytes attributed to the new one.
-                            if (_processCts?.Token != cancellationToken)
-                                return;
-
+                            // Straight through, on this thread. No staleness guard is needed here that the
+                            // loop does not already provide: the ReferenceEquals check in the while condition
+                            // means a loop reading for a replaced connection has already stopped, so there is
+                            // no queued callback that could outlive its process.
+                            //
+                            // The catch matters MORE on this path than on the dispatcher one, and for a
+                            // different reason: an escaping exception here propagates into ReadPtyOutputAsync
+                            // and ends the read loop, leaving a live process with a frozen view and nothing
+                            // reported.
                             try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
-                            catch { /* a sniffer must never take the app down */ }
-                        });
+                            catch { /* a sniffer must never kill the read loop */ }
+                        }
+                        else
+                        {
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                // Same guard ShellReady uses: the callback can still be queued when a relaunch
+                                // swaps the process out underneath it, and without this a consumer sees the old
+                                // process's bytes attributed to the new one.
+                                if (_processCts?.Token != cancellationToken)
+                                    return;
+
+                                try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
+                                catch { /* a sniffer must never take the app down */ }
+                            });
+                        }
                     }
 
                     // Snapshot before write so we can detect buffer growth (MaxScrollback

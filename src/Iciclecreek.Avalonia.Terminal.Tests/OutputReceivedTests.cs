@@ -227,5 +227,84 @@ public class OutputReceivedTests
         window.Close();
     });
 
+    // ── The read-task opt-in ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opted in, delivery happens on the read task rather than the dispatcher — which is the whole point:
+    /// no coalescing and no frame of latency for a consumer matching on output as it arrives.
+    /// </summary>
+    [AvaloniaTest]
+    public Task Opting_in_delivers_on_the_read_task() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "", OutputReceivedOnReadTask = true };
+        var window = Show(view);
+
+        bool? onUiThread = null;
+        view.OutputReceived += (_, _) => onUiThread ??= Dispatcher.UIThread.CheckAccess();
+
+        view.AttachConnection(new ScriptedOutput("anything"));
+
+        await WaitUntil(() => onUiThread is not null, "the event was raised");
+        Assert.That(onUiThread, Is.False, "opting in means the handler runs on the reader, not the dispatcher");
+
+        window.Close();
+    });
+
+    /// <summary>Default is off, so an existing subscriber keeps UI-thread delivery and stays safe.</summary>
+    [AvaloniaTest]
+    public void The_opt_in_defaults_to_off()
+    {
+        Assert.That(new TerminalView().OutputReceivedOnReadTask, Is.False);
+    }
+
+    /// <summary>
+    /// The catch has to hold on this path too, and for a different reason than on the dispatcher path: here an
+    /// escaping exception would propagate into the read loop and end it, freezing a view over a live process.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_throwing_subscriber_does_not_kill_the_read_loop() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "", OutputReceivedOnReadTask = true };
+        var window = Show(view);
+
+        var delivered = new List<string>();
+        view.OutputReceived += (_, e) =>
+        {
+            delivered.Add(e.Output);
+            throw new InvalidOperationException("a badly behaved sniffer");
+        };
+
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e.ExitCode);
+
+        view.AttachConnection(new ScriptedOutput("one", "two"));
+
+        await WaitUntil(() => delivered.Count >= 2, "the loop kept reading past the throw");
+        Assert.That(delivered, Is.EqualTo(new[] { "one", "two" }));
+
+        // The loop reaching EOF and reporting the exit is what proves it was never torn down.
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.That(done, Is.SameAs(exited.Task), "a throwing sniffer must not stop the reader reaching EOF");
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// The opt-in has to be a STYLED property on the wrapper, not a forwarder onto the inner view: a
+    /// forwarder drops anything set before the template runs, which is the normal timing for XAML attributes
+    /// and object initialisers — leaving a consumer on UI-thread delivery having asked for the read task.
+    /// </summary>
+    [AvaloniaTest]
+    public void TerminalControl_keeps_the_opt_in_set_before_its_template_runs()
+    {
+        var control = new TerminalControl { Process = "", OutputReceivedOnReadTask = true };
+        Assert.That(control.OutputReceivedOnReadTask, Is.True, "set before the template is applied");
+
+        var window = Show(control);
+        Assert.That(control.OutputReceivedOnReadTask, Is.True, "and still true once it has");
+
+        window.Close();
+    }
+
     private static Task Run(Func<Task> body) => body();
 }

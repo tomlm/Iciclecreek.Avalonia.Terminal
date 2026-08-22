@@ -181,6 +181,19 @@ namespace Iciclecreek.Terminal
             set => SetValue(ShowCaretOnClickProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.OutputReceivedOnReadTaskProperty"/>
+        public static readonly StyledProperty<bool> OutputReceivedOnReadTaskProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(OutputReceivedOnReadTask),
+                defaultValue: false);
+
+        /// <inheritdoc cref="OutputReceivedOnReadTaskProperty"/>
+        public bool OutputReceivedOnReadTask
+        {
+            get => GetValue(OutputReceivedOnReadTaskProperty);
+            set => SetValue(OutputReceivedOnReadTaskProperty, value);
+        }
+
         /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
         public bool VerbatimCommandLine
         {
@@ -456,6 +469,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
+            _terminalControl.Bind(TerminalControl.OutputReceivedOnReadTaskProperty, this.GetObservable(OutputReceivedOnReadTaskProperty));
             _terminalControl.Bind(TerminalControl.VerbatimCommandLineProperty, this.GetObservable(VerbatimCommandLineProperty));
             _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));

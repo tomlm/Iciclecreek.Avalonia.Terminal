@@ -27,6 +27,7 @@
                                        Args="{TemplateBinding Args}"
                                        BufferSize="{TemplateBinding BufferSize}"
                                        ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
+                                       OutputReceivedOnReadTask="{TemplateBinding OutputReceivedOnReadTask}"
                                        TextDecorations="{TemplateBinding TextDecorations}"
                                        CursorColor="{TemplateBinding CursorColor}"
                                        CursorStyle="{TemplateBinding CursorStyle}"

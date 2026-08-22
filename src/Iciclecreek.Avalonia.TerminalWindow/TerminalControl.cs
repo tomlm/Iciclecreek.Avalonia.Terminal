@@ -362,6 +362,25 @@ namespace Iciclecreek.Terminal
             set => SetValue(ShowCaretOnClickProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.OutputReceivedOnReadTaskProperty"/>
+        /// <remarks>
+        /// Styled and template-bound to PART_TerminalView rather than forwarded onto the inner view. A
+        /// forwarder drops any value assigned before the template runs — the normal timing for XAML
+        /// attributes, styles and object initialisers — which for this property would silently leave a
+        /// consumer on UI-thread delivery having asked for the read task.
+        /// </remarks>
+        public static readonly StyledProperty<bool> OutputReceivedOnReadTaskProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(OutputReceivedOnReadTask),
+                defaultValue: false);
+
+        /// <inheritdoc cref="OutputReceivedOnReadTaskProperty"/>
+        public bool OutputReceivedOnReadTask
+        {
+            get => GetValue(OutputReceivedOnReadTaskProperty);
+            set => SetValue(OutputReceivedOnReadTaskProperty, value);
+        }
+
         /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
         public bool VerbatimCommandLine
         {
