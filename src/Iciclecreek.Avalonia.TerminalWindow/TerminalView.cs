@@ -690,6 +690,26 @@ namespace Iciclecreek.Terminal
         public void Kill() => _ptyConnection?.Kill();
 
         /// <summary>
+        /// Sends text to the running process, exactly as if it had been typed at the keyboard.
+        /// </summary>
+        /// <param name="text">The text to send. Sent verbatim — see the remarks about Enter.</param>
+        /// <param name="cancellationToken">Cancels the write.</param>
+        /// <remarks>
+        /// <para>The text is sent as-is, so a command is not submitted until you send a carriage return:
+        /// <c>SendInputAsync("ls -la\r")</c>. Use <c>\r</c> rather than <c>\n</c> — that is what a terminal
+        /// sends when Enter is pressed, and what a shell's line editor is waiting for.</para>
+        /// <para>Does nothing when no process is running, rather than throwing, which matches
+        /// <see cref="Kill"/> and keeps a host from having to guard every call against a terminal whose
+        /// process has already exited. Writes are serialised against the view's own keyboard input, so
+        /// injected text cannot interleave with a keystroke mid-sequence.</para>
+        /// <para>Safe to call from any thread: it touches no Avalonia properties.</para>
+        /// <para>Requested in #19, where the workaround in the wild was reflection over this type's private
+        /// members — which is its own argument for the method existing.</para>
+        /// </remarks>
+        public Task SendInputAsync(string text, CancellationToken cancellationToken = default)
+            => SendToPtyAsync(text, cancellationToken);
+
+        /// <summary>
         /// Pastes text from the clipboard into the terminal.
         /// </summary>
         public async Task PasteAsync()
@@ -906,6 +926,14 @@ namespace Iciclecreek.Terminal
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
             base.OnPropertyChanged(change);
+
+            // _terminal and _cursorBlinkTimer are built in OnInitialized, and a cursor property can arrive
+            // before that: the control template applies its bindings while the view is still initialising.
+            // Nothing set these that early until TerminalControl began forwarding them, at which point this
+            // threw a NullReferenceException from inside Avalonia's property machinery. Skipping here loses
+            // nothing, because OnInitialized reads the current values when it builds the emulator.
+            if (_terminal == null || _cursorBlinkTimer == null)
+                return;
 
             if (change.Property == CursorStyleProperty)
             {

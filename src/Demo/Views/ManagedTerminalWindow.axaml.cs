@@ -208,6 +208,10 @@ namespace Demo.Views
             Content = _terminalControl;
         }
 
+        /// <inheritdoc cref="TerminalView.SendInputAsync"/>
+        public System.Threading.Tasks.Task SendInputAsync(string text, System.Threading.CancellationToken cancellationToken = default)
+            => _terminalControl?.SendInputAsync(text, cancellationToken) ?? System.Threading.Tasks.Task.CompletedTask;
+
         private void OnOpened(object? sender, EventArgs e)
         {
             RestoreTerminalFocus();
