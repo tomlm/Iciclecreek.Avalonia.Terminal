@@ -1267,12 +1267,19 @@ namespace Iciclecreek.Terminal
         // True when the key is a modifier pressed on its own (no associated character),
         // e.g. the ⌘/Ctrl/Shift/Alt keys. Used so a bare modifier press doesn't clear
         // an active selection before the rest of a copy shortcut is typed.
+        //
+        // The lock keys belong here by the same test this list already applies — they produce no character,
+        // so pressing one is not typing — and they were simply missed. They matter more now than they did
+        // when the list was written, because auto-scroll also resumes on anything not in it: with them
+        // absent, tapping CapsLock while reading scrollback both drops the selection and jumps the view
+        // back to the prompt.
         private static bool IsModifierKey(Key key) => key switch
         {
             Key.LeftShift or Key.RightShift or
             Key.LeftCtrl or Key.RightCtrl or
             Key.LeftAlt or Key.RightAlt or
-            Key.LWin or Key.RWin => true,
+            Key.LWin or Key.RWin or
+            Key.CapsLock or Key.NumLock or Key.Scroll => true,
             _ => false,
         };
 
@@ -1397,6 +1404,29 @@ namespace Iciclecreek.Terminal
                 {
                     e.Handled = true;
                     await PasteAsync();
+                    return;
+                }
+
+                // Every other Meta chord belongs to the APPLICATION, not the shell. The macOS block above
+                // claims Cmd+C and Cmd+V; anything else fell straight through to the character path below
+                // and was typed into the process, so a host binding Cmd+K quietly sent the shell a "k".
+                // Left unhandled so it bubbles to the app's key bindings.
+                if ((e.KeyModifiers & KeyModifiers.Meta) != 0)
+                    return;
+
+                // Alt/Ctrl + Left/Right — "move by word". What the emulator generates for these is a
+                // modified-cursor sequence (ESC[1;3D, ESC[1;5D) that no default shell keymap binds, so zsh
+                // echoes the ";3D" tail straight into the command line. ESC-b / ESC-f — backward-word and
+                // forward-word — is what zsh, bash's readline, fish and PSReadLine's default emacs mode all
+                // bind out of the box, so that is what these chords send.
+                //
+                // Left alone in the alternate buffer, where a full-screen app reads the real sequence itself.
+                if (e.Key is Key.Left or Key.Right
+                    && e.KeyModifiers is KeyModifiers.Alt or KeyModifiers.Control
+                    && !_terminal.IsAlternateBufferActive)
+                {
+                    e.Handled = true;
+                    await SendToPtyAsync(e.Key == Key.Left ? "\u001bb" : "\u001bf").ConfigureAwait(false);
                     return;
                 }
 
@@ -2601,7 +2631,18 @@ namespace Iciclecreek.Terminal
             // — subscribing after the reader starts is a window in which it is missed entirely.
             InstallConnection(connection);
             connection.ProcessExited += OnPtyProcessExited;
-            _ = Task.Run(() => ReadPtyOutputAsync(connection, _processCts.Token), _processCts.Token);
+            // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
+            //
+            // No readiness wait here, unlike the spawn path, and that is deliberate. AttachConnection is
+            // synchronous and called from the UI thread; blocking it for up to five seconds would freeze the
+            // app to protect against losing a few bytes. Subscribing above already removes the part that
+            // matters — an exit can no longer be missed — and for an attached connection the caller already
+            // owned it, so output from before the attach was never ours to catch.
+            _ = Task.Factory.StartNew(
+                () => ReadPtyOutputAsync(connection, _processCts.Token),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default);
         }
 
         /// <summary>
@@ -2722,9 +2763,28 @@ namespace Iciclecreek.Terminal
                 // Subscribe to process exit event for reliable exit detection
                 spawned.ProcessExited += OnPtyProcessExited;
 
-                // Start reading from the PTY connection. The loop is handed THIS connection so a
-                // relaunch cannot redirect it onto the next one — see ReadPtyOutputAsync.
-                _ = Task.Run(async () => await ReadPtyOutputAsync(spawned, _processCts.Token), _processCts.Token);
+                // Start reading from the PTY connection, and do not continue until the loop is actually
+                // reading. The loop is handed THIS connection so a relaunch cannot redirect it onto the next
+                // one — see ReadPtyOutputAsync.
+                //
+                // The process is already running the moment SpawnAsync returns, so every instant before the
+                // first read is a window in which it can write, finish, and have its output discarded. A
+                // shell that exits immediately loses EVERYTHING; one that lives loses its opening prompt and
+                // banner, which presents as a pane that opened blank.
+                //
+                // Measured downstream over the same Porta.Pty layer: starting 24 short-lived shells at once
+                // lost 23 of 24 outputs entirely while reporting a clean exit 0. It never reproduced on an
+                // idle developer machine and was near-total on a contended CI box.
+                var readerUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = Task.Factory.StartNew(
+                    () => ReadPtyOutputAsync(spawned, _processCts.Token, readerUp),
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                    TaskScheduler.Default);
+
+                // Bounded and never fatal: if the reader cannot start, the terminal behaves exactly as it
+                // used to rather than hanging the caller that opened it.
+                await Task.WhenAny(readerUp.Task, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(true);
             }
             catch (Exception ex)
             {
@@ -2758,8 +2818,18 @@ namespace Iciclecreek.Terminal
         /// on it, reading its exit code, and claiming the exit interlock LaunchProcess had just
         /// reset for it, which swallows that process's own exit.
         /// </param>
-        private async Task ReadPtyOutputAsync(IPtyConnection connection, CancellationToken cancellationToken)
+        private async Task ReadPtyOutputAsync(
+            IPtyConnection connection, CancellationToken cancellationToken, TaskCompletionSource? up = null)
         {
+            // Raised BEFORE the first read, and deliberately not after one. Signalling after a read would
+            // make readiness depend on the process PRODUCING output, so a shell that prints nothing on
+            // startup would never signal and every launch would pay the full five-second wait. The guarantee
+            // wanted is only that the loop is running and the next thing it does is read.
+            //
+            // The window this leaves — between the signal and the read — is closed by the caller subscribing
+            // to ProcessExited before starting the loop, so an exit landing in it is still seen.
+            up?.TrySetResult();
+
             try
             {
                 var buffer = new byte[0x40000];
@@ -2771,7 +2841,23 @@ namespace Iciclecreek.Terminal
 
                 while (!cancellationToken.IsCancellationRequested && ReferenceEquals(_ptyConnection, connection))
                 {
-                    var bytesRead = await connection.ReaderStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                    // SYNCHRONOUS, on the thread StartNew handed this loop. `await ReadAsync` undid the
+                    // LongRunning hint entirely: LongRunning owns a dedicated thread only up to the first
+                    // await that YIELDS, and every continuation after that is scheduled on the THREAD POOL.
+                    // Worse, the stream underneath is a FileStream opened isAsync: false on Windows, whose
+                    // ReadAsync performs no overlapped I/O — it parks a POOL thread in a blocking read for
+                    // the whole life of the process, because ConPTY does not signal EOF while the
+                    // pseudoconsole is open.
+                    //
+                    // Measured downstream over the same layer, 24 concurrent short-lived processes on a
+                    // 4-vCPU box: time-to-first-output was 137 ms with a dedicated thread and 7546 ms
+                    // pooled, and under load the pooled form lost output entirely rather than merely
+                    // delaying it. A blocking read on a thread we own cannot be starved, and costs one
+                    // thread per terminal — which the pooled form was already costing, minus the scheduling.
+                    //
+                    // Cancellation is by teardown rather than by token: disposing the connection closes the
+                    // stream and the blocking read throws, which the catch below handles.
+                    var bytesRead = connection.ReaderStream.Read(buffer, 0, buffer.Length);
                     if (bytesRead == 0)
                     {
                         // Process has exited — fallback in case OnPtyProcessExited didn't fire first.
