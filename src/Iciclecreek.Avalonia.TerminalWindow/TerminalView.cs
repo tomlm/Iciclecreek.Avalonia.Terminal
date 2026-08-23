@@ -124,6 +124,12 @@ namespace Iciclecreek.Terminal
         // a cross-thread GetValue. Kept in step by OnPropertyChanged.
         private volatile bool _autoScroll = true;
 
+        // Keyboard selection. Both are CARET BOUNDARY ordinals — `row * Cols + col` counting the gaps
+        // between cells, not the cells themselves — so Shift+Right from a fresh cursor selects exactly one
+        // cell instead of two. Null anchor = no keyboard selection in flight.
+        private int? _kbSelAnchor;
+        private int _kbSelFocus;
+
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
@@ -1452,6 +1458,16 @@ namespace Iciclecreek.Terminal
                 if (!IsModifierKey(e.Key))
                     FollowTail();
 
+                // Shift + navigation extends a selection in the buffer rather than sending the modified
+                // cursor sequence (ESC[1;2C and friends), which no interactive shell binds — zsh just
+                // echoes the ";2C" tail into the command line. Must come BEFORE the blanket clear below,
+                // since this is the one keystroke family that GROWS a selection instead of dropping it.
+                if (TryExtendKeyboardSelection(e))
+                {
+                    e.Handled = true;
+                    return;
+                }
+
                 // Clear selection for any other keystroke - but ignore bare modifier
                 // presses. Pressing ⌘/Ctrl/Shift on its own fires a KeyDown before the
                 // shortcut's letter arrives; clearing here would lose the selection
@@ -1459,6 +1475,7 @@ namespace Iciclecreek.Terminal
                 if (_terminal.Selection.HasSelection && !IsModifierKey(e.Key))
                 {
                     _terminal.Selection.ClearSelection();
+                    _kbSelAnchor = null;
                     this.RequestInvalidate();
                 }
 
@@ -1566,6 +1583,73 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// Shift + arrows / Home / End extend a buffer selection from the cursor, the way a
+        /// text field does, instead of sending the modified-cursor escape sequence to the shell.
+        /// </summary>
+        /// <remarks>
+        /// Anchor and focus are caret BOUNDARIES (<c>row * Cols + col</c> over the gaps between cells), so
+        /// one Shift+Right covers one cell and collapsing back onto the anchor clears the selection —
+        /// exactly the arithmetic an editor does. The selection API itself is inclusive-cell, so the pair
+        /// is converted at the end.
+        ///
+        /// Left alone in the alternate buffer: full-screen apps (vim, less, a TUI agent) draw their own
+        /// selection and several bind Shift+arrow, so there the sequence still belongs to the app.
+        /// </remarks>
+        private bool TryExtendKeyboardSelection(KeyEventArgs e)
+        {
+            if (e.KeyModifiers != KeyModifiers.Shift)
+                return false;
+            if (_terminal.IsAlternateBufferActive)
+                return false;
+
+            int cols = Math.Max(1, _terminal.Cols);
+            int lastBoundary = cols * Math.Max(1, _terminal.Rows);
+
+            // A selection dropped by anything else (a click, a plain keystroke) re-anchors at the cursor.
+            if (_kbSelAnchor is null || !_terminal.Selection.HasSelection)
+            {
+                int cursorRow = Math.Clamp(
+                    _terminal.Buffer.YBase + _terminal.Buffer.Y - _terminal.Buffer.ViewportY,
+                    0, Math.Max(0, _terminal.Rows - 1));
+                int cursorOrd = Math.Clamp(cursorRow * cols + _terminal.Buffer.X, 0, lastBoundary);
+                _kbSelAnchor = cursorOrd;
+                _kbSelFocus = cursorOrd;
+            }
+
+            int focus = _kbSelFocus;
+            switch (e.Key)
+            {
+                case Key.Left: focus -= 1; break;
+                case Key.Right: focus += 1; break;
+                case Key.Up: focus -= cols; break;
+                case Key.Down: focus += cols; break;
+                case Key.Home: focus -= focus % cols; break;
+                case Key.End: focus += cols - (focus % cols); break;
+                default: return false;
+            }
+
+            _kbSelFocus = Math.Clamp(focus, 0, lastBoundary);
+
+            int anchor = _kbSelAnchor.Value;
+            if (_kbSelFocus == anchor)
+            {
+                _terminal.Selection.ClearSelection();
+            }
+            else
+            {
+                // Boundaries → the inclusive run of cells between them.
+                int first = Math.Min(anchor, _kbSelFocus);
+                int last = Math.Max(anchor, _kbSelFocus) - 1;
+                _terminal.Selection.StartSelection(first % cols, first / cols, XT.Selection.SelectionMode.Normal);
+                _terminal.Selection.UpdateSelection(last % cols, last / cols);
+                _terminal.Selection.EndSelection();
+            }
+
+            this.RequestInvalidate();
+            return true;
+        }
+
         protected override async void OnKeyUp(KeyEventArgs e)
         {
             // Only process input if this terminal has focus
@@ -1636,6 +1720,7 @@ namespace Iciclecreek.Terminal
             if (_terminal.Selection.HasSelection)
             {
                 _terminal.Selection.ClearSelection();
+                _kbSelAnchor = null;
                 this.RequestInvalidate();
             }
 
@@ -1665,6 +1750,11 @@ namespace Iciclecreek.Terminal
                 var point = e.GetPosition(this);
                 var col = (int)(point.X / _charWidth);
                 var row = (int)(point.Y / _charHeight);
+
+                // Any press hands selection back to the mouse — a later Shift+arrow re-anchors at the
+                // cursor rather than extending whatever the pointer just drew. FIRST, so it still runs
+                // when the Ctrl+Click path below returns early.
+                _kbSelAnchor = null;
 
                 // Ctrl+Click on a URL. Resolved from the press position rather than the hover state,
                 // which goes stale whenever the viewport moves without the pointer (wheel scroll, new
