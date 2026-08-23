@@ -195,6 +195,25 @@ namespace Iciclecreek.Terminal
             set => SetValue(OutputReceivedOnReadTaskProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.AutoScrollToBottomProperty"/>
+        public static readonly StyledProperty<bool> AutoScrollToBottomProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(AutoScrollToBottom),
+                defaultValue: true);
+
+        /// <inheritdoc cref="AutoScrollToBottomProperty"/>
+        public bool AutoScrollToBottom
+        {
+            get => GetValue(AutoScrollToBottomProperty);
+            set => SetValue(AutoScrollToBottomProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.IsFollowingTail"/>
+        public bool IsFollowingTail => _terminalControl?.IsFollowingTail ?? true;
+
+        /// <inheritdoc cref="TerminalView.FollowTail"/>
+        public void FollowTail() => _terminalControl?.FollowTail();
+
         /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
         public bool VerbatimCommandLine
         {
@@ -471,6 +490,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
             _terminalControl.Bind(TerminalControl.OutputReceivedOnReadTaskProperty, this.GetObservable(OutputReceivedOnReadTaskProperty));
+            _terminalControl.Bind(TerminalControl.AutoScrollToBottomProperty, this.GetObservable(AutoScrollToBottomProperty));
             _terminalControl.Bind(TerminalControl.VerbatimCommandLineProperty, this.GetObservable(VerbatimCommandLineProperty));
             _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));

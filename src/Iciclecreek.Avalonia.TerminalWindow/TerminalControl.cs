@@ -381,6 +381,31 @@ namespace Iciclecreek.Terminal
             set => SetValue(OutputReceivedOnReadTaskProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.AutoScrollToBottomProperty"/>
+        /// <remarks>
+        /// A styled property template-bound to PART_TerminalView, not a CLR forwarder onto the inner view.
+        /// A forwarder drops any value assigned before the template runs — the normal timing for XAML
+        /// attributes, styles and object initialisers — so <c>AutoScrollToBottom="False"</c> would silently
+        /// read back as <c>true</c>, and it could not be bound or styled at all.
+        /// </remarks>
+        public static readonly StyledProperty<bool> AutoScrollToBottomProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(AutoScrollToBottom),
+                defaultValue: true);
+
+        /// <inheritdoc cref="AutoScrollToBottomProperty"/>
+        public bool AutoScrollToBottom
+        {
+            get => GetValue(AutoScrollToBottomProperty);
+            set => SetValue(AutoScrollToBottomProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.IsFollowingTail"/>
+        public bool IsFollowingTail => _terminalView?.IsFollowingTail ?? true;
+
+        /// <inheritdoc cref="TerminalView.FollowTail"/>
+        public void FollowTail() => _terminalView?.FollowTail();
+
         /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
         public bool VerbatimCommandLine
         {
