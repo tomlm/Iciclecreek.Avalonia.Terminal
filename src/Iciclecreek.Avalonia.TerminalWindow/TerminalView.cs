@@ -3560,6 +3560,12 @@ namespace Iciclecreek.Terminal
                     x += cell.Width;  // Move past wide character and its placeholder
                 }
 
+                // A ZWJ sequence spans several cells with the joiner tacked onto all but the last, so the run
+                // collected above can be only the first component of one glyph. Pull in the rest before
+                // shaping — otherwise HarfBuzz never sees the cluster and a family emoji draws as separate
+                // people. Applies to both branches: ❤️‍🔥 starts in a width-1 cell and continues into a wide one.
+                text = GraphemeRuns.AbsorbJoinedCells(line, _terminal.Cols, cell, text, ref x, ref cellCount);
+
                 var startX = Snap(runStartX * _charWidth, scale);
                 var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                 var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
