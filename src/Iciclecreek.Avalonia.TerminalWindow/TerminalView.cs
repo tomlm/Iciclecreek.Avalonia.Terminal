@@ -1286,6 +1286,29 @@ namespace Iciclecreek.Terminal
                     return;
                 }
 
+                // Every other Meta chord belongs to the APPLICATION, not the shell. The macOS block above
+                // claims Cmd+C and Cmd+V; anything else fell straight through to the character path below
+                // and was typed into the process, so a host binding Cmd+K quietly sent the shell a "k".
+                // Left unhandled so it bubbles to the app's key bindings.
+                if ((e.KeyModifiers & KeyModifiers.Meta) != 0)
+                    return;
+
+                // Alt/Ctrl + Left/Right — "move by word". What the emulator generates for these is a
+                // modified-cursor sequence (ESC[1;3D, ESC[1;5D) that no default shell keymap binds, so zsh
+                // echoes the ";3D" tail straight into the command line. ESC-b / ESC-f — backward-word and
+                // forward-word — is what zsh, bash's readline, fish and PSReadLine's default emacs mode all
+                // bind out of the box, so that is what these chords send.
+                //
+                // Left alone in the alternate buffer, where a full-screen app reads the real sequence itself.
+                if (e.Key is Key.Left or Key.Right
+                    && e.KeyModifiers is KeyModifiers.Alt or KeyModifiers.Control
+                    && !_terminal.IsAlternateBufferActive)
+                {
+                    e.Handled = true;
+                    await SendToPtyAsync(e.Key == Key.Left ? "\u001bb" : "\u001bf").ConfigureAwait(false);
+                    return;
+                }
+
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
                 var hasAlt = (modifiers & XT.Input.KeyModifiers.Alt) != 0;
 
