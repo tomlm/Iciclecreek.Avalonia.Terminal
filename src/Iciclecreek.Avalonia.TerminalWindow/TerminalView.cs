@@ -3425,6 +3425,14 @@ namespace Iciclecreek.Terminal
 
         private void RenderCursor(DrawingContext context, int viewportY, double scale)
         {
+            // No process, no cursor. The checks below are all about what the BUFFER says, and a buffer says
+            // the same thing whether or not anything is attached to it — so a view that has never launched,
+            // or whose process has exited, paints a block cursor in its top-left corner with nothing behind
+            // it. A cursor represents a shell waiting for input; when there is no shell there is nothing for
+            // it to represent, and offering one to type at is a lie.
+            if (!IsLive)
+                return;
+
             // Only show cursor if terminal wants it visible (controlled by escape sequences)
             if (!_terminal.CursorVisible)
                 return;
