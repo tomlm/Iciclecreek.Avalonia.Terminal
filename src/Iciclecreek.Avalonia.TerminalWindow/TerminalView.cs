@@ -1063,6 +1063,20 @@ namespace Iciclecreek.Terminal
         {
             base.OnDetachedFromLogicalTree(e);
 
+            // Mirror of the guard in OnAttachedToLogicalTree, which already notes that _terminal is null
+            // during initial attachment because OnInitialized has not fired yet. Attachment is NOTIFIED in
+            // that window, so a handler that re-parents the view on attach detaches it while the emulator
+            // still does not exist — and every unsubscribe below then throws.
+            //
+            // CleanupProcess still runs: a view can have been handed a connection through AttachConnection
+            // without ever having been initialised, and that connection still has to be let go.
+            if (_terminal == null)
+            {
+                if (!_suppressCleanupOnDetach)
+                    CleanupProcess();
+                return;
+            }
+
             _terminal.DataReceived -= OnTerminalDataReceived;
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
