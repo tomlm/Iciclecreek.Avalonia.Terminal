@@ -299,5 +299,58 @@ public class AutoScrollToBottomTests
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// A terminal that can pause its follow needs a way to resume it on demand — the "jump to bottom"
+    /// affordance a host shows once the user scrolls away. IsFollowingTail drives whether that affordance is
+    /// visible; FollowTail() is what it calls.
+    /// </summary>
+    [AvaloniaTest]
+    public Task FollowTail_returns_the_view_to_the_bottom() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        var connection = new PushConnection();
+        view.AttachConnection(connection);
+
+        await PushAndSettle(view, connection, Lines(200));
+        Assert.That(view.IsFollowingTail, Is.True, "a fresh view follows");
+
+        view.ViewportY = view.MaxScrollback - 50;
+        await PushAndSettle(view, connection, Lines(50, "more"));
+        Assert.That(view.IsFollowingTail, Is.False, "scrolling back stops the follow");
+
+        view.FollowTail();
+        Assert.That(view.ViewportY, Is.EqualTo(view.MaxScrollback), "and this puts it back");
+
+        await PushAndSettle(view, connection, Lines(50, "again"));
+        Assert.That(view.IsFollowingTail, Is.True, "following again, so new output drags the viewport");
+        Assert.That(view.ViewportY, Is.EqualTo(view.MaxScrollback));
+
+        connection.Done();
+        window.Close();
+    });
+
+    /// <summary>
+    /// The guards are the reason this is a method rather than "set ViewportY yourself": with auto-scroll off
+    /// the host owns the viewport, and a jump-to-bottom button must not quietly take it back.
+    /// </summary>
+    [AvaloniaTest]
+    public Task FollowTail_is_a_no_op_when_auto_scroll_is_off() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "", AutoScrollToBottom = false };
+        var window = Show(view);
+        var connection = new PushConnection();
+        view.AttachConnection(connection);
+
+        await PushAndSettle(view, connection, Lines(200));
+        var before = view.ViewportY;
+
+        view.FollowTail();
+        Assert.That(view.ViewportY, Is.EqualTo(before), "auto-scroll off means the host owns the viewport");
+
+        connection.Done();
+        window.Close();
+    });
+
     private static Task Run(Func<Task> body) => body();
 }

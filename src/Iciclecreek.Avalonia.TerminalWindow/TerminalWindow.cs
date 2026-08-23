@@ -208,6 +208,12 @@ namespace Iciclecreek.Terminal
             set => SetValue(AutoScrollToBottomProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.IsFollowingTail"/>
+        public bool IsFollowingTail => _terminalControl?.IsFollowingTail ?? true;
+
+        /// <inheritdoc cref="TerminalView.FollowTail"/>
+        public void FollowTail() => _terminalControl?.FollowTail();
+
         /// <inheritdoc cref="TerminalView.VerbatimCommandLineProperty"/>
         public bool VerbatimCommandLine
         {

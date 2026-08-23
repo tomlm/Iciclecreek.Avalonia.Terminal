@@ -322,16 +322,6 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Return the view to the tail and resume following — what typing does implicitly. A no-op in the
-        /// alternate buffer, which has no scrollback of its own, and when auto-scroll is off.
-        /// </summary>
-        /// <remarks>
-        /// Deliberately NOT called from <c>SendToPtyAsync</c>. That writer is not limited to typed input —
-        /// it also carries mouse-tracking reports, terminal query responses and focus notifications — so
-        /// resuming there means merely moving the mouse over a mouse-reporting app snaps a user who is
-        /// reading scrollback back to the bottom. Only the keyboard entry points call this.
-        /// </remarks>
-        /// <summary>
         /// The scrollback ring dropped <paramref name="count"/> lines off the top, so every absolute index
         /// below shifted by that much. A following view is about to be scrolled to the bottom anyway; a view
         /// parked up in the scrollback is moved down by the same amount, so the content the user is reading
@@ -347,7 +337,29 @@ namespace Iciclecreek.Terminal
                 _terminal.Buffer.ViewportY = Math.Max(0, y - count);
         }
 
-        private void FollowTail()
+        /// <summary>
+        /// True while the view is following the tail — the state in which new output drags the viewport
+        /// along. Read it to drive a "jump to bottom" affordance's visibility.
+        /// </summary>
+        public bool IsFollowingTail => _followBottom;
+
+        /// <summary>
+        /// Return the view to the tail and resume following — what a host's "jump to bottom" affordance
+        /// calls, and what typing does implicitly. A no-op in the alternate buffer, which has no scrollback
+        /// of its own, and when <see cref="AutoScrollToBottom"/> is off.
+        /// </summary>
+        /// <remarks>
+        /// <para>Public because a terminal that can pause its follow needs a way to resume it on demand, and
+        /// the paired affordance — a button that appears once the user scrolls away — is the usual way that
+        /// is surfaced. A host can get most of the way there with <c>ViewportY = MaxScrollback</c>; what this
+        /// adds is the two guards, so the button does nothing rather than something surprising in the
+        /// alternate buffer or with auto-scroll off.</para>
+        /// <para>Deliberately NOT called from <c>SendToPtyAsync</c>. That writer is not limited to typed
+        /// input — it also carries mouse-tracking reports, terminal query responses and focus notifications
+        /// — so resuming there means merely moving the mouse over a mouse-reporting app snaps a user who is
+        /// reading scrollback back to the bottom. Only the keyboard entry points call it.</para>
+        /// </remarks>
+        public void FollowTail()
         {
             if (_isAlternateBuffer || !_autoScroll)
                 return;
