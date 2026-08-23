@@ -1166,12 +1166,19 @@ namespace Iciclecreek.Terminal
         // True when the key is a modifier pressed on its own (no associated character),
         // e.g. the ⌘/Ctrl/Shift/Alt keys. Used so a bare modifier press doesn't clear
         // an active selection before the rest of a copy shortcut is typed.
+        //
+        // The lock keys belong here by the same test this list already applies — they produce no character,
+        // so pressing one is not typing — and they were simply missed. They matter more now than they did
+        // when the list was written, because auto-scroll also resumes on anything not in it: with them
+        // absent, tapping CapsLock while reading scrollback both drops the selection and jumps the view
+        // back to the prompt.
         private static bool IsModifierKey(Key key) => key switch
         {
             Key.LeftShift or Key.RightShift or
             Key.LeftCtrl or Key.RightCtrl or
             Key.LeftAlt or Key.RightAlt or
-            Key.LWin or Key.RWin => true,
+            Key.LWin or Key.RWin or
+            Key.CapsLock or Key.NumLock or Key.Scroll => true,
             _ => false,
         };
 
@@ -1290,6 +1297,29 @@ namespace Iciclecreek.Terminal
                 {
                     e.Handled = true;
                     await PasteAsync();
+                    return;
+                }
+
+                // Every other Meta chord belongs to the APPLICATION, not the shell. The macOS block above
+                // claims Cmd+C and Cmd+V; anything else fell straight through to the character path below
+                // and was typed into the process, so a host binding Cmd+K quietly sent the shell a "k".
+                // Left unhandled so it bubbles to the app's key bindings.
+                if ((e.KeyModifiers & KeyModifiers.Meta) != 0)
+                    return;
+
+                // Alt/Ctrl + Left/Right — "move by word". What the emulator generates for these is a
+                // modified-cursor sequence (ESC[1;3D, ESC[1;5D) that no default shell keymap binds, so zsh
+                // echoes the ";3D" tail straight into the command line. ESC-b / ESC-f — backward-word and
+                // forward-word — is what zsh, bash's readline, fish and PSReadLine's default emacs mode all
+                // bind out of the box, so that is what these chords send.
+                //
+                // Left alone in the alternate buffer, where a full-screen app reads the real sequence itself.
+                if (e.Key is Key.Left or Key.Right
+                    && e.KeyModifiers is KeyModifiers.Alt or KeyModifiers.Control
+                    && !_terminal.IsAlternateBufferActive)
+                {
+                    e.Handled = true;
+                    await SendToPtyAsync(e.Key == Key.Left ? "\u001bb" : "\u001bf").ConfigureAwait(false);
                     return;
                 }
 
@@ -3451,6 +3481,14 @@ namespace Iciclecreek.Terminal
 
         private void RenderCursor(DrawingContext context, int viewportY, double scale)
         {
+            // No process, no cursor. The checks below are all about what the BUFFER says, and a buffer says
+            // the same thing whether or not anything is attached to it — so a view that has never launched,
+            // or whose process has exited, paints a block cursor in its top-left corner with nothing behind
+            // it. A cursor represents a shell waiting for input; when there is no shell there is nothing for
+            // it to represent, and offering one to type at is a lie.
+            if (!IsLive)
+                return;
+
             // Only show cursor if terminal wants it visible (controlled by escape sequences)
             if (!_terminal.CursorVisible)
                 return;
