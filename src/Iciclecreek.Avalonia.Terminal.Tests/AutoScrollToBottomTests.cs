@@ -41,22 +41,40 @@ public class AutoScrollToBottomTests
     }
 
     /// <summary>A stream the test feeds on demand; Read blocks until something is pushed or it is closed.</summary>
+    /// <remarks>
+    /// Honours <c>count</c> and carries the remainder of an oversized chunk into the next call. Copying a
+    /// whole chunk regardless would happen to work today only because the read loop's buffer is far larger
+    /// than anything a test pushes — the moment that stops being true it would overrun the caller's buffer
+    /// rather than fail an assertion, which makes every test in this file quietly dependent on a sizing
+    /// decision made somewhere else.
+    /// </remarks>
     private sealed class PushStream : Stream
     {
         private readonly BlockingCollection<byte[]> _queue = new();
+        private byte[]? _chunk;     // the chunk being handed out
+        private int _consumed;      // how much of it has already gone
 
         public void Push(string text) => _queue.Add(Encoding.UTF8.GetBytes(text));
         public void Done() => _queue.CompleteAdding();
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            try
+            ValidateBufferArguments(buffer, offset, count);
+            if (count == 0) return 0;
+
+            // Empty pushes are skipped rather than returned: a zero-length read is EOF to the caller, and a
+            // test that pushed "" would end the read loop instead of doing nothing.
+            while (_chunk == null || _consumed == _chunk.Length)
             {
-                var chunk = _queue.Take();          // blocks; throws when completed and drained
-                Array.Copy(chunk, 0, buffer, offset, chunk.Length);
-                return chunk.Length;
+                try { _chunk = _queue.Take(); }               // blocks; throws when completed and drained
+                catch (InvalidOperationException) { return 0; }   // EOF
+                _consumed = 0;
             }
-            catch (InvalidOperationException) { return 0; }   // EOF
+
+            var n = Math.Min(count, _chunk.Length - _consumed);
+            Array.Copy(_chunk, _consumed, buffer, offset, n);
+            _consumed += n;
+            return n;
         }
 
         public override bool CanRead => true;
@@ -351,6 +369,157 @@ public class AutoScrollToBottomTests
         connection.Done();
         window.Close();
     });
+
+    /// <summary>
+    /// The view's OWN lines obey the follow rules too.
+    ///
+    /// <para>The exit notice used to scroll to the bottom whenever auto-scroll was on, regardless of whether
+    /// the follow was paused — and a process exiting is precisely when somebody is scrolled up reading what
+    /// it printed, so it was the worst available moment to yank them to the end.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task The_exit_notice_does_not_yank_a_parked_view_to_the_bottom() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        var connection = new PushConnection();
+
+        var exited = false;
+        view.ProcessExited += (_, _) => exited = true;
+        view.AttachConnection(connection);
+
+        await PushAndSettle(view, connection, Lines(200));
+
+        view.ViewportY = view.MaxScrollback - 50;
+
+        // The follow state is SAMPLED at each write rather than latched, so it takes a write for the pause
+        // to be observable — same idiom as the FollowTail tests above.
+        await PushAndSettle(view, connection, Lines(20, "more"));
+        Assert.That(view.IsFollowingTail, Is.False, "sanity: scrolled back, so the follow is paused");
+
+        var parkedY = view.ViewportY;
+        var parkedText = TopVisibleLine(view);
+
+        // EOF, which is what makes the read loop write "Process exited with code: 0".
+        connection.Done();
+        await WaitUntil(() => exited, "the exit was reported, so the notice has been written");
+        await Task.Delay(50);   // let the posted change notifications drain
+
+        Assert.That(view.ViewportY, Is.EqualTo(parkedY), "the exit notice must not resume a paused follow");
+        Assert.That(TopVisibleLine(view), Is.EqualTo(parkedText), "and the user keeps reading what they were");
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// Eviction compensation survives a re-parent, and is applied exactly ONCE afterwards.
+    ///
+    /// <para>Both failure directions are real and this pins both. <c>Terminal.Buffer</c> outlives
+    /// detach/re-attach, so subscribing on attach without unsubscribing on detach adds a handler per
+    /// re-parent and moves a parked viewport by a MULTIPLE of the evicted count; unsubscribing without
+    /// re-subscribing leaves the compensation off entirely and the content slides away as before. Either way
+    /// the line under the user moves, which is the one thing the compensation exists to prevent.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task Eviction_compensation_survives_a_reparent() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "", BufferSize = 120 };
+        var window = Show(view);
+        var connection = new PushConnection();
+        view.AttachConnection(connection);
+
+        await PushAndSettle(view, connection, Lines(100, "old"));
+
+        // Out of the tree and back, with the PTY held across it — the pop-out/dock-back path.
+        view.BeginReparent();
+        window.Content = null;
+        window.Content = view;
+        window.UpdateLayout();
+        view.EndReparent();
+
+        view.ViewportY = view.MaxScrollback - 20;
+        var parkedY = view.ViewportY;
+        var parkedText = TopVisibleLine(view);
+        Assert.That(parkedText, Does.StartWith("old "), "sanity: parked over the earlier output");
+
+        await PushAndSettle(view, connection, Lines(90, "new"));
+
+        Assert.That(view.ViewportY, Is.LessThan(parkedY),
+            "sanity: the ring evicted, so the compensation had something to do");
+        Assert.That(TopVisibleLine(view), Is.EqualTo(parkedText),
+            "compensated exactly once — neither dropped by the detach nor doubled by the re-attach");
+
+        connection.Done();
+        window.Close();
+    });
+
+    /// <summary>
+    /// The other half of the same balance: a view that is off the tree for good stops listening.
+    ///
+    /// <para><see cref="TerminalView.Terminal"/> is public, so a host holding the emulator holds the buffer,
+    /// and a <c>Trimmed</c> handler never unsubscribed keeps the whole view alive through it — and goes on
+    /// moving the viewport of a control nobody is showing.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_detached_view_stops_compensating() => Run(async () =>
+    {
+        var view = new TerminalView { Process = "", BufferSize = 120 };
+        var window = Show(view);
+        var connection = new PushConnection();
+        view.AttachConnection(connection);
+
+        await PushAndSettle(view, connection, Lines(100, "old"));
+
+        view.ViewportY = view.MaxScrollback - 20;
+
+        // A write through the VIEW, so the paused follow is actually sampled. Without it _followBottom is
+        // still true from the push above, OnBufferTrimmed returns early whether it is subscribed or not,
+        // and this test asserts nothing. Small enough not to evict on its own.
+        await PushAndSettle(view, connection, Lines(10, "settle"));
+        Assert.That(view.IsFollowingTail, Is.False, "sanity: parked, so there is compensation to suppress");
+
+        var parkedY = view.ViewportY;
+
+        window.Content = null;      // a real detach — no BeginReparent, so nothing is coming back
+
+        // Written straight through the emulator rather than pushed down the connection, deliberately: the
+        // detach has already dropped the connection, and going through it would drag the exit path in and
+        // leave this asserting on two things at once.
+        view.Terminal.Write(Lines(90, "new"));
+
+        Assert.That(view.Terminal.Buffer.ViewportY, Is.EqualTo(parkedY),
+            "a detached view must not still be moving the viewport in response to the buffer");
+
+        connection.Done();          // let the read loop unwind now the assertions are made
+        window.Close();
+    });
+
+    /// <summary>
+    /// The harness itself, pinned: every test above reads through this stream, so a stream that only works
+    /// against one particular consumer buffer size makes all of them depend on a decision made in the read
+    /// loop. Read through a buffer far SMALLER than a pushed chunk and the bytes must still arrive whole and
+    /// in order.
+    /// </summary>
+    [Test]
+    public void PushStream_honours_the_requested_count()
+    {
+        var stream = new PushStream();
+        var pushed = Lines(40);
+        stream.Push(pushed);
+        stream.Done();
+
+        var small = new byte[7];        // deliberately smaller than the chunk
+        var got = new MemoryStream();
+        int n;
+        while ((n = stream.Read(small, 0, small.Length)) > 0)
+        {
+            Assert.That(n, Is.LessThanOrEqualTo(small.Length), "a stream must never write past the count it was given");
+            got.Write(small, 0, n);
+        }
+
+        Assert.That(Encoding.UTF8.GetString(got.ToArray()), Is.EqualTo(pushed),
+            "the chunk is delivered whole and in order across as many reads as it takes");
+    }
 
     private static Task Run(Func<Task> body) => body();
 }

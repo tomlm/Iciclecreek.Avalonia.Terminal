@@ -113,6 +113,12 @@ namespace Iciclecreek.Terminal
         // the viewport along. Sampled from the buffer before each write — see AutoScrollToBottomProperty.
         private bool _followBottom = true;
 
+        // The buffer OnBufferTrimmed is subscribed to, held so the unsubscribe can name the same instance
+        // the subscribe used. Terminal.Buffer returns the ACTIVE buffer and swaps to the alternate one while
+        // a full-screen app runs, so `_terminal.Buffer.Trimmed -= ...` at an arbitrary moment can detach the
+        // handler from a buffer that never had it and leave the real one subscribed.
+        private TerminalBuffer? _scrollbackBuffer;
+
         // AutoScrollToBottom mirrored for the reader thread. The write path runs OFF the UI thread (the
         // Dispatcher.UIThread.Post beside it is the giveaway), so reading the StyledProperty there would be
         // a cross-thread GetValue. Kept in step by OnPropertyChanged.
@@ -372,6 +378,49 @@ namespace Iciclecreek.Terminal
             var max = MaxScrollback;
             if (ViewportY < max)
                 ViewportY = max;
+        }
+
+        /// <summary>
+        /// Write one of the view's OWN lines — an exit notice, a read error — under the same follow rules the
+        /// read loop applies to process output, and invalidate.
+        /// </summary>
+        /// <remarks>
+        /// <para>These lines used to scroll to the bottom whenever <see cref="AutoScrollToBottom"/> was on,
+        /// which is not what that property promises: scrolling back pauses the follow until the view returns
+        /// to the tail, and a process exiting is no reason to yank a user who is reading scrollback down to
+        /// the end. It is also the most likely moment for it to happen, since a process exiting is exactly
+        /// when somebody is scrolled up looking at what it printed.</para>
+        /// <para>Sampled BEFORE the write for the same reason the read loop samples there: afterwards
+        /// <c>YBase</c> has advanced, so a view that genuinely was at the tail reads as not-following.</para>
+        /// </remarks>
+        private void WriteOwnLine(string text)
+        {
+            lock (_terminalLock)
+            {
+                var oldY = _terminal.Buffer.ViewportY;
+
+                _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
+
+                _terminal.WriteLine(text);
+
+                // Alternate-buffer apps position their own cursor and are left alone, as in the read loop.
+                if (!_isAlternateBuffer)
+                {
+                    if (_followBottom)
+                    {
+                        _terminal.Buffer.ScrollToBottom();
+                    }
+                    else if (!_autoScroll && _terminal.Buffer.ViewportY != oldY)
+                    {
+                        // With auto-scroll off the emulator still advances ViewportY itself as YBase grows,
+                        // so the position has to be held rather than merely not scrolled — see the read
+                        // loop, where the same hunk exists for the same reason.
+                        _terminal.Buffer.ViewportY = Math.Min(oldY, MaxScrollback);
+                    }
+                }
+            }
+
+            this.RequestInvalidate();
         }
 
         /// <summary>
@@ -730,10 +779,15 @@ namespace Iciclecreek.Terminal
             // index shifts down with it. A view parked in the scrollback has to move with the eviction or the
             // content slides upward under the user while output keeps arriving.
             //
-            // Subscribed HERE and not in OnAttachedToLogicalTree with the others: the buffer object outlives
-            // detach/re-attach, so re-subscribing there would add a second handler on every re-parent and
-            // move a parked viewport by a multiple of the evicted count.
-            _terminal.Buffer.Trimmed += OnBufferTrimmed;
+            // Subscribed HERE and not in OnAttachedToLogicalTree with the others, because the buffer object
+            // outlives detach/re-attach and this is the one point that runs exactly once. The instance is
+            // remembered rather than re-read later: it is BALANCED on detach and re-armed on re-attach
+            // against this same object, so a re-parent can neither double the handler — which would move a
+            // parked viewport by a multiple of the evicted count — nor leave one behind. Leaving one behind
+            // is not merely untidy: Terminal is public, so a host holding the emulator keeps the whole view
+            // alive through the subscription and goes on calling back into a control that is off the tree.
+            _scrollbackBuffer = _terminal.Buffer;
+            _scrollbackBuffer.Trimmed += OnBufferTrimmed;
 
             _terminal.DataReceived += OnTerminalDataReceived;
             _terminal.BufferChanged += OnTerminalBufferChanged;
@@ -1178,6 +1232,11 @@ namespace Iciclecreek.Terminal
                 return;
             }
 
+            // Against the remembered instance, not _terminal.Buffer: detaching while a full-screen app has
+            // the alternate buffer active would otherwise unsubscribe from the wrong object.
+            if (_scrollbackBuffer != null)
+                _scrollbackBuffer.Trimmed -= OnBufferTrimmed;
+
             _terminal.DataReceived -= OnTerminalDataReceived;
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
@@ -1208,6 +1267,12 @@ namespace Iciclecreek.Terminal
 
             // Re-subscribe terminal events that were unsubscribed on detach.
             // Use -= before += to avoid double-subscription.
+            if (_scrollbackBuffer != null)
+            {
+                _scrollbackBuffer.Trimmed -= OnBufferTrimmed;
+                _scrollbackBuffer.Trimmed += OnBufferTrimmed;
+            }
+
             _terminal.DataReceived -= OnTerminalDataReceived;
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
@@ -2903,15 +2968,8 @@ namespace Iciclecreek.Terminal
                         {
                             var exitCode = connection.ExitCode;
 
-                            lock (_terminalLock)
-                            {
-                                _terminal.WriteLine($"\nProcess exited with code: {exitCode}\n");
-                                if (_autoScroll)
-                                    _terminal.Buffer.ScrollToBottom();
-                            }
+                            WriteOwnLine($"\nProcess exited with code: {exitCode}\n");
 
-                            this.RequestInvalidate();
-                            
                             await Dispatcher.UIThread.InvokeAsync(() =>
                             {
                                 ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode));
@@ -3049,14 +3107,7 @@ namespace Iciclecreek.Terminal
                 if (_processExitHandled != 0)
                     return;
 
-                lock (_terminalLock)
-                {
-                    _terminal.WriteLine($"\nError reading from process: {ex.Message}\n");
-                    if (_autoScroll)
-                        _terminal.Buffer.ScrollToBottom();
-                }
-
-                this.RequestInvalidate();
+                WriteOwnLine($"\nError reading from process: {ex.Message}\n");
             }
         }
 
@@ -3130,15 +3181,9 @@ namespace Iciclecreek.Terminal
                     try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
                 }
 
-                lock (_terminalLock)
-                {
-                    _terminal.WriteLine(code is { } c
-                        ? $"\nProcess exited with code: {c}\n"
-                        : "\nProcess exited\n");
-                    if (_autoScroll)
-                        _terminal.Buffer.ScrollToBottom();
-                }
-                this.RequestInvalidate();
+                WriteOwnLine(code is { } c
+                    ? $"\nProcess exited with code: {c}\n"
+                    : "\nProcess exited\n");
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -3158,13 +3203,7 @@ namespace Iciclecreek.Terminal
                                                 : Interlocked.Exchange(ref _processExitHandled, 1) != 0)
                 return;
 
-            lock (_terminalLock)
-            {
-                _terminal.WriteLine($"\nProcess exited with code: {e.ExitCode}\n");
-                if (_autoScroll)
-                    _terminal.Buffer.ScrollToBottom();
-            }
-            this.RequestInvalidate();
+            WriteOwnLine($"\nProcess exited with code: {e.ExitCode}\n");
 
             Dispatcher.UIThread.InvokeAsync(() =>
             {
