@@ -134,7 +134,9 @@ namespace Iciclecreek.Terminal
         // survives a visual-tree re-parent (e.g. floating window pop-out/dock-back).
         private bool _suppressCleanupOnDetach;
 
-        private sealed record CachedTextRun(FormattedText Text, int StartX, int CellCount, IBrush Background);
+        // Background is null for a run that keeps the terminal's own default background — nothing is
+        // painted for it, so a host that layers the view over its own themed surface still shows through.
+        private sealed record CachedTextRun(FormattedText Text, int StartX, int CellCount, IBrush? Background);
 
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
@@ -3392,7 +3394,8 @@ namespace Iciclecreek.Terminal
                     var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                     var position = new Point(startX, startYPos);
 
-                    context.FillRectangle(run.Background, rect);
+                    if (run.Background is not null)
+                        context.FillRectangle(run.Background, rect);
                     context.DrawText(run.Text, position);
                 }
                 return;
@@ -3452,13 +3455,16 @@ namespace Iciclecreek.Terminal
                 var background = cell.GetBackgroundBrush(this.Background);
                 var foreground = cell.GetForegroundBrush(this.Foreground);
                 // Apply cell-level inverse attribute
+                // Whether this run ends up drawn with the colours swapped. Once they are, the fill is no
+                // longer optional: the "background" being painted is the text colour.
+                bool swapped = false;
                 if (cell.Attributes.IsInverse())
-                    (foreground, background) = (background, foreground);
+                    (foreground, background, swapped) = (background, foreground, !swapped);
                 // Apply terminal-wide reverse video mode (DECSCNM)
                 if (_terminal.ReverseVideo)
-                    (foreground, background) = (background, foreground);
+                    (foreground, background, swapped) = (background, foreground, !swapped);
                 if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
-                    (foreground, background) = (background, foreground);
+                    (foreground, background, swapped) = (background, foreground, !swapped);
 
                 var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                 var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
@@ -3467,10 +3473,14 @@ namespace Iciclecreek.Terminal
                     formattedText.SetTextDecorations(td);
 
                 var position = new Point(startX, startYPos);
+                // A cell that carries no background of its own and was not swapped paints nothing, leaving
+                // whatever the view is layered over to show through.
+                var fill = swapped || cell.GetBackgroundColor().HasValue ? background : null;
                 // Cache only content-dependent data, not screen position
-                textRuns.Add(new CachedTextRun(formattedText, runStartX, cellCount, background));
+                textRuns.Add(new CachedTextRun(formattedText, runStartX, cellCount, fill));
 
-                context.FillRectangle(background, rect);
+                if (fill is not null)
+                    context.FillRectangle(fill, rect);
                 context.DrawText(formattedText, position);
             }
 
@@ -3583,13 +3593,14 @@ namespace Iciclecreek.Terminal
                         var background = cell.GetBackgroundBrush(this.Background);
                         var foreground = cell.GetForegroundBrush(this.Foreground);
                         // Apply cell-level inverse attribute
+                        bool swapped = false;
                         if (cell.Attributes.IsInverse())
-                            (foreground, background) = (background, foreground);
+                            (foreground, background, swapped) = (background, foreground, !swapped);
                         // Apply terminal-wide reverse video mode (DECSCNM)
                         if (_terminal.ReverseVideo)
-                            (foreground, background) = (background, foreground);
+                            (foreground, background, swapped) = (background, foreground, !swapped);
                         if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
-                            (foreground, background) = (background, foreground);
+                            (foreground, background, swapped) = (background, foreground, !swapped);
 
                         var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                         var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
@@ -3599,7 +3610,8 @@ namespace Iciclecreek.Terminal
 
                         var position = new Point(startX, startYPos);
 
-                        context.FillRectangle(background, rect);
+                        if (swapped || cell.GetBackgroundColor().HasValue)
+                            context.FillRectangle(background, rect);
                         context.DrawText(formattedText, position);
                     }
                 }
