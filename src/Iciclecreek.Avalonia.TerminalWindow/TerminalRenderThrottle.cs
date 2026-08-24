@@ -30,14 +30,23 @@ namespace Iciclecreek.Terminal
             if (control == null)
                 return;
 
+            // The set and the flag move together, under the one lock. Read outside it, the flag loses a
+            // race that drops a frame: a caller can see it TRUE, decline to schedule, and only then add to
+            // Pending — after Flush has already cleared the flag and drained the set. The control is then
+            // queued with no frame coming, and the screen keeps whatever it last painted until something
+            // else happens to request another. That is the last frame of a burst, which is the one that
+            // matters: output stops, and the terminal is left showing text the buffer no longer has.
+            bool schedule;
             lock (Pending)
-                Pending.Add(control);
-
-            if (!_frameScheduled)
             {
-                _frameScheduled = true;
-                ScheduleFrame();
+                Pending.Add(control);
+                schedule = !_frameScheduled;
+                if (schedule)
+                    _frameScheduled = true;
             }
+
+            if (schedule)
+                ScheduleFrame();
         }
 
         private static void ScheduleFrame()
@@ -64,19 +73,28 @@ namespace Iciclecreek.Terminal
 
         private static void Flush()
         {
-            _frameScheduled = false;
-            _lastFrame = DateTime.UtcNow;
+            Control[] batch;
 
             lock (Pending)
             {
+                // Cleared HERE, with the drain. Clearing it first leaves a window in which a request sees a
+                // frame still scheduled, adds itself, and is then thrown away by the very drain it was
+                // racing.
+                _frameScheduled = false;
+                _lastFrame = DateTime.UtcNow;
+
                 if (Pending.Count == 0)
                     return;
 
-                foreach (var control in Pending)
-                    control.InvalidateVisual();
-
+                batch = new Control[Pending.Count];
+                Pending.CopyTo(batch);
                 Pending.Clear();
             }
+
+            // Outside the lock: invalidation is UI work and a request arriving from the read task should
+            // not be made to wait on it.
+            foreach (var control in batch)
+                control.InvalidateVisual();
         }
     }
 }
