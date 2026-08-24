@@ -29,6 +29,9 @@ internal static class PtyTrace
         ("[?1049h", "alternate buffer ON"),
         ("[?1049l", "alternate buffer off"),
         ("[2J",     "erase display (fills with the CURRENT attributes)"),
+        ("\u001b[6n",     "DSR — asking WHERE THE CURSOR IS; our answer decides what it draws next"),
+        ("\u001b[48;2;255;255;255m", "background set to RGB WHITE"),
+        ("\u200d",    "ZWJ in the output — a joined emoji, almost certainly a width probe"),
     };
 
     /// <summary>
@@ -55,6 +58,14 @@ internal static class PtyTrace
         var gate = new object();
         window.OutputReceived += (_, e) => Record(gate, bin, txt, e.Output);
 
+        // The window builds its control during initialisation, so by the time a caller can attach a trace
+        // it exists — but it is reached through the visual tree, and that is only realised once shown.
+        window.Opened += (_, _) =>
+        {
+            if (window.Content is TerminalControl control)
+                AttachReplies(control, gate, txt);
+        };
+
         return dir;
     }
 
@@ -70,8 +81,34 @@ internal static class PtyTrace
 
         var gate = new object();
         control.OutputReceived += (_, e) => Record(gate, bin, txt, e.Output);
+        AttachReplies(control, gate, txt);
 
         return dir;
+    }
+
+    /// <summary>
+    /// Also record what the TERMINAL answers — cursor position reports, device attributes, colour queries.
+    /// </summary>
+    /// <remarks>
+    /// One direction of a conversation is not enough to diagnose one. A program that probes the terminal and
+    /// then behaves differently is deciding on OUR answer, and a trace that only holds its side shows the
+    /// decision without the thing that caused it.
+    /// </remarks>
+    private static void AttachReplies(TerminalControl control, object gate, string txt)
+    {
+        try
+        {
+            control.Terminal.DataReceived += (_, e) =>
+            {
+                lock (gate)
+                    File.AppendAllText(txt, $"\n    <<< WE REPLIED: {Annotate(e.Data)}\n");
+            };
+        }
+        catch
+        {
+            // The emulator is built during initialisation; if it is not there yet this is simply skipped.
+            // A missing reply log is worth less than a demo that will not start.
+        }
     }
 
     /// <summary>Where this run's two files go. Stamped to the second so repeated launches do not merge.</summary>
