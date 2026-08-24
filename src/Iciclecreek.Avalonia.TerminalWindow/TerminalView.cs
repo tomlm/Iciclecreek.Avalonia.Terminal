@@ -944,18 +944,20 @@ namespace Iciclecreek.Terminal
         {
             get
             {
-                try
+                if (_terminal == null)
+                    return string.Empty;
+
+                lock (_terminalLock)
                 {
                     var buffer = _terminal.Buffer;
                     var line = buffer.GetLine(buffer.YBase + buffer.Y);
                     if (line == null) return string.Empty;
 
-                    var sb = new StringBuilder();
+                    var sb = new StringBuilder(line.Length);
                     for (int x = 0; x < line.Length; x++)
                         sb.Append(string.IsNullOrEmpty(line[x].Content) ? " " : line[x].Content);
                     return sb.ToString().TrimEnd();
                 }
-                catch { return string.Empty; }
             }
         }
 
