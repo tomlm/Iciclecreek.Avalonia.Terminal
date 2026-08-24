@@ -9,8 +9,7 @@
 		Title="Example">
 	<TabControl>
 		<TabItem Header="Tab 1">
-			<term:TerminalControl FontFamily="Cascadia Mono"
-								  FontSize="14" BufferSize="1000"/>
+			<term:TerminalControl FontSize="14" BufferSize="1000"/>
 		</TabItem>
 		<TabItem Header="Tab 2">
 			<Grid RowDefinitions="Auto, Auto, *" ColumnDefinitions="*,Auto">
@@ -25,13 +24,11 @@
 									  StartingDirectory="{Binding #MyDir.Text}"
 									  ProcessExited="Term2_ProcessExited"
 									  Background="#202020"
-									  FontFamily="Cascadia Mono"
 									  FontSize="14" BufferSize="1000"/>
 			</Grid>
 		</TabItem>
 		<TabItem Header="Tab 3">
-			<term:TerminalControl FontFamily="Cascadia Mono"
-								  FontSize="14" BufferSize="1000"/>
+			<term:TerminalControl FontSize="14" BufferSize="1000"/>
 		</TabItem>
 	</TabControl>
 </Window>
