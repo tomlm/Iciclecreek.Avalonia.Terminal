@@ -2457,8 +2457,22 @@ namespace Iciclecreek.Terminal
 
         private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
+        /// <summary>
+        /// Everything the terminal sends TO the process: keystrokes, replies to its queries, focus and mouse
+        /// reports.
+        /// </summary>
+        /// <remarks>
+        /// Diagnostic. A program that behaves differently because of something the TERMINAL said is
+        /// otherwise impossible to explain from the outside — the process's own output shows the decision
+        /// but never the cause, and focus and mouse reports do not pass through the emulator's
+        /// <c>DataReceived</c> at all, so watching that misses them entirely.
+        /// </remarks>
+        public event EventHandler<string>? InputSent;
+
         private async Task SendToPtyAsync(string data, CancellationToken ct = default)
         {
+            InputSent?.Invoke(this, data);
+
             // Capture the connection reference locally to avoid any potential race conditions
             var ptyConnection = _ptyConnection;
             if (ptyConnection == null || string.IsNullOrEmpty(data))

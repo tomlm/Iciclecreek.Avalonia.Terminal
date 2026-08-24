@@ -221,6 +221,13 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public XTerm.Terminal Terminal => _terminalView!.Terminal;
 
+        /// <inheritdoc cref="TerminalView.InputSent"/>
+        public event EventHandler<string>? InputSent
+        {
+            add { if (_terminalView != null) _terminalView.InputSent += value; }
+            remove { if (_terminalView != null) _terminalView.InputSent -= value; }
+        }
+
 
         /// <summary>
         /// Waits for the terminal process to exit, with a timeout in milliseconds.

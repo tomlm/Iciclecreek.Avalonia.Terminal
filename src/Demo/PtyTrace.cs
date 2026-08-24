@@ -10,7 +10,7 @@ namespace Demo;
 /// Records everything a process writes to the terminal, annotated, so an intermittent rendering fault can be
 /// read after the fact instead of guessed at from a screenshot.
 ///
-/// <para>Opt in with <c>set PTY_TRACE=1</c>. Off by default — this writes every byte a program emits, which
+/// <para>On by default here; set <c>PTY_TRACE=0</c> to turn it off. It writes every byte a program emits, which
 /// for a full-screen application is a lot of them.</para>
 ///
 /// <para>Two files per terminal: a <c>.bin</c> holding the stream verbatim, and a <c>.txt</c> with escape
@@ -63,7 +63,7 @@ internal static class PtyTrace
         window.Opened += (_, _) =>
         {
             if (window.Content is TerminalControl control)
-                AttachReplies(control, gate, txt);
+                AttachSends(control, gate, txt);
         };
 
         return dir;
@@ -81,7 +81,7 @@ internal static class PtyTrace
 
         var gate = new object();
         control.OutputReceived += (_, e) => Record(gate, bin, txt, e.Output);
-        AttachReplies(control, gate, txt);
+        AttachSends(control, gate, txt);
 
         return dir;
     }
@@ -94,22 +94,25 @@ internal static class PtyTrace
     /// then behaves differently is deciding on OUR answer, and a trace that only holds its side shows the
     /// decision without the thing that caused it.
     /// </remarks>
-    private static void AttachReplies(TerminalControl control, object gate, string txt)
+    private static void AttachSends(TerminalControl control, object gate, string txt)
     {
-        try
+        // Everything the terminal sends the process, which is the half that matters here. Focus and mouse
+        // reports never pass through the emulator's DataReceived, so watching only that misses them — and
+        // a focus report landing mid-startup is exactly the kind of thing a TUI repaints for.
+        control.InputSent += (_, data) =>
         {
-            control.Terminal.DataReceived += (_, e) =>
-            {
-                lock (gate)
-                    File.AppendAllText(txt, $"\n    <<< WE REPLIED: {Annotate(e.Data)}\n");
-            };
-        }
-        catch
-        {
-            // The emulator is built during initialisation; if it is not there yet this is simply skipped.
-            // A missing reply log is worth less than a demo that will not start.
-        }
+            lock (gate)
+                File.AppendAllText(txt, $"\n    <<< WE SENT: {Annotate(data)}{Explain(data)}\n");
+        };
     }
+
+    /// <summary>Name the things we send that a program is likely to act on.</summary>
+    private static string Explain(string data) => data switch
+    {
+        "\u001b[I" => "        ^^^ FOCUS GAINED — a TUI repaints for this",
+        "\u001b[O" => "        ^^^ FOCUS LOST — a TUI repaints for this",
+        _ => "",
+    };
 
     /// <summary>Where this run's two files go. Stamped to the second so repeated launches do not merge.</summary>
     private static (string Dir, string Bin, string Txt) Files(string name)

@@ -121,6 +121,13 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.OutputReceived"/>
         public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
 
+        /// <inheritdoc cref="TerminalView.InputSent"/>
+        public event EventHandler<string>? InputSent
+        {
+            add { EnsureTerminalControl(); if (_terminalControl != null) _terminalControl.InputSent += value; }
+            remove { if (_terminalControl != null) _terminalControl.InputSent -= value; }
+        }
+
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
