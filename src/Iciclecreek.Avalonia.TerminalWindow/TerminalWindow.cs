@@ -182,6 +182,39 @@ namespace Iciclecreek.Terminal
             set => SetValue(ShowCaretOnClickProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.SuppressCursorProperty"/>
+        /// <remarks>
+        /// Styled and template-bound to the inner TerminalControl rather than forwarded onto the inner view: a
+        /// forwarder drops any value assigned before the template runs, which is the normal timing for XAML
+        /// attributes and object initialisers.
+        /// </remarks>
+        public static readonly StyledProperty<bool> SuppressCursorProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(SuppressCursor),
+                defaultValue: false);
+
+        /// <inheritdoc cref="SuppressCursorProperty"/>
+        public bool SuppressCursor
+        {
+            get => GetValue(SuppressCursorProperty);
+            set => SetValue(SuppressCursorProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CharWidth"/>
+        public double CharWidth => _terminalControl?.CharWidth ?? 0;
+
+        /// <inheritdoc cref="TerminalView.CharHeight"/>
+        public double CharHeight => _terminalControl?.CharHeight ?? 0;
+
+        /// <inheritdoc cref="TerminalView.CurrentLineText"/>
+        public string CurrentLineText => _terminalControl?.CurrentLineText ?? string.Empty;
+
+        /// <inheritdoc cref="TerminalView.ClearScreen"/>
+        public void ClearScreen() => _terminalControl?.ClearScreen();
+
+        /// <inheritdoc cref="TerminalView.Refresh"/>
+        public void Refresh() => _terminalControl?.Refresh();
+
         /// <inheritdoc cref="TerminalView.OutputReceivedOnReadTaskProperty"/>
         public static readonly StyledProperty<bool> OutputReceivedOnReadTaskProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
@@ -489,6 +522,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
+            _terminalControl.Bind(TerminalControl.SuppressCursorProperty, this.GetObservable(SuppressCursorProperty));
             _terminalControl.Bind(TerminalControl.OutputReceivedOnReadTaskProperty, this.GetObservable(OutputReceivedOnReadTaskProperty));
             _terminalControl.Bind(TerminalControl.AutoScrollToBottomProperty, this.GetObservable(AutoScrollToBottomProperty));
             _terminalControl.Bind(TerminalControl.VerbatimCommandLineProperty, this.GetObservable(VerbatimCommandLineProperty));
