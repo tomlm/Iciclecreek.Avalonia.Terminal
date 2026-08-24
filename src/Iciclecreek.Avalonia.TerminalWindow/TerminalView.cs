@@ -128,6 +128,49 @@ namespace Iciclecreek.Terminal
         // between cells, not the cells themselves — so Shift+Right from a fresh cursor selects exactly one
         // cell instead of two. Null anchor = no keyboard selection in flight.
         private int? _kbSelAnchor;
+
+        // Where the shell's editable input begins, as an absolute row and a column on it. A keyboard
+        // selection stops here rather than running back over the prompt.
+        //
+        // Derived rather than known: nothing tells a terminal where a prompt ends unless the shell emits
+        // semantic markers, which most shells do not by default. What is reliable is the moment the user
+        // FIRST types on a row the shell has just moved to — wherever the cursor is then is the end of
+        // whatever the shell drew, which is the prompt.
+        //
+        // Sampled at that keystroke rather than after the write, because a prompt does not arrive whole: on
+        // a real bash the newline and the prompt text land in separate reads, so the cursor is still at
+        // column 0 when the row changes. Measured — it recorded (row 4, col 0) instead of (row 4, col 10).
+        private int _inputStartRow = -1;
+        private int _inputStartCol;
+        private int _lastOutputRow = -1;
+
+        // True once the shell has told us where its input begins, via OSC 133. A shell that reports it is
+        // authoritative, so the guesswork below is switched off for good rather than left to fight it.
+        private bool _semanticPrompt;
+        // Armed only by shell OUTPUT moving to a new row. Starting armed would let the first interaction
+        // record the input start wherever the cursor happens to be — which, if the user has already typed,
+        // is the end of their input rather than the start of it, pinning the selection to a stop.
+        private bool _inputStartPending;
+
+        internal (int Row, int Col) InputStart => (_inputStartRow, _inputStartCol);
+
+        /// <summary>
+        /// Record where the editable input starts, if the shell has moved to a new row since the last time.
+        /// Called wherever the user is about to interact with the line.
+        /// </summary>
+        private void NoteInputStart()
+        {
+            if (_semanticPrompt || !_inputStartPending || _terminal == null)
+                return;
+
+            _inputStartRow = _terminal.Buffer.YBase + _terminal.Buffer.Y;
+            _inputStartCol = _terminal.Buffer.X;
+            _inputStartPending = false;
+        }
+
+        // Set where a selection is retired by a keystroke that will type, and consumed by whichever path
+        // then sends that character — within the same handler invocation, so it never spans two keystrokes.
+        private string _pendingReplaceKeys = string.Empty;
         private int _kbSelFocus;
 
         // IME (Input Method Editor) support
@@ -363,6 +406,33 @@ namespace Iciclecreek.Terminal
         /// parked up in the scrollback is moved down by the same amount, so the content the user is reading
         /// stays under their eye instead of sliding upward as output arrives.
         /// </summary>
+        /// <summary>
+        /// OSC 133 — shell integration. Only the marker for "the prompt ends here" is acted on.
+        /// </summary>
+        /// <remarks>
+        /// <para><c>B</c> is emitted by the shell immediately after it has drawn the prompt, so the cursor
+        /// is standing exactly where the user's input will begin. That is the answer
+        /// <see cref="NoteInputStart"/> spends effort inferring, and it is exact. Measured: after
+        /// <c>OSC 133;B</c> following a 12-character prompt, the cursor is at column 12.</para>
+        /// <para><c>I</c> is accepted alongside it, which some shells emit for the same point.</para>
+        /// <para>Once a shell has reported this, the heuristic is disabled rather than left to compete: a
+        /// shell that speaks OSC 133 knows better than any inference drawn from cursor movement.</para>
+        /// <para>Runs on the read task, inside the terminal lock, so it does nothing but record.</para>
+        /// </remarks>
+        private void OnTerminalOscReceived(object? sender, XT.Events.TerminalEvents.OscReceivedEventArgs e)
+        {
+            if (e.Code != 133 || string.IsNullOrEmpty(e.Data))
+                return;
+
+            if (e.Data[0] is 'B' or 'I')
+            {
+                _inputStartRow = _terminal.Buffer.YBase + _terminal.Buffer.Y;
+                _inputStartCol = _terminal.Buffer.X;
+                _inputStartPending = false;
+                _semanticPrompt = true;
+            }
+        }
+
         private void OnBufferTrimmed(int count)
         {
             if (_followBottom || count <= 0)
@@ -830,6 +900,11 @@ namespace Iciclecreek.Terminal
             // alive through the subscription and goes on calling back into a control that is off the tree.
             _scrollbackBuffer = _terminal.Buffer;
             _scrollbackBuffer.Trimmed += OnBufferTrimmed;
+
+            // Shell integration. A shell that emits OSC 133 says exactly where its prompt ends, which is the
+            // one thing the input-start heuristic can only infer. Subscribed here for the same reason as
+            // Trimmed above: this point runs exactly once, and the emulator outlives a detach/re-attach.
+            _terminal.OscReceived += OnTerminalOscReceived;
 
             _terminal.DataReceived += OnTerminalDataReceived;
             _terminal.BufferChanged += OnTerminalBufferChanged;
@@ -1618,11 +1693,33 @@ namespace Iciclecreek.Terminal
                 // presses. Pressing ⌘/Ctrl/Shift on its own fires a KeyDown before the
                 // shortcut's letter arrives; clearing here would lose the selection
                 // before Cmd+C / Ctrl+Shift+C could copy it.
-                if (_terminal.Selection.HasSelection && !IsModifierKey(e.Key))
+                if (!IsModifierKey(e.Key))
                 {
-                    _terminal.Selection.ClearSelection();
-                    _kbSelAnchor = null;
-                    this.RequestInvalidate();
+                    // A keystroke that TYPES replaces the selection; Backspace and Delete remove it — both
+                    // of them, as in any text field, where either key means "get rid of what is selected"
+                    // rather than "act on one character". Anything else just drops the selection.
+                    bool unmodified = (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Meta)) == 0;
+                    bool willType = unmodified && TryGetPrintableChar(e, out _);
+                    bool willErase = unmodified && e.Key is Key.Back or Key.Delete;
+
+                    if (willType || willErase)
+                        NoteInputStart();
+
+                    _pendingReplaceKeys = willType || willErase ? TakeKeyboardSelectionDeletion() : string.Empty;
+                    if (_pendingReplaceKeys.Length == 0)
+                    {
+                        // The anchor is released whether or not a selection is currently drawn. A gesture can
+                        // leave the anchor set having selected NOTHING — Shift+End at the end of a line, say —
+                        // and gating this on HasSelection then leaves the caret pinned to that boundary while
+                        // typed characters append somewhere else.
+                        _kbSelAnchor = null;
+
+                        if (_terminal.Selection.HasSelection)
+                        {
+                            _terminal.Selection.ClearSelection();
+                            this.RequestInvalidate();
+                        }
+                    }
                 }
 
                 // Handle Ctrl+Shift+V for paste (standard terminal shortcut)
@@ -1639,6 +1736,17 @@ namespace Iciclecreek.Terminal
                 // claims Cmd+C and Cmd+V; anything else fell straight through to the character path below
                 // and was typed into the process, so a host binding Cmd+K quietly sent the shell a "k".
                 // Left unhandled so it bubbles to the app's key bindings.
+                // Same reason as the selection alias above: a Mac keyboard has no Home/End, so Cmd+arrow
+                // is how a Mac user asks for line-start and line-end. Sends exactly what Home and End
+                // send, so it is an alias rather than a second code path — and it has to come BEFORE the
+                // Meta passthrough below, which would otherwise swallow it.
+                if (IsMacOS && e.KeyModifiers == KeyModifiers.Meta && e.Key is Key.Left or Key.Right)
+                {
+                    e.Handled = true;
+                    await SendToPtyAsync(e.Key == Key.Left ? "\u001b[H" : "\u001b[F").ConfigureAwait(false);
+                    return;
+                }
+
                 if ((e.KeyModifiers & KeyModifiers.Meta) != 0)
                     return;
 
@@ -1688,6 +1796,17 @@ namespace Iciclecreek.Terminal
                 // Special keys (arrows, function keys, Tab, etc.) - always handle in KeyDown
                 if (xtermKey != null)
                 {
+                    // Backspace or Delete over a selection removes the SELECTION, not one more character
+                    // beyond it — so the keystroke's own sequence is replaced rather than added to.
+                    var erase = _pendingReplaceKeys;
+                    _pendingReplaceKeys = string.Empty;
+                    if (erase.Length > 0 && e.Key is Key.Back or Key.Delete)
+                    {
+                        e.Handled = true;
+                        await SendToPtyAsync(erase).ConfigureAwait(false);
+                        return;
+                    }
+
                     var sequence = _terminal.GenerateKeyInput(xtermKey.Value, modifiers);
                     if (!string.IsNullOrEmpty(sequence))
                     {
@@ -1717,7 +1836,10 @@ namespace Iciclecreek.Terminal
                 if (TryGetPrintableChar(e, out var printableChar))
                 {
                     e.Handled = true;
-                    await SendToPtyAsync(printableChar.ToString()).ConfigureAwait(false);
+                    // One write: the deletion and the character replacing it, in that order.
+                    var replaced = _pendingReplaceKeys;
+                    _pendingReplaceKeys = string.Empty;
+                    await SendToPtyAsync(replaced + printableChar).ConfigureAwait(false);
                     return;
                 }
 
@@ -1727,6 +1849,72 @@ namespace Iciclecreek.Terminal
             {
                 Debug.WriteLine($"[{_instanceId}] Error handling key input: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// The keystrokes that remove what a keyboard selection covers, so that typing over a selection
+        /// REPLACES it the way it does in a text field. Empty when there is nothing to replace. Clears the
+        /// selection as it takes it.
+        /// </summary>
+        /// <remarks>
+        /// <para>The view cannot edit the line: the shell owns it. So the selection is turned into the
+        /// keystrokes a user would have pressed to remove it. The shell's cursor never moved from the
+        /// anchor, so a backwards selection is that many Backspaces; a forwards one walks the cursor to the
+        /// far end with the right arrow first and deletes backwards from there.</para>
+        /// <para>Backspace for both directions rather than Delete for the forward case, because
+        /// forward-delete is not reliably bound: zsh started with no rc file does not know ESC[3~ — it
+        /// swallows the ESC[3 and TYPES the tilde. Arrows and Backspace are bound everywhere.</para>
+        /// <para>Returned rather than sent, so the caller can write the deletion and the new character as
+        /// ONE write. Sending them separately loses the race against the next keystroke: the handler owning
+        /// the deletion awaits it while the handlers behind it queue their characters first, and "there"
+        /// typed over a selection arrives as "heret". Measured, not theorised.</para>
+        /// <para>Only a KEYBOARD selection qualifies. A mouse selection can sit anywhere on screen,
+        /// including the scrollback, with no fixed relationship to the shell's cursor, so typing over one
+        /// clears it without deleting. The alternate buffer is excluded: a full-screen app owns its own
+        /// editing.</para>
+        /// </remarks>
+        private string TakeKeyboardSelectionDeletion()
+        {
+            if (_kbSelAnchor is null || !_terminal.Selection.HasSelection)
+                return string.Empty;
+            if (_terminal.IsAlternateBufferActive)
+                return string.Empty;
+
+            int anchor = _kbSelAnchor.Value;
+            int count = Math.Abs(anchor - _kbSelFocus);
+            if (count == 0)
+                return string.Empty;
+
+            var backspace = _terminal.GenerateKeyInput(XT.Input.Key.Backspace, XT.Input.KeyModifiers.None);
+            if (string.IsNullOrEmpty(backspace))
+                return string.Empty;
+
+            // Backspace for both directions, rather than Delete for a forward selection.
+            //
+            // Forward-delete is not reliably bound. zsh started with no rc file does not know ESC[3~: it
+            // swallows the ESC[3 and TYPES the tilde, so "hello world" became "hello wor~ld" instead of
+            // losing a character. Arrow keys and Backspace are bound everywhere, so a forward selection
+            // walks the cursor to the far end first and deletes backwards from there — same result, no
+            // dependency on a binding the shell may not have.
+            string keys;
+            if (_kbSelFocus < anchor)
+            {
+                keys = string.Concat(Enumerable.Repeat(backspace, count));
+            }
+            else
+            {
+                var right = _terminal.GenerateKeyInput(XT.Input.Key.RightArrow, XT.Input.KeyModifiers.None);
+                if (string.IsNullOrEmpty(right))
+                    return string.Empty;
+                keys = string.Concat(Enumerable.Repeat(right, count))
+                     + string.Concat(Enumerable.Repeat(backspace, count));
+            }
+
+            _kbSelAnchor = null;
+            _terminal.Selection.ClearSelection();
+            this.RequestInvalidate();
+
+            return keys;
         }
 
         /// <summary>
@@ -1742,9 +1930,56 @@ namespace Iciclecreek.Terminal
         /// Left alone in the alternate buffer: full-screen apps (vim, less, a TUI agent) draw their own
         /// selection and several bind Shift+arrow, so there the sequence still belongs to the app.
         /// </remarks>
+        /// <summary>
+        /// The keystrokes that remove what a keyboard selection covers, so that typing over a selection
+        /// REPLACES it the way it does in a text field. Empty when there is nothing to replace. Clears the
+        /// selection as it takes it.
+        /// </summary>
+        /// <remarks>
+        /// <para>The view cannot edit the line: the shell owns it. So the selection is turned into the
+        /// keystrokes a user would have pressed to remove it — the shell's cursor never moved from the
+        /// anchor, so a selection made leftwards is that many Backspaces and one made rightwards is that
+        /// many Deletes. The sequences come from the emulator rather than being hard-coded, so they match
+        /// whatever this terminal is configured to send.</para>
+        /// <para>Returned rather than sent, so the caller can write the deletion and the new character as
+        /// ONE write. Sending them separately loses the race against the next keystroke: the handler that
+        /// owns the deletion awaits it while the handlers behind it queue their characters first, and
+        /// "there" typed over a selection arrives as "heret". Measured, not theorised.</para>
+        /// <para>Only a KEYBOARD selection qualifies. A mouse selection can sit anywhere on screen,
+        /// including in the scrollback, with no fixed relationship to where the shell's cursor is — there is
+        /// no honest way to turn that into edits, so typing over one clears it without deleting, as before.
+        /// The alternate buffer is excluded for the same reason: a full-screen app owns its own editing.</para>
+        /// <para>Readline stops at the start of the input, so a selection dragged back over the prompt
+        /// deletes the input and no more rather than eating the prompt.</para>
+        /// </remarks>
         private bool TryExtendKeyboardSelection(KeyEventArgs e)
         {
-            if (e.KeyModifiers != KeyModifiers.Shift)
+            // Only the navigation keys are claimed, and the check comes BEFORE anything is recorded: the
+            // re-anchor below used to run first, so an unrelated shifted keystroke left an anchor set with
+            // no selection behind it.
+            if (e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End))
+                return false;
+
+            NoteInputStart();
+
+            // Shift alone moves by a cell; Ctrl+Shift and Alt+Shift move by a WORD, matching every text
+            // field. Alt is the same gesture on macOS, where Ctrl+arrow belongs to the window manager.
+            //
+            // Ctrl+Shift used to match neither this gate nor the word-motion one below, so it fell through
+            // to the blanket selection-clear and then sent the modified-cursor sequence to the shell — which
+            // moved the cursor by a word and dropped the selection on the way. Reported as #63.
+            // Word-wise movement is horizontal only. Without the key check, Ctrl/Alt+Shift with Up, Down,
+            // Home or End would be swallowed here too, and those chords belong to the application.
+            bool byWord = e.Key is Key.Left or Key.Right
+                          && e.KeyModifiers is (KeyModifiers.Control | KeyModifiers.Shift)
+                                            or (KeyModifiers.Alt | KeyModifiers.Shift);
+
+            // macOS keyboards have no Home/End, so Cmd+arrow is the platform's line-start/line-end and
+            // Cmd+Shift+arrow is its select-to-line-edge. Treated as an alias for Shift+Home / Shift+End
+            // rather than a second mechanism.
+            bool toLineEdge = IsMacOS && e.KeyModifiers == (KeyModifiers.Meta | KeyModifiers.Shift);
+
+            if (e.KeyModifiers != KeyModifiers.Shift && !byWord && !toLineEdge)
                 return false;
             if (_terminal.IsAlternateBufferActive)
                 return false;
@@ -1763,24 +1998,41 @@ namespace Iciclecreek.Terminal
                 _kbSelFocus = cursorOrd;
             }
 
-            int focus = _kbSelFocus;
-            switch (e.Key)
+            var key = e.Key;
+            if (toLineEdge)
             {
-                case Key.Left: focus -= 1; break;
-                case Key.Right: focus += 1; break;
+                // Only the horizontal pair aliases; Cmd+Shift+Up/Down is not a gesture this claims.
+                if (key == Key.Left) key = Key.Home;
+                else if (key == Key.Right) key = Key.End;
+                else return false;
+            }
+
+            int focus = _kbSelFocus;
+            switch (key)
+            {
+                case Key.Left: focus = byWord ? WordBoundary(focus, -1, cols, lastBoundary) : focus - 1; break;
+                case Key.Right: focus = byWord ? WordBoundary(focus, +1, cols, lastBoundary) : focus + 1; break;
                 case Key.Up: focus -= cols; break;
                 case Key.Down: focus += cols; break;
-                case Key.Home: focus -= focus % cols; break;
-                case Key.End: focus += cols - (focus % cols); break;
+                case Key.Home: focus = InputStartBoundary(cols, lastBoundary) is var st && st / cols == focus / cols
+                                          ? st : focus - (focus % cols); break;
+                case Key.End: focus = LineEndBoundary(focus, cols); break;
                 default: return false;
             }
 
-            _kbSelFocus = Math.Clamp(focus, 0, lastBoundary);
+            int floor = InputStartBoundary(cols, lastBoundary);
+            int ceiling = Math.Max(floor, InputEndBoundary(cols, lastBoundary));
+            _kbSelFocus = Math.Clamp(focus, floor, ceiling);
 
             int anchor = _kbSelAnchor.Value;
             if (_kbSelFocus == anchor)
             {
                 _terminal.Selection.ClearSelection();
+
+                // Selection gone means the gesture is over, so the anchor goes with it — otherwise the
+                // caret stays pinned to this boundary and the next thing the shell prints moves the real
+                // cursor out from under a caret that no longer follows it.
+                _kbSelAnchor = null;
             }
             else
             {
@@ -1795,6 +2047,170 @@ namespace Iciclecreek.Terminal
             this.RequestInvalidate();
             return true;
         }
+
+        /// <summary>
+        /// The lowest boundary a keyboard selection may reach: the start of the shell's editable input when
+        /// that is on screen, otherwise the top of the viewport.
+        /// </summary>
+        /// <remarks>
+        /// Selecting back over the prompt is never what the user meant — the prompt is not theirs to edit,
+        /// and readline will not delete it either, so a selection covering it could not be replaced.
+        /// Stopping the selection where the input starts keeps the two agreeing.
+        /// </remarks>
+        private int InputStartBoundary(int cols, int lastBoundary)
+        {
+            if (_inputStartRow < 0)
+                return 0;
+
+            int row = _inputStartRow - _terminal.Buffer.ViewportY;
+            if (row < 0 || row >= _terminal.Rows)
+                return 0;
+
+            return Math.Clamp(row * cols + _inputStartCol, 0, lastBoundary);
+        }
+
+        /// <summary>
+        /// The highest boundary a keyboard selection may reach: just past the last written cell at or after
+        /// the input start.
+        /// </summary>
+        /// <remarks>
+        /// A terminal grid is padded to full width with blanks, so without this Shift+Right walks off the
+        /// end of the input and selects the empty rest of the screen a cell at a time. There is nothing
+        /// there to select, and nothing the replace could do with it.
+        ///
+        /// Scanned backwards from the end so a wrapped input — which spans rows — is bounded by its real
+        /// end rather than by the row the caret happens to be on. Wide glyphs count their placeholder, for
+        /// the same reason <see cref="LineEndBoundary"/> does.
+        ///
+        /// <para>KNOWN LIMIT: a trailing space the user typed is not counted, so a selection stops just
+        /// before it. There is no way to do better here — the emulator fills unwritten cells with spaces,
+        /// and a typed space is identical to one of those in every respect. Measured: both carry
+        /// <c>Content == " "</c>, <c>Width == 1</c> and <c>CodePoint == 32</c>. Distinguishing them needs
+        /// the buffer to record that a cell was written, which is a change in XTerm.NET rather than
+        /// here.</para>
+        /// </remarks>
+        private int InputEndBoundary(int cols, int lastBoundary)
+        {
+            int floor = InputStartBoundary(cols, lastBoundary);
+
+            for (int b = lastBoundary - 1; b >= floor; b--)
+            {
+                int row = b / cols;
+                int col = b % cols;
+                var line = _terminal.Buffer.GetLine(_terminal.Buffer.ViewportY + row);
+                if (line == null || col >= line.Length)
+                    continue;
+
+                var cell = line[col];
+                if (!string.IsNullOrWhiteSpace(cell.Content))
+                    return Math.Min(b + Math.Max(1, cell.Width), lastBoundary);
+            }
+
+            return floor;
+        }
+
+        /// <summary>
+        /// The next word boundary from <paramref name="from"/> in <paramref name="direction"/>, as a caret
+        /// boundary ordinal.
+        /// </summary>
+        /// <remarks>
+        /// Readline's rule, which is what a shell user already has in their fingers: skip any run of
+        /// separators, then skip the run of word characters beyond it. Moving left looks at the cell BEFORE
+        /// the caret and moving right at the cell after, because a caret sits between cells — the same
+        /// asymmetry that makes one Shift+Right cover exactly one cell.
+        ///
+        /// Always advances by at least one cell when there is room, so holding the chord cannot stall on a
+        /// boundary it is already sitting on.
+        /// </remarks>
+        /// <summary>
+        /// The caret boundary just past the last non-blank cell on <paramref name="from"/>'s row.
+        /// </summary>
+        /// <remarks>
+        /// End means "end of what is written", not "end of the grid". A terminal row is padded out to the
+        /// full width with blanks, so jumping to the row edge selects a screenful of spaces after the
+        /// prompt — the same surprise as walking a word chord into empty space.
+        /// </remarks>
+        /// <summary>
+        /// The lowest boundary a keyboard selection may reach: the start of the shell's editable input when
+        /// that is on screen, otherwise the top of the viewport.
+        /// </summary>
+        /// <remarks>
+        /// Selecting back over the prompt is never what the user meant — the prompt is not theirs to edit,
+        /// and readline will not delete it either, so a selection covering it could not be replaced.
+        /// Stopping the selection where the input starts keeps the two agreeing.
+        /// </remarks>
+        private int LineEndBoundary(int from, int cols)
+        {
+            int row = from / cols;
+            var line = _terminal.Buffer.GetLine(_terminal.Buffer.ViewportY + row);
+            if (line == null)
+                return from;
+
+            // Past the WHOLE glyph, not just its first cell. A width-2 character is followed by a width-0
+            // placeholder, so recording only the column the glyph starts in leaves the boundary — and the
+            // selection edge with it — in the middle of one character.
+            int lastContent = -1;
+            for (int x = 0; x < Math.Min(line.Length, cols); x++)
+            {
+                var cell = line[x];
+                if (!string.IsNullOrWhiteSpace(cell.Content))
+                    lastContent = x + Math.Max(0, cell.Width - 1);
+            }
+
+            // Nothing on the row, or the caret is already past the content: stay put.
+            int edge = row * cols + lastContent + 1;
+            return edge > from ? edge : from;
+        }
+
+        /// <summary>
+        /// The next word boundary from <paramref name="from"/> in <paramref name="direction"/>, as a caret
+        /// boundary ordinal.
+        /// </summary>
+        /// <remarks>
+        /// <para>Readline's rule, which is what a shell user already has in their fingers: skip any run of
+        /// separators, then skip the run of word characters beyond it. Moving left looks at the cell BEFORE
+        /// the caret and moving right at the cell after, because a caret sits between cells.</para>
+        /// <para>Stays put when the scan finds no word that way. A terminal's grid is mostly empty cells,
+        /// so without that a chord at the prompt selects the whole rest of the screen.</para>
+        /// </remarks>
+        private int WordBoundary(int from, int direction, int cols, int lastBoundary)
+        {
+            // A wide glyph — CJK, emoji — occupies two cells: the glyph, then a width-0 PLACEHOLDER whose
+            // content is empty. Read as content that placeholder looks like whitespace, so a word scan stops
+            // between the two halves of one character and the selection covers half a glyph. It is part of
+            // the glyph before it, so it is never a separator.
+            static bool IsSeparator((string? Content, int Width) cell)
+                => cell.Width != 0 && string.IsNullOrWhiteSpace(cell.Content);
+
+            (string? Content, int Width) CellAt(int boundary)
+            {
+                int row = boundary / cols;
+                int col = boundary % cols;
+                var line = _terminal.Buffer.GetLine(_terminal.Buffer.ViewportY + row);
+                if (line == null || col < 0 || col >= line.Length) return (null, 1);
+                return (line[col].Content, line[col].Width);
+            }
+
+            int i = Math.Clamp(from, 0, lastBoundary);
+            bool foundWord = false;
+
+            if (direction < 0)
+            {
+                while (i > 0 && IsSeparator(CellAt(i - 1))) i--;
+                while (i > 0 && !IsSeparator(CellAt(i - 1))) { i--; foundWord = true; }
+            }
+            else
+            {
+                while (i < lastBoundary && IsSeparator(CellAt(i))) i++;
+                while (i < lastBoundary && !IsSeparator(CellAt(i))) { i++; foundWord = true; }
+            }
+
+            // Nothing but blanks that way, so there is no word to move to. Stay put rather than running to
+            // the edge of the grid: a terminal's buffer is mostly empty cells, so without this a chord at
+            // the prompt selects the whole rest of the screen — which is what it did the first time.
+            return foundWord ? i : from;
+        }
+
 
         protected override async void OnKeyUp(KeyEventArgs e)
         {
@@ -1862,12 +2278,20 @@ namespace Iciclecreek.Terminal
                 return;
             }
 
-            // Clear selection when text is being input
-            if (_terminal.Selection.HasSelection)
+            // Typing over a selection replaces it; failing that, the selection is simply dropped. The
+            // anchor goes either way — see OnKeyDown.
+            NoteInputStart();
+
+            var replaceKeys = _pendingReplaceKeys.Length > 0 ? _pendingReplaceKeys : TakeKeyboardSelectionDeletion();
+            _pendingReplaceKeys = string.Empty;
+            if (replaceKeys.Length == 0)
             {
-                _terminal.Selection.ClearSelection();
                 _kbSelAnchor = null;
-                this.RequestInvalidate();
+                if (_terminal.Selection.HasSelection)
+                {
+                    _terminal.Selection.ClearSelection();
+                    this.RequestInvalidate();
+                }
             }
 
             FollowTail();   // typing returns the view to the prompt
@@ -1875,7 +2299,7 @@ namespace Iciclecreek.Terminal
             try
             {
                 Debug.WriteLine($"[TerminalView] OnTextInput: Sending '{e.Text}' to PTY");
-                await SendToPtyAsync(e.Text).ConfigureAwait(false);
+                await SendToPtyAsync(replaceKeys + e.Text).ConfigureAwait(false);
                 e.Handled = true;
             }
             catch (Exception ex)
@@ -3282,6 +3706,16 @@ namespace Iciclecreek.Terminal
                     lock (_terminalLock)
                     {
                         _terminal.Write(output);
+
+                        // See _inputStartRow. A change of row means the shell drew something new, so the
+                        // recorded input start is stale — but where the prompt ENDS is not known until the
+                        // user types, since the prompt may still be arriving.
+                        int cursorRow = _terminal.Buffer.YBase + _terminal.Buffer.Y;
+                        if (cursorRow != _lastOutputRow)
+                        {
+                            _lastOutputRow = cursorRow;
+                            _inputStartPending = !_semanticPrompt;
+                        }
                     }
 
                     // Signal on the first chunk only. Posting per chunk would keep queueing UI-thread
@@ -3999,6 +4433,38 @@ namespace Iciclecreek.Terminal
             context.FillRectangle(SelectionBrush, rect);
         }
 
+        /// <summary>
+        /// Where the caret is drawn: its column, and its ABSOLUTE row (<c>YBase + Y</c> space, the same one
+        /// the viewport check uses).
+        /// </summary>
+        /// <remarks>
+        /// <para>Normally the shell's cursor. While a keyboard selection is in flight it follows the
+        /// selection's moving EDGE instead, the way it does in every text field — extending a selection and
+        /// leaving the caret behind reads as a stuck cursor.</para>
+        /// <para>Only where the caret is DRAWN changes. The shell still owns the real cursor and is never
+        /// told about this, because it must not be: the buffer position is where the shell will write next,
+        /// and moving it to follow a selection would put the next output in the wrong place.</para>
+        /// <para>Internal rather than private so this is directly assertable. It is otherwise only
+        /// observable as pixels, and the test suite runs on the headless drawing backend.</para>
+        /// </remarks>
+        internal (int Column, int AbsoluteRow) CaretPosition
+        {
+            get
+            {
+                // Both conditions: the anchor says a gesture is in flight, the selection says it still has
+                // something to show. Belt and braces — every path that clears one now clears the other, but
+                // a stale anchor pins the caret while the shell's cursor moves on, which is the exact
+                // failure this branch has already hit twice.
+                if (_kbSelAnchor is not null && _terminal.Selection.HasSelection)
+                {
+                    int cols = Math.Max(1, _terminal.Cols);
+                    return (_kbSelFocus % cols, _terminal.Buffer.ViewportY + (_kbSelFocus / cols));
+                }
+
+                return (_terminal.Buffer.X, _terminal.Buffer.YBase + _terminal.Buffer.Y);
+            }
+        }
+
         private void RenderCursor(DrawingContext context, int viewportY, double scale)
         {
             // No process, no cursor. The checks below are all about what the BUFFER says, and a buffer says
@@ -4017,13 +4483,7 @@ namespace Iciclecreek.Terminal
             if (!_cursorBlinkOn)
                 return;
 
-            // Get cursor position relative to viewport
-            int cursorX = _terminal.Buffer.X;
-            int cursorY = _terminal.Buffer.Y;
-
-            // The cursor Y is relative to the active screen area, need to check if it's visible
-            // when scrolled. Cursor is at absolute position: Buffer.YBase + Buffer.Y
-            int absoluteCursorY = _terminal.Buffer.YBase + cursorY;
+            var (cursorX, absoluteCursorY) = CaretPosition;
 
             // Check if cursor is visible in current viewport
             if (absoluteCursorY < viewportY || absoluteCursorY >= viewportY + _terminal.Rows)

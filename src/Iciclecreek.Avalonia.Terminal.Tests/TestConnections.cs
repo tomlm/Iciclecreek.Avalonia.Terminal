@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Porta.Pty;
 
@@ -70,6 +71,72 @@ internal sealed class RecordingConnection : IPtyConnection
     public int Pid => -1;
     public void Kill() { }
     public void Resize(int c, int r) { }
+    public void Dispose() { }
+    public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
+}
+
+/// <summary>A stream the test feeds on demand; Read blocks until something is pushed or it is closed.</summary>
+/// <remarks>
+/// Honours <c>count</c> and carries the remainder of an oversized chunk into the next call. Copying a
+/// whole chunk regardless would happen to work today only because the read loop's buffer is far larger
+/// than anything a test pushes — the moment that stops being true it would overrun the caller's buffer
+/// rather than fail an assertion, which makes every test in this file quietly dependent on a sizing
+/// decision made somewhere else.
+/// </remarks>
+internal sealed class PushStream : Stream
+{
+    private readonly BlockingCollection<byte[]> _queue = new();
+    private byte[]? _chunk;     // the chunk being handed out
+    private int _consumed;      // how much of it has already gone
+
+    public void Push(string text) => _queue.Add(Encoding.UTF8.GetBytes(text));
+    public void Done() => _queue.CompleteAdding();
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        ValidateBufferArguments(buffer, offset, count);
+        if (count == 0) return 0;
+
+        // Empty pushes are skipped rather than returned: a zero-length read is EOF to the caller, and a
+        // test that pushed "" would end the read loop instead of doing nothing.
+        while (_chunk == null || _consumed == _chunk.Length)
+        {
+            try { _chunk = _queue.Take(); }               // blocks; throws when completed and drained
+            catch (InvalidOperationException) { return 0; }   // EOF
+            _consumed = 0;
+        }
+
+        var n = Math.Min(count, _chunk.Length - _consumed);
+        Array.Copy(_chunk, _consumed, buffer, offset, n);
+        _consumed += n;
+        return n;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+}
+
+internal sealed class PushConnection : IPtyConnection
+{
+    private readonly PushStream _stream = new();
+    public Stream ReaderStream => _stream;
+    public Stream WriterStream { get; } = new MemoryStream();
+
+    public void Push(string text) => _stream.Push(text);
+    public void Done() => _stream.Done();
+
+    public int ExitCode => 0;
+    public bool WaitForExit(int milliseconds) => true;
+    public int Pid => -1;
+    public void Kill() { }
+    public void Resize(int columns, int rows) { }
     public void Dispose() { }
     public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
 }
