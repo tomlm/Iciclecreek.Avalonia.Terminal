@@ -802,6 +802,15 @@ namespace Iciclecreek.Terminal
 
             _terminal = new XT.Terminal(options);
 
+            // Tell the emulator what colours it is actually being drawn in. Nothing else does: the render
+            // path reads the brushes straight off this control, so the emulator's own palette stayed at its
+            // built-in white-on-black no matter how the host was themed.
+            //
+            // That palette is what answers OSC 10/11, and programs query OSC 11 to decide whether they are
+            // running on a light or a dark terminal. Left unsynced, a light-themed host tells every one of
+            // them "dark" and gets a dark theme painted onto it.
+            SyncPaletteToBrushes();
+
             // The normal buffer's ring evicts its oldest lines once the scrollback fills, and every absolute
             // index shifts down with it. A view parked in the scrollback has to move with the eviction or the
             // content slides upward under the user while output keeps arriving.
@@ -1203,6 +1212,29 @@ namespace Iciclecreek.Terminal
             set => SetValue(OptionsProperty, value);
         }
 
+        /// <summary>
+        /// Push <see cref="Foreground"/> and <see cref="Background"/> into the emulator's palette, which is
+        /// what answers OSC 10/11 colour queries.
+        /// </summary>
+        /// <remarks>
+        /// Only a solid brush carries a single colour to report. A gradient or a tiled brush has no one
+        /// answer, so the palette keeps whatever it had rather than reporting an arbitrary stop — a wrong
+        /// answer to "are you light or dark" is worse than the default one.
+        /// </remarks>
+        private void SyncPaletteToBrushes()
+        {
+            if (_terminal == null)
+                return;
+
+            if (Foreground is ISolidColorBrush fg)
+                _terminal.Colors.SetForeground(ToRgb(fg.Color));
+
+            if (Background is ISolidColorBrush bg)
+                _terminal.Colors.SetBackground(ToRgb(bg.Color));
+
+            static int ToRgb(Color c) => (c.R << 16) | (c.G << 8) | c.B;
+        }
+
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
             // BEFORE the _terminal null-check below, deliberately. That guard returns early while the view
@@ -1222,7 +1254,13 @@ namespace Iciclecreek.Terminal
             if (_terminal == null || _cursorBlinkTimer == null)
                 return;
 
-            if (change.Property == CursorStyleProperty)
+            if (change.Property == ForegroundProperty || change.Property == BackgroundProperty)
+            {
+                // Re-themed after the emulator was built, so the palette that answers OSC 10/11 has to move
+                // with it. AffectsRender already covers the repaint; this is the emulator's own copy.
+                SyncPaletteToBrushes();
+            }
+            else if (change.Property == CursorStyleProperty)
             {
                 _terminal.Options.CursorStyle = (XT.Common.CursorStyle)change.NewValue!;
             }

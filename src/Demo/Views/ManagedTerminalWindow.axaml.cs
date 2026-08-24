@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -169,13 +170,14 @@ namespace Demo.Views
             Options.WindowOptions.MinimizeWin = true;
             Options.WindowOptions.FullscreenWin = true;
 
+            // Foreground and Background are deliberately NOT seeded here. OnInitialized runs during
+            // construction — before a caller's object initialiser — so reading them now captures the
+            // defaults and not what the caller asked for. The bindings below are what carry them.
             _terminalControl = new TerminalControl()
             {
                 Options = this.Options,
                 FontFamily = this.FontFamily,
                 FontSize = this.FontSize,
-                Foreground = this.Foreground,
-                Background = this.Background,
             };
 
             // Subscribe to terminal events.
@@ -198,8 +200,8 @@ namespace Demo.Views
             _terminalControl.Bind(TerminalControl.FontSizeProperty, this.GetObservable(FontSizeProperty));
             _terminalControl.Bind(TerminalControl.FontStyleProperty, this.GetObservable(FontStyleProperty));
             _terminalControl.Bind(TerminalControl.FontWeightProperty, this.GetObservable(FontWeightProperty));
-            //_terminalControl.Bind(TemplatedControl.ForegroundProperty, this.GetObservable(ForegroundProperty));
-            //_terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
+            _terminalControl.Bind(TemplatedControl.ForegroundProperty, this.GetObservable(ForegroundProperty));
+            _terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
