@@ -169,6 +169,39 @@ public class ShiftSelectionTests
         window.Close();
     }
 
+    /// <summary>
+    /// What counts as a word is XTerm.NET's definition, the same one double-click expansion uses.
+    /// </summary>
+    /// <remarks>
+    /// "hello world" cannot show this: whitespace-delimited and letter-delimited agree on it. A hyphen is
+    /// where they part company — it is not whitespace, but it is not a word character either. The keyboard
+    /// gesture used to answer "foo-bar" where a double-click answered "bar", so the same terminal gave two
+    /// different answers about the same text depending on which hand you used.
+    /// </remarks>
+    [AvaloniaTest]
+    public async Task A_word_ends_where_double_click_says_it_does()
+    {
+        var (view, pty, window) = LiveView();
+        Type(view, "foo-bar");
+        await Task.Delay(60);
+
+        Press(view, Key.Left, KeyModifiers.Control | KeyModifiers.Shift);
+        await Task.Delay(60);
+
+        Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("bar"),
+            "the hyphen ends the word, as it does for double-click");
+
+        // The other half of the claim: the mouse gesture, over the same text, agrees.
+        view.Terminal.Selection.ClearSelection();
+        view.Terminal.Selection.StartSelection(5, 0, XTerm.Selection.SelectionMode.Word);
+        view.Terminal.Selection.EndSelection();
+
+        Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("bar"),
+            "sanity: this is the definition being matched, not a coincidence");
+
+        window.Close();
+    }
+
     /// <summary>A second press keeps growing it, rather than re-anchoring.</summary>
     [AvaloniaTest]
     public async Task Repeated_ctrl_shift_left_keeps_growing_the_selection()

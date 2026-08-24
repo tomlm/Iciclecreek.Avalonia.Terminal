@@ -1922,35 +1922,18 @@ namespace Iciclecreek.Terminal
         /// text field does, instead of sending the modified-cursor escape sequence to the shell.
         /// </summary>
         /// <remarks>
-        /// Anchor and focus are caret BOUNDARIES (<c>row * Cols + col</c> over the gaps between cells), so
-        /// one Shift+Right covers one cell and collapsing back onto the anchor clears the selection —
-        /// exactly the arithmetic an editor does. The selection API itself is inclusive-cell, so the pair
-        /// is converted at the end.
+        /// <para>Anchor and focus are caret BOUNDARIES (<c>row * Cols + col</c> over the gaps between
+        /// cells), so one Shift+Right covers one cell and collapsing back onto the anchor clears the
+        /// selection — exactly the arithmetic an editor does. The selection API itself is inclusive-cell,
+        /// so the pair is converted at the end.</para>
         ///
-        /// Left alone in the alternate buffer: full-screen apps (vim, less, a TUI agent) draw their own
-        /// selection and several bind Shift+arrow, so there the sequence still belongs to the app.
-        /// </remarks>
-        /// <summary>
-        /// The keystrokes that remove what a keyboard selection covers, so that typing over a selection
-        /// REPLACES it the way it does in a text field. Empty when there is nothing to replace. Clears the
-        /// selection as it takes it.
-        /// </summary>
-        /// <remarks>
-        /// <para>The view cannot edit the line: the shell owns it. So the selection is turned into the
-        /// keystrokes a user would have pressed to remove it — the shell's cursor never moved from the
-        /// anchor, so a selection made leftwards is that many Backspaces and one made rightwards is that
-        /// many Deletes. The sequences come from the emulator rather than being hard-coded, so they match
-        /// whatever this terminal is configured to send.</para>
-        /// <para>Returned rather than sent, so the caller can write the deletion and the new character as
-        /// ONE write. Sending them separately loses the race against the next keystroke: the handler that
-        /// owns the deletion awaits it while the handlers behind it queue their characters first, and
-        /// "there" typed over a selection arrives as "heret". Measured, not theorised.</para>
-        /// <para>Only a KEYBOARD selection qualifies. A mouse selection can sit anywhere on screen,
-        /// including in the scrollback, with no fixed relationship to where the shell's cursor is — there is
-        /// no honest way to turn that into edits, so typing over one clears it without deleting, as before.
-        /// The alternate buffer is excluded for the same reason: a full-screen app owns its own editing.</para>
-        /// <para>Readline stops at the start of the input, so a selection dragged back over the prompt
-        /// deletes the input and no more rather than eating the prompt.</para>
+        /// <para>Three chords reach here. Shift alone moves by a cell; Ctrl+Shift and Alt+Shift move by a
+        /// word — Alt as well as Ctrl because on macOS Ctrl+arrow belongs to Mission Control and never
+        /// arrives. Cmd+Shift+Left/Right is aliased to Shift+Home/End there, since a Mac keyboard has no
+        /// Home or End key to press.</para>
+        ///
+        /// <para>Left alone in the alternate buffer: full-screen apps (vim, less, a TUI agent) draw their
+        /// own selection and several bind Shift+arrow, so there the sequence still belongs to the app.</para>
         /// </remarks>
         private bool TryExtendKeyboardSelection(KeyEventArgs e)
         {
@@ -2175,12 +2158,20 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private int WordBoundary(int from, int direction, int cols, int lastBoundary)
         {
+            // What counts as a word is XTerm.NET's definition, not a second one invented here.
+            // SelectionManager.IsWordChar is what double-click expansion uses, and a terminal that
+            // disagreed with itself about where "foo-bar" ends depending on whether you reached for the
+            // mouse or the keyboard would be worse than either answer on its own.
+            static bool IsWordChar(string? content)
+                => !string.IsNullOrEmpty(content)
+                   && (char.IsLetterOrDigit(content[0]) || content[0] == '_');
+
             // A wide glyph — CJK, emoji — occupies two cells: the glyph, then a width-0 PLACEHOLDER whose
-            // content is empty. Read as content that placeholder looks like whitespace, so a word scan stops
-            // between the two halves of one character and the selection covers half a glyph. It is part of
-            // the glyph before it, so it is never a separator.
+            // content is empty. Read as content that placeholder is not a word character, so a word scan
+            // stops between the two halves of one character and the selection covers half a glyph. It is
+            // part of the glyph before it, so it is never a separator.
             static bool IsSeparator((string? Content, int Width) cell)
-                => cell.Width != 0 && string.IsNullOrWhiteSpace(cell.Content);
+                => cell.Width != 0 && !IsWordChar(cell.Content);
 
             (string? Content, int Width) CellAt(int boundary)
             {
