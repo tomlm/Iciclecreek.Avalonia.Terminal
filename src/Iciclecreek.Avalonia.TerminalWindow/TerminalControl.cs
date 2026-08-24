@@ -648,7 +648,7 @@ namespace Iciclecreek.Terminal
 
             if (_terminalView.IsAlternateBuffer)
             {
-                _scrollBar.IsVisible = false;
+                ShowScrollBar(false);
                 _scrollBar.Value = 0;
                 return;
             }
@@ -661,7 +661,7 @@ namespace Iciclecreek.Terminal
             _scrollBar.Minimum = 0;
             _scrollBar.Maximum = maxScrollback;
             _scrollBar.ViewportSize = viewportLines;
-            _scrollBar.IsVisible = maxScrollback > 0;
+            ShowScrollBar(maxScrollback > 0);
 
             // Not while the user is dragging. ViewportY raises its change synchronously, so this method runs
             // inside OnScrollBarScroll — and writing Value here would replace the fractional position the
@@ -672,6 +672,36 @@ namespace Iciclecreek.Terminal
             {
                 _scrollBar.Value = currentScroll;
             }
+        }
+
+        /// <summary>
+        /// Show or hide the scrollbar WITHOUT changing how much room it takes.
+        /// </summary>
+        /// <remarks>
+        /// <para><c>IsVisible = false</c> removes it from layout. The template puts it in an <c>Auto</c>
+        /// column, so that column collapses, the terminal's column grows, and ArrangeOverride resizes the
+        /// emulator AND the pty. The process is then told the terminal changed width.</para>
+        ///
+        /// <para>That is not a cosmetic problem. A full-screen program switches to the alternate buffer as
+        /// its very first action, which hides the scrollbar, which resized the terminal underneath it while
+        /// it was drawing its opening frame. A program that writes one screen-width per row and lets the
+        /// cursor wrap — rather than positioning it explicitly — then has every row after the first land
+        /// somewhere it did not intend. It repaints the whole screen trying to recover, and what the reader
+        /// sees is a terminal that came up blank.</para>
+        ///
+        /// <para>The same applied in the normal buffer the moment the first line scrolled off and the
+        /// scrollbar appeared: the terminal silently narrowed by two columns mid-session.</para>
+        ///
+        /// <para>Hiding it by opacity keeps the column reserved, so the width the process was told stays
+        /// true. It stops taking clicks as well, or an invisible scrollbar would still swallow them.</para>
+        /// </remarks>
+        private void ShowScrollBar(bool shown)
+        {
+            if (_scrollBar == null)
+                return;
+
+            _scrollBar.Opacity = shown ? 1 : 0;
+            _scrollBar.IsHitTestVisible = shown;
         }
     }
 }

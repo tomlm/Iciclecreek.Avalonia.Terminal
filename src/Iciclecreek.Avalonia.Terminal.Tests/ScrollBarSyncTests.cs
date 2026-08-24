@@ -137,6 +137,13 @@ public class ScrollBarSyncTests
     /// A full-screen application takes over the alternate buffer, where there is no scrollback to speak of,
     /// so the bar hides rather than offering a range that means nothing.
     /// </summary>
+    /// <remarks>
+    /// Hidden by opacity, not by <c>IsVisible</c>, and the difference is load-bearing rather than stylistic.
+    /// <c>IsVisible = false</c> drops the bar out of layout; it sits in the template's <c>Auto</c> column, so
+    /// that column collapses and the terminal grows into it — which resizes the emulator and tells the
+    /// process the terminal changed width. See <c>TerminalWidthStabilityTests</c> for what that did to a
+    /// program mid-draw.
+    /// </remarks>
     [AvaloniaTest]
     public void The_scrollbar_hides_with_no_scrollback()
     {
@@ -148,7 +155,8 @@ public class ScrollBarSyncTests
             var bar = ScrollBarOf(control);
 
             Assert.That(control.MaxScrollback, Is.EqualTo(0), "a fresh terminal has nothing above the screen");
-            Assert.That(bar.IsVisible, Is.False, "nothing to scroll, so nothing to show");
+            Assert.That(bar.Opacity, Is.EqualTo(0), "nothing to scroll, so nothing to show");
+            Assert.That(bar.IsHitTestVisible, Is.False, "and it must not swallow clicks while invisible");
         }
         finally
         {
