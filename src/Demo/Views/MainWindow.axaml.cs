@@ -33,6 +33,7 @@ public partial class MainWindow : Window
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
                                           Random.Shared.Next(0, (int)this.Bounds.Height - maxHeight))
         };
+        Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
         terminalWindow.Show(Windows);
     }
 
@@ -53,6 +54,7 @@ public partial class MainWindow : Window
             Height = 25*FontSize,
             CloseOnProcessExit = true
         };
+        Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
         terminalWindow.Show(Windows);
     }
 
@@ -74,6 +76,7 @@ public partial class MainWindow : Window
             Foreground = Avalonia.Media.Brushes.Yellow,
             CloseOnProcessExit = true
         };
+        Demo.PtyTrace.Attach(terminalWindow, terminalWindow.Title ?? "terminal");
         terminalWindow.Show();
     }
 
@@ -95,7 +98,7 @@ public partial class MainWindow : Window
             CloseOnProcessExit = true
         };
 
-        // Set PTY_TRACE=1 to record what the process writes. Off otherwise, and free when off.
+        // Recording what the process writes is on by default here; set PTY_TRACE=0 to turn it off.
         var traceDir = Demo.PtyTrace.Attach(terminalWindow, command.Value.Process);
         if (traceDir != null)
             terminalWindow.Title += $"  [tracing → {traceDir}]";

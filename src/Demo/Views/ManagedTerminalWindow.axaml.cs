@@ -210,6 +210,12 @@ namespace Demo.Views
             Content = _terminalControl;
         }
 
+        /// <summary>
+        /// The terminal this window hosts. Exposed so the demo can attach a trace to it — unlike
+        /// TerminalWindow, this class does not re-raise the terminal's own events.
+        /// </summary>
+        public TerminalControl? Terminal => _terminalControl;
+
         /// <inheritdoc cref="TerminalView.SendInputAsync"/>
         public System.Threading.Tasks.Task SendInputAsync(string text, System.Threading.CancellationToken cancellationToken = default)
             => _terminalControl?.SendInputAsync(text, cancellationToken) ?? System.Threading.Tasks.Task.CompletedTask;

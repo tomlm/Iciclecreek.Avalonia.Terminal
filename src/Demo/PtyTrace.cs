@@ -31,40 +31,67 @@ internal static class PtyTrace
         ("[2J",     "erase display (fills with the CURRENT attributes)"),
     };
 
-    public static bool Enabled =>
-        Environment.GetEnvironmentVariable("PTY_TRACE") is { Length: > 0 } v && v != "0";
-
     /// <summary>
-    /// Attach to a terminal. Returns the trace directory, or null when tracing is off.
+    /// On by default in the demo. An opt-in variable is one more thing to get wrong — it has to reach the
+    /// process, which it does not when the app is launched from an IDE rather than the shell that set it,
+    /// and the cost of finding that out is a lost reproduction of an intermittent fault. Set PTY_TRACE=0
+    /// to turn it off.
     /// </summary>
+    public static bool Enabled =>
+        Environment.GetEnvironmentVariable("PTY_TRACE") is not "0";
+
+    /// <summary>Attach to a TerminalWindow. Returns the trace directory, or null when tracing is off.</summary>
     public static string? Attach(TerminalWindow window, string name)
     {
         if (!Enabled)
             return null;
 
-        var dir = Path.Combine(Path.GetTempPath(), "pty-trace");
-        Directory.CreateDirectory(dir);
-
-        var stamp = DateTime.Now.ToString("HHmmss");
-        var safe = string.Join("_", name.Split(Path.GetInvalidFileNameChars()));
-        var bin = Path.Combine(dir, $"{safe}-{stamp}.bin");
-        var txt = Path.Combine(dir, $"{safe}-{stamp}.txt");
+        var (dir, bin, txt) = Files(name);
 
         // On the read task, so what is recorded is what arrived and in the order it arrived — marshalling to
         // the UI thread first would reorder relative to the writes that provoked it.
         window.OutputReceivedOnReadTask = true;
 
         var gate = new object();
-        window.OutputReceived += (_, e) =>
-        {
-            lock (gate)
-            {
-                File.AppendAllText(bin, e.Output);
-                File.AppendAllText(txt, Annotate(e.Output));
-            }
-        };
+        window.OutputReceived += (_, e) => Record(gate, bin, txt, e.Output);
 
         return dir;
+    }
+
+    /// <summary>Attach to a TerminalControl, for hosts that do not re-raise the event themselves.</summary>
+    public static string? Attach(TerminalControl? control, string name)
+    {
+        if (!Enabled || control == null)
+            return null;
+
+        var (dir, bin, txt) = Files(name);
+
+        control.OutputReceivedOnReadTask = true;
+
+        var gate = new object();
+        control.OutputReceived += (_, e) => Record(gate, bin, txt, e.Output);
+
+        return dir;
+    }
+
+    /// <summary>Where this run's two files go. Stamped to the second so repeated launches do not merge.</summary>
+    private static (string Dir, string Bin, string Txt) Files(string name)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pty-trace");
+        Directory.CreateDirectory(dir);
+
+        var stamp = DateTime.Now.ToString("HHmmss");
+        var safe = string.Join("_", name.Split(Path.GetInvalidFileNameChars()));
+        return (dir, Path.Combine(dir, $"{safe}-{stamp}.bin"), Path.Combine(dir, $"{safe}-{stamp}.txt"));
+    }
+
+    private static void Record(object gate, string bin, string txt, string chunk)
+    {
+        lock (gate)
+        {
+            File.AppendAllText(bin, chunk);
+            File.AppendAllText(txt, Annotate(chunk));
+        }
     }
 
     /// <summary>Rewrite a chunk so escape sequences are visible, and flag the ones that can invert a screen.</summary>
