@@ -59,9 +59,8 @@ namespace Iciclecreek.Avalonia.Terminal
             {
                 var next = line[x];
 
-                // A width-0 cell is the placeholder trailing a wide character and carries no content of its
-                // own; a differently-attributed cell is a different run however the codepoints read.
-                if (next.Width < 1 || next.Attributes != first.Attributes) break;
+                // Width-0 cells are placeholders; differently-attributed or empty cells should terminate a join.
+                if (next.Width < 1 || next.Attributes != first.Attributes || string.IsNullOrEmpty(next.Content)) break;
 
                 builder.Append(next.Content);
                 cellCount += next.Width;
