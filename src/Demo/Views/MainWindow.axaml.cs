@@ -26,8 +26,8 @@ public partial class MainWindow : Window
         {
             Width = 80 * FontSize,
             Height = 25 * FontSize,
-            Background= Avalonia.Media.Brushes.Blue,
-            Foreground= Avalonia.Media.Brushes.Yellow,
+            Background= Avalonia.Media.Brushes.Black,
+            Foreground= Avalonia.Media.Brushes.LightGray,
             CloseOnProcessExit = true,
             WindowStartupLocation = WindowStartupLocation.Manual,
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
@@ -48,8 +48,8 @@ public partial class MainWindow : Window
             Process = command.Value.Process,
             Args = command.Value.Args,
             Title = command.Value.Process,
-            Background = Avalonia.Media.Brushes.Blue,
-            Foreground = Avalonia.Media.Brushes.Yellow,
+            Background = Avalonia.Media.Brushes.Black,
+            Foreground = Avalonia.Media.Brushes.LightGray,
             Width = 80*FontSize,
             Height = 25*FontSize,
             CloseOnProcessExit = true
@@ -72,8 +72,8 @@ public partial class MainWindow : Window
             Title = "TerminalWindow",
             Width = 80 * FontSize,
             Height = 25 * FontSize,
-            Background = Avalonia.Media.Brushes.Blue,
-            Foreground = Avalonia.Media.Brushes.Yellow,
+            Background = Avalonia.Media.Brushes.Black,
+            Foreground = Avalonia.Media.Brushes.LightGray,
             CloseOnProcessExit = true
         };
         Demo.PtyTrace.Attach(terminalWindow, terminalWindow.Title ?? "terminal");
@@ -91,8 +91,8 @@ public partial class MainWindow : Window
             Process = command.Value.Process,
             Args = command.Value.Args,
             Title = command.Value.Process,
-            Background = Avalonia.Media.Brushes.Blue,
-            Foreground = Avalonia.Media.Brushes.Yellow,
+            Background = Avalonia.Media.Brushes.Black,
+            Foreground = Avalonia.Media.Brushes.LightGray,
             Width = 80 * FontSize,
             Height = 25 * FontSize,
             CloseOnProcessExit = true
