@@ -59,11 +59,13 @@ namespace Iciclecreek.Avalonia.Terminal
             {
                 var next = line[x];
 
-                // Width-0 cells are placeholders; differently-attributed or empty cells should terminate a join.
-                if (next.Width < 1 || next.Attributes != first.Attributes || string.IsNullOrEmpty(next.Content)) break;
+                // A width-0 cell is the placeholder trailing a wide character and carries no content of its
+                // own; a differently-attributed cell is a different run however the codepoints read.
+                if (next.Width < 1 || next.Attributes != first.Attributes) break;
 
                 // Nothing joins to a blank. A joiner with no component after it is simply dangling, and
-                // absorbing the space would stretch the run a column past the glyph it draws.
+                // absorbing the space the emulator pads a line with would stretch the run a column past the
+                // glyph it draws.
                 //
                 // The empty case is the load-bearing half: a cell that appends nothing leaves the trailing
                 // joiner in place, so the loop would take the same branch again and walk to the right edge,
