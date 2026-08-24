@@ -1,5 +1,3 @@
-using System.Text;
-using Porta.Pty;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Headless.NUnit;
@@ -18,54 +16,6 @@ namespace Iciclecreek.Terminal.Tests;
 public class KeyboardChordTests
 {
     private const string Esc = "\u001b";   // what a shell binds word-motion to: ESC-b / ESC-f
-    /// <summary>A live connection that records everything written to the pty.</summary>
-    private sealed class RecordingConnection : IPtyConnection
-    {
-        private sealed class Blocking : Stream
-        {
-            private readonly ManualResetEventSlim _never = new(false);
-            public override int Read(byte[] b, int o, int c) { _never.Wait(); return 0; }
-            public override bool CanRead => true;
-            public override bool CanSeek => false;
-            public override bool CanWrite => false;
-            public override long Length => throw new NotSupportedException();
-            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-            public override void Flush() { }
-            public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
-            public override void SetLength(long v) => throw new NotSupportedException();
-            public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
-        }
-
-        private sealed class Recorder : Stream
-        {
-            private readonly MemoryStream _sink;
-            public Recorder(MemoryStream sink) => _sink = sink;
-            public override void Write(byte[] b, int o, int c) { lock (_sink) _sink.Write(b, o, c); }
-            public override void Flush() { }
-            public override bool CanRead => false;
-            public override bool CanSeek => false;
-            public override bool CanWrite => true;
-            public override long Length => throw new NotSupportedException();
-            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-            public override int Read(byte[] b, int o, int c) => throw new NotSupportedException();
-            public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
-            public override void SetLength(long v) => throw new NotSupportedException();
-        }
-
-        private readonly MemoryStream _written = new();
-        public RecordingConnection() => WriterStream = new Recorder(_written);
-        public string Written { get { lock (_written) return Encoding.UTF8.GetString(_written.ToArray()); } }
-
-        public Stream ReaderStream { get; } = new Blocking();
-        public Stream WriterStream { get; }
-        public int ExitCode => 0;
-        public bool WaitForExit(int ms) => false;
-        public int Pid => -1;
-        public void Kill() { }
-        public void Resize(int c, int r) { }
-        public void Dispose() { }
-        public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
-    }
 
     private static (TerminalView view, RecordingConnection pty, Window window) LiveView()
     {

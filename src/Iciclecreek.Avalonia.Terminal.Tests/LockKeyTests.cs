@@ -1,5 +1,3 @@
-using System.Text;
-using Porta.Pty;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Headless.NUnit;
@@ -14,42 +12,13 @@ namespace Iciclecreek.Terminal.Tests;
 [TestFixture]
 public class LockKeyTests
 {
-    private sealed class IdleConnection : IPtyConnection
-    {
-        // Never returns: the view only needs a live connection, not output.
-        private sealed class Blocking : Stream
-        {
-            private readonly ManualResetEventSlim _never = new(false);
-            public override int Read(byte[] b, int o, int c) { _never.Wait(); return 0; }
-            public override bool CanRead => true;
-            public override bool CanSeek => false;
-            public override bool CanWrite => false;
-            public override long Length => throw new NotSupportedException();
-            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-            public override void Flush() { }
-            public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
-            public override void SetLength(long v) => throw new NotSupportedException();
-            public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
-        }
-
-        public Stream ReaderStream { get; } = new Blocking();
-        public Stream WriterStream { get; } = new MemoryStream();
-        public int ExitCode => 0;
-        public bool WaitForExit(int ms) => false;
-        public int Pid => -1;
-        public void Kill() { }
-        public void Resize(int c, int r) { }
-        public void Dispose() { }
-        public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
-    }
-
     private static (TerminalView view, Window window) LiveFocusedView()
     {
         var view = new TerminalView { Process = "" };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
         window.UpdateLayout();
-        view.AttachConnection(new IdleConnection());
+        view.AttachConnection(new RecordingConnection());
         view.Focus();
         Assert.That(view.IsFocused, Is.True, "sanity: OnKeyDown returns early without focus");
         return (view, window);

@@ -1,5 +1,3 @@
-using System.Text;
-using Porta.Pty;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Headless.NUnit;
@@ -16,61 +14,13 @@ namespace Iciclecreek.Terminal.Tests;
 [TestFixture]
 public class ShiftSelectionTests
 {
-    private sealed class IdleConnection : IPtyConnection
-    {
-        private sealed class Blocking : Stream
-        {
-            private readonly ManualResetEventSlim _never = new(false);
-            public override int Read(byte[] b, int o, int c) { _never.Wait(); return 0; }
-            public override bool CanRead => true;
-            public override bool CanSeek => false;
-            public override bool CanWrite => false;
-            public override long Length => throw new NotSupportedException();
-            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-            public override void Flush() { }
-            public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
-            public override void SetLength(long v) => throw new NotSupportedException();
-            public override void Write(byte[] b, int o, int c) => throw new NotSupportedException();
-        }
-
-        private sealed class Recorder : Stream
-        {
-            private readonly MemoryStream _sink;
-            public Recorder(MemoryStream sink) => _sink = sink;
-            public override void Write(byte[] b, int o, int c) { lock (_sink) _sink.Write(b, o, c); }
-            public override void Flush() { }
-            public override bool CanRead => false;
-            public override bool CanSeek => false;
-            public override bool CanWrite => true;
-            public override long Length => throw new NotSupportedException();
-            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-            public override int Read(byte[] b, int o, int c) => throw new NotSupportedException();
-            public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
-            public override void SetLength(long v) => throw new NotSupportedException();
-        }
-
-        private readonly MemoryStream _written = new();
-        public IdleConnection() => WriterStream = new Recorder(_written);
-        public string Written { get { lock (_written) return Encoding.UTF8.GetString(_written.ToArray()); } }
-
-        public Stream ReaderStream { get; } = new Blocking();
-        public Stream WriterStream { get; }
-        public int ExitCode => 0;
-        public bool WaitForExit(int ms) => false;
-        public int Pid => -1;
-        public void Kill() { }
-        public void Resize(int c, int r) { }
-        public void Dispose() { }
-        public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
-    }
-
-    private static (TerminalView view, IdleConnection pty, Window window) LiveView()
+    private static (TerminalView view, RecordingConnection pty, Window window) LiveView()
     {
         var view = new TerminalView { Process = "" };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
         window.UpdateLayout();
-        var pty = new IdleConnection();
+        var pty = new RecordingConnection();
         view.AttachConnection(pty);
         view.Focus();
         Assert.That(view.IsFocused, Is.True, "sanity: OnKeyDown returns early without focus");
