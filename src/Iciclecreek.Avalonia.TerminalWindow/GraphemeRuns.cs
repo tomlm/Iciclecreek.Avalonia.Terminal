@@ -62,7 +62,18 @@ namespace Iciclecreek.Avalonia.Terminal
                 // Width-0 cells are placeholders; differently-attributed or empty cells should terminate a join.
                 if (next.Width < 1 || next.Attributes != first.Attributes || string.IsNullOrEmpty(next.Content)) break;
 
-                builder.Append(next.Content);
+                // Nothing joins to a blank. A joiner with no component after it is simply dangling, and
+                // absorbing the space would stretch the run a column past the glyph it draws.
+                //
+                // The empty case is the load-bearing half: a cell that appends nothing leaves the trailing
+                // joiner in place, so the loop would take the same branch again and walk to the right edge,
+                // swallowing the rest of the line into this one run. Stopping here is what makes the walk
+                // provably finite — every surviving iteration appends at least one character, so the
+                // character the loop tests always moves.
+                var content = next.Content;
+                if (string.IsNullOrEmpty(content) || content[0] == ' ') break;
+
+                builder.Append(content);
                 cellCount += next.Width;
                 x += next.Width;
             }
