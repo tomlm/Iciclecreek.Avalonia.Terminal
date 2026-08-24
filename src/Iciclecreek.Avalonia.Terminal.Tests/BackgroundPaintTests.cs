@@ -101,4 +101,48 @@ public class BackgroundPaintTests
 
         window.Close();
     }
+
+    /// <summary>
+    /// A cell using the terminal's DEFAULT background paints nothing of its own, whatever that default is.
+    /// The surface is painted once, and below a transparent one it is the parent that shows through — the
+    /// cells never assert a colour they were not given.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_default_background_cell_paints_nothing_of_its_own()
+    {
+        var (view, window) = Realised(Brushes.Transparent);
+
+        view.Terminal.Write("hello");          // plain text: no SGR, so every cell keeps the default
+        window.UpdateLayout();
+
+        var fills = Capture(view).OfType<GeometryDrawing>()
+            .Where(d => d.Brush is ISolidColorBrush { Color.A: > 0 })
+            .ToList();
+
+        Assert.That(fills, Is.Empty,
+            "a run that asked for no background painted one anyway: "
+            + string.Join(", ", fills.Select(f => $"{(f.Brush as ISolidColorBrush)?.Color} {f.Geometry?.Bounds}")));
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The mirror of it: a cell that DID ask for a background still paints, transparent surface or not.
+    /// Otherwise "see through" would quietly mean "lose the colours the program chose".
+    /// </summary>
+    [AvaloniaTest]
+    public void A_cell_with_its_own_background_still_paints()
+    {
+        var (view, window) = Realised(Brushes.Transparent);
+
+        view.Terminal.Write("[41mhello");   // SGR 41 — an explicit red background
+        window.UpdateLayout();
+
+        var painted = Capture(view).OfType<GeometryDrawing>()
+            .Any(d => d.Brush is ISolidColorBrush { Color.A: 255 });
+
+        Assert.That(painted, Is.True, "an explicitly coloured cell must still paint over a transparent surface");
+
+        window.Close();
+    }
 }
