@@ -26,8 +26,8 @@ public partial class MainWindow : Window
         {
             Width = 80 * FontSize,
             Height = 25 * FontSize,
-            Background= Avalonia.Media.Brushes.Black,
-            Foreground= Avalonia.Media.Brushes.LightGray,
+            Background= Avalonia.Media.Brushes.Blue,
+            Foreground= Avalonia.Media.Brushes.Yellow,
             CloseOnProcessExit = true,
             WindowStartupLocation = WindowStartupLocation.Manual,
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
@@ -47,6 +47,8 @@ public partial class MainWindow : Window
             Process = command.Value.Process,
             Args = command.Value.Args,
             Title = command.Value.Process,
+            Background = Avalonia.Media.Brushes.Blue,
+            Foreground = Avalonia.Media.Brushes.Yellow,
             Width = 80*FontSize,
             Height = 25*FontSize,
             CloseOnProcessExit = true
@@ -68,6 +70,8 @@ public partial class MainWindow : Window
             Title = "TerminalWindow",
             Width = 80 * FontSize,
             Height = 25 * FontSize,
+            Background = Avalonia.Media.Brushes.Blue,
+            Foreground = Avalonia.Media.Brushes.Yellow,
             CloseOnProcessExit = true
         };
         terminalWindow.Show();
@@ -84,10 +88,18 @@ public partial class MainWindow : Window
             Process = command.Value.Process,
             Args = command.Value.Args,
             Title = command.Value.Process,
+            Background = Avalonia.Media.Brushes.Blue,
+            Foreground = Avalonia.Media.Brushes.Yellow,
             Width = 80 * FontSize,
             Height = 25 * FontSize,
             CloseOnProcessExit = true
         };
+
+        // Set PTY_TRACE=1 to record what the process writes. Off otherwise, and free when off.
+        var traceDir = Demo.PtyTrace.Attach(terminalWindow, command.Value.Process);
+        if (traceDir != null)
+            terminalWindow.Title += $"  [tracing → {traceDir}]";
+
         terminalWindow.Show();
     }
 
