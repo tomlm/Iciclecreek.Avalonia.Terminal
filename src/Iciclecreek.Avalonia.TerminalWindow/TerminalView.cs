@@ -144,6 +144,10 @@ namespace Iciclecreek.Terminal
         // painted for it, so a host that layers the view over its own themed surface still shows through.
         private sealed record CachedTextRun(FormattedText Text, int StartX, int CellCount, IBrush? Background);
 
+        // The colours the frame currently being drawn resolves against. Taken once at the top of Render, so
+        // every cell in a frame agrees even if a program repaints the palette midway through.
+        private XT.Common.ColorSnapshot? _palette;
+
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
                 nameof(IsAlternateBuffer),
@@ -800,16 +804,18 @@ namespace Iciclecreek.Terminal
                 options.ConvertEol = true;
             }
 
+            // Foreground and Background ARE the terminal's default colour pair, so they are seeded into the
+            // theme BEFORE the emulator is built rather than assigned afterwards. That is what makes them
+            // the values SGR 39/49 resolve to, what OSC 10/11 report, and — the part an assignment after
+            // construction would miss — what OSC 110/111 RESET to. Reset to a colour the host never chose
+            // is how a program "restoring the defaults" ends up with white on black.
+            SeedThemeFromBrushes(options.Theme);
+
             _terminal = new XT.Terminal(options);
 
-            // Tell the emulator what colours it is actually being drawn in. Nothing else does: the render
-            // path reads the brushes straight off this control, so the emulator's own palette stayed at its
-            // built-in white-on-black no matter how the host was themed.
-            //
-            // That palette is what answers OSC 10/11, and programs query OSC 11 to decide whether they are
-            // running on a light or a dark terminal. Left unsynced, a light-themed host tells every one of
-            // them "dark" and gets a dark theme painted onto it.
-            SyncPaletteToBrushes();
+            // A program can move the palette out from under the renderer with OSC 4 or OSC 10/11/12. The
+            // cached runs hold resolved brushes, so they have to go with it.
+            _terminal.Colors.ColorChanged += OnTerminalColorChanged;
 
             // The normal buffer's ring evicts its oldest lines once the scrollback fills, and every absolute
             // index shifts down with it. A view parked in the scrollback has to move with the eviction or the
@@ -1213,14 +1219,27 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Push <see cref="Foreground"/> and <see cref="Background"/> into the emulator's palette, which is
-        /// what answers OSC 10/11 colour queries.
+        /// Seed the emulator's DEFAULT colour pair from <see cref="Foreground"/> and <see cref="Background"/>.
         /// </summary>
         /// <remarks>
-        /// Only a solid brush carries a single colour to report. A gradient or a tiled brush has no one
-        /// answer, so the palette keeps whatever it had rather than reporting an arbitrary stop — a wrong
-        /// answer to "are you light or dark" is worse than the default one.
+        /// Written into the theme before construction, so these become the values the emulator resets to and
+        /// not merely its current pair. Only a solid brush carries one colour to seed with; a gradient has no
+        /// single answer, so the emulator keeps its own default rather than being handed an arbitrary stop.
         /// </remarks>
+        private void SeedThemeFromBrushes(XT.Options.ThemeOptions theme)
+        {
+            if (Foreground is ISolidColorBrush fg)
+                theme.Foreground = ToHex(fg.Color);
+
+            if (Background is ISolidColorBrush bg)
+                theme.Background = ToHex(bg.Color);
+
+            static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+        }
+
+        /// <summary>
+        /// Move the emulator's live colour pair after it has been built, for a host that re-themes.
+        /// </summary>
         private void SyncPaletteToBrushes()
         {
             if (_terminal == null)
@@ -1233,6 +1252,28 @@ namespace Iciclecreek.Terminal
                 _terminal.Colors.SetBackground(ToRgb(bg.Color));
 
             static int ToRgb(Color c) => (c.R << 16) | (c.G << 8) | c.B;
+        }
+
+        /// <summary>
+        /// A program moved the palette. Cached runs hold brushes resolved from the old colours, so they are
+        /// dropped rather than replayed.
+        /// </summary>
+        private void OnTerminalColorChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_terminal == null)
+                    return;
+
+                for (int y = 0; y < _terminal.Buffer.Length; y++)
+                {
+                    var line = _terminal.Buffer.GetLine(y);
+                    if (line != null)
+                        line.Cache = null;
+                }
+
+                InvalidateVisual();
+            });
         }
 
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -3554,8 +3595,23 @@ namespace Iciclecreek.Terminal
             // setting it did nothing at all.
             //
             // Painting it here rather than per cell keeps what that change was after: a host layering the
-            // terminal over its own surface sets Background to Transparent and still sees through.
+            // terminal over its own surface sets a Background with alpha and still sees through.
+            //
+            // ONE snapshot for the whole frame. Every colour on screen resolves against it, so the frame is
+            // painted from a set of colours that belong to each other even if a program changes the palette
+            // while it is being drawn.
+            _palette = _terminal.Colors.Take();
+
             var surface = GetValue(BackgroundProperty);
+            if (surface is ISolidColorBrush opaque && opaque.Color.A == 255)
+            {
+                // The terminal's default background is the emulator's, not this brush — they agree until a
+                // program moves it with OSC 11, and then the program is the one that should win. A brush
+                // carrying alpha is left alone: that is a host asking to be seen through, which no RGB
+                // palette entry can express.
+                surface = new SolidColorBrush(BufferCellExtensions.FromRgb(_palette.Background));
+            }
+
             if (surface is not null)
                 context.FillRectangle(surface, new Rect(Bounds.Size));
 
@@ -3711,8 +3767,8 @@ namespace Iciclecreek.Terminal
                 var startX = Snap(runStartX * _charWidth, scale);
                 var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                 var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
-                var background = cell.GetBackgroundBrush(this.Background);
-                var foreground = cell.GetForegroundBrush(this.Foreground);
+                var background = cell.GetBackgroundBrush(_palette, this.Background);
+                var foreground = cell.GetForegroundBrush(_palette, this.Foreground);
                 // Apply cell-level inverse attribute
                 // Whether this run ends up drawn with the colours swapped. Once they are, the fill is no
                 // longer optional: the "background" being painted is the text colour.
@@ -3734,7 +3790,7 @@ namespace Iciclecreek.Terminal
                 var position = new Point(startX, startYPos);
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
-                var fill = swapped || cell.GetBackgroundColor().HasValue ? background : null;
+                var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
                 // Cache only content-dependent data, not screen position
                 textRuns.Add(new CachedTextRun(formattedText, runStartX, cellCount, fill));
 
@@ -3849,8 +3905,8 @@ namespace Iciclecreek.Terminal
                         var startX = Snap(runStartX * _charWidth, scale);
                         var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                         var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
-                        var background = cell.GetBackgroundBrush(this.Background);
-                        var foreground = cell.GetForegroundBrush(this.Foreground);
+                        var background = cell.GetBackgroundBrush(_palette, this.Background);
+                        var foreground = cell.GetForegroundBrush(_palette, this.Foreground);
                         // Apply cell-level inverse attribute
                         bool swapped = false;
                         if (cell.Attributes.IsInverse())
@@ -3869,7 +3925,7 @@ namespace Iciclecreek.Terminal
 
                         var position = new Point(startX, startYPos);
 
-                        if (swapped || cell.GetBackgroundColor().HasValue)
+                        if (swapped || cell.GetBackgroundColor(_palette).HasValue)
                             context.FillRectangle(background, rect);
                         context.DrawText(formattedText, position);
                     }
@@ -3987,7 +4043,7 @@ namespace Iciclecreek.Terminal
                             var cell = line[cursorX];
                             var charContent = cell.Content ?? " ";
                             var typeface = new Typeface(FontFamily, FontStyle, FontWeight);
-                            var invertedBrush = cell.GetBackgroundBrush(this.Background);
+                            var invertedBrush = cell.GetBackgroundBrush(_palette, this.Background);
                             var formattedText = new FormattedText(
                                 charContent,
                                 CultureInfo.CurrentCulture,

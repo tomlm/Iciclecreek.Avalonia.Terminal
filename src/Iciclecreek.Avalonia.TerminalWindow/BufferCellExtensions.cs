@@ -1,6 +1,7 @@
 ﻿using Avalonia.Media;
 using System;
 using XTerm.Buffer;
+using XTerm.Common;
 
 namespace Iciclecreek.Avalonia.Terminal
 {
@@ -36,23 +37,27 @@ namespace Iciclecreek.Avalonia.Terminal
         }
 
         /// <summary>
-        /// Gets the background color as RGB values.
-        /// Returns null if using default color or palette mode.
+        /// Gets the background colour of a cell, or <see langword="null"/> when the cell uses the terminal's
+        /// DEFAULT background.
         /// </summary>
-        /// <returns>A tuple (R, G, B) with RGB values 0-255, or null if not using RGB mode.</returns>
-        public static Color? GetBackgroundColor(this BufferCell cell)
+        /// <remarks>
+        /// Default deliberately stays null rather than resolving to the palette's background: the renderer
+        /// uses "has a background of its own" to decide whether to paint a rectangle at all, and a cell that
+        /// simply wants the default must leave the surface alone so a translucent host still shows through.
+        /// </remarks>
+        public static Color? GetBackgroundColor(this BufferCell cell, ColorSnapshot palette)
         {
             var color = cell.Attributes.GetBgColor();
             var mode = cell.Attributes.GetBgColorMode();
 
             if (color == 257) return null;  // Default color
 
-            return cell.ExtractColor(color, mode);
+            return cell.ExtractColor(color, mode, palette);
         }
 
-        public static IBrush GetBackgroundBrush(this BufferCell cell, IBrush defaultBrush)
+        public static IBrush GetBackgroundBrush(this BufferCell cell, ColorSnapshot palette, IBrush defaultBrush)
         {
-            var bgColor = cell.GetBackgroundColor();
+            var bgColor = cell.GetBackgroundColor(palette);
             if (bgColor.HasValue)
             {
                 return new SolidColorBrush(bgColor.Value);
@@ -65,14 +70,14 @@ namespace Iciclecreek.Avalonia.Terminal
         /// Returns null if using default color or palette mode.
         /// </summary>
         /// <returns>A tuple (R, G, B) with RGB values 0-255, or null if not using RGB mode.</returns>
-        public static Color? GetForegroundColor(this BufferCell cell)
+        public static Color? GetForegroundColor(this BufferCell cell, ColorSnapshot palette)
         {
             var color = cell.Attributes.GetFgColor();
             var mode = cell.Attributes.GetFgColorMode();
             if (color == 256)
                 return null;  // Default color
 
-            var realColor = cell.ExtractColor(color, mode);
+            var realColor = cell.ExtractColor(color, mode, palette);
 
             if (realColor != null)
             {
@@ -98,19 +103,33 @@ namespace Iciclecreek.Avalonia.Terminal
             return realColor;
         }
 
-        public static IBrush GetForegroundBrush(this BufferCell cell, IBrush defaultBrush)
+        /// <summary>
+        /// The brush to draw a cell's text in. A cell using the DEFAULT foreground resolves to the
+        /// emulator's own default, which is what OSC 10 sets and OSC 110 resets.
+        /// </summary>
+        /// <param name="defaultBrush">
+        /// Used only when the terminal's default foreground cannot be expressed as one colour — a host that
+        /// set a gradient. The palette is RGB, so such a brush cannot round-trip through it.
+        /// </param>
+        public static IBrush GetForegroundBrush(this BufferCell cell, ColorSnapshot palette, IBrush defaultBrush)
         {
-            var fgColor = cell.GetForegroundColor();
+            var fgColor = cell.GetForegroundColor(palette);
             if (fgColor.HasValue)
             {
                 if (cell.Attributes.IsDim())
                     return new SolidColorBrush(fgColor.Value, .4);
                 return new SolidColorBrush(fgColor.Value);
             }
+
+            // The default foreground is the emulator's, not the control's. They agree until a program
+            // changes it — and when one does, the program is the one that should win.
+            if (defaultBrush is ISolidColorBrush)
+                return new SolidColorBrush(FromRgb(palette.Foreground));
+
             return defaultBrush;
         }
 
-        private static Color? ExtractColor(this BufferCell cell, int color, int mode)
+        private static Color? ExtractColor(this BufferCell cell, int color, int mode, ColorSnapshot palette)
         {
             Color? realColor;
             if (mode == 1)  // RGB mode
@@ -121,69 +140,29 @@ namespace Iciclecreek.Avalonia.Terminal
                 realColor = Color.FromRgb((byte)r, (byte)g, (byte)b);
             }
             else
-                realColor = PalleteToColor(color);  // Palette mode
+                realColor = PalleteToColor(color, palette);  // Palette mode
             return realColor;
         }
 
-        // XTerm 256 color palette
-        private static readonly Color[] _xtermPalette = InitializeXTermPalette();
+        /// <summary>A 0xRRGGBB value from the emulator's palette, as a colour.</summary>
+        internal static Color FromRgb(int rgb) =>
+            Color.FromRgb((byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF));
 
-        private static Color[] InitializeXTermPalette()
-        {
-            var palette = new Color[256];
 
-            // 0-15: Basic 16 colors (standard xterm color scheme)
-            // Normal colors (0-7)
-            palette[0] = Color.FromRgb(0, 0, 0);         // Black
-            palette[1] = Color.FromRgb(205, 0, 0);       // Red
-            palette[2] = Color.FromRgb(0, 205, 0);       // Green
-            palette[3] = Color.FromRgb(205, 205, 0);     // Yellow
-            palette[4] = Color.FromRgb(0, 0, 238);       // Blue
-            palette[5] = Color.FromRgb(205, 0, 205);     // Magenta
-            palette[6] = Color.FromRgb(0, 205, 205);     // Cyan
-            palette[7] = Color.FromRgb(229, 229, 229);   // White (Light Gray)
-            // Bright colors (8-15)
-            palette[8] = Color.FromRgb(127, 127, 127);   // Bright Black (Gray)
-            palette[9] = Color.FromRgb(255, 0, 0);       // Bright Red
-            palette[10] = Color.FromRgb(0, 255, 0);      // Bright Green
-            palette[11] = Color.FromRgb(255, 255, 0);    // Bright Yellow
-            palette[12] = Color.FromRgb(92, 92, 255);    // Bright Blue
-            palette[13] = Color.FromRgb(255, 0, 255);    // Bright Magenta
-            palette[14] = Color.FromRgb(0, 255, 255);    // Bright Cyan
-            palette[15] = Color.FromRgb(255, 255, 255);  // Bright White
-
-            // 16-231: 216 color cube (6x6x6)
-            int index = 16;
-            for (int r = 0; r < 6; r++)
-            {
-                for (int g = 0; g < 6; g++)
-                {
-                    for (int b = 0; b < 6; b++)
-                    {
-                        byte rv = (byte)(r > 0 ? r * 40 + 55 : 0);
-                        byte gv = (byte)(g > 0 ? g * 40 + 55 : 0);
-                        byte bv = (byte)(b > 0 ? b * 40 + 55 : 0);
-                        palette[index++] = Color.FromRgb(rv, gv, bv);
-                    }
-                }
-            }
-
-            // 232-255: Grayscale ramp
-            for (int i = 0; i < 24; i++)
-            {
-                byte gray = (byte)(8 + i * 10);
-                palette[232 + i] = Color.FromRgb(gray, gray, gray);
-            }
-
-            return palette;
-        }
-
-        private static Color PalleteToColor(int paletteIndex)
+        /// <summary>
+        /// Resolves an indexed colour against the EMULATOR's palette, so OSC 4 actually reaches the screen.
+        /// </summary>
+        /// <remarks>
+        /// This used to read a static table private to the renderer, which meant a program could set a
+        /// palette entry, have the emulator accept it, and see nothing change on screen. That table is gone;
+        /// the emulator seeds the same xterm defaults itself.
+        /// </remarks>
+        private static Color PalleteToColor(int paletteIndex, ColorSnapshot palette)
         {
             if (paletteIndex < 0 || paletteIndex >= 256)
                 return Colors.White; // Default fallback
 
-            return _xtermPalette[paletteIndex];
+            return FromRgb(palette[paletteIndex]);
         }
     }
 
