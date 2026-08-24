@@ -104,6 +104,30 @@ internal static class PtyTrace
             lock (gate)
                 File.AppendAllText(txt, $"\n    <<< WE SENT: {Annotate(data)}{Explain(data)}\n");
         };
+
+        // The size we tell the process is the other thing it decides on. An app that writes exactly one
+        // screen-width and lets the cursor wrap is trusting our column count; if that count moves under it
+        // mid-startup, every row after the first lands somewhere it did not intend.
+        try
+        {
+            var terminal = control.Terminal;
+
+            lock (gate)
+                File.AppendAllText(txt, $"\n    ### SIZE AT ATTACH: {terminal.Cols}x{terminal.Rows}\n");
+
+            terminal.Resized += (_, e) =>
+            {
+                lock (gate)
+                    File.AppendAllText(txt, $"\n    ### RESIZED to {e.Cols}x{e.Rows} <<< the process is told this\n");
+            };
+        }
+        catch (Exception ex)
+        {
+            // Logged rather than swallowed. A silently skipped hook reads as "nothing happened", which is
+            // the opposite of what it means, and that already cost one round of this investigation.
+            lock (gate)
+                File.AppendAllText(txt, $"\n    ### SIZE HOOK FAILED: {ex.GetType().Name} {ex.Message}\n");
+        }
     }
 
     /// <summary>Name the things we send that a program is likely to act on.</summary>
