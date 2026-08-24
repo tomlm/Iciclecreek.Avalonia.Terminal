@@ -189,6 +189,22 @@ namespace Iciclecreek.Terminal
             set => SetValue(ShowCaretOnClickProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.ShortcutModeProperty"/>
+        public static readonly StyledProperty<ShortcutMode> ShortcutModeProperty =
+            AvaloniaProperty.Register<TerminalWindow, ShortcutMode>(
+                nameof(ShortcutMode),
+                defaultValue: ShortcutMode.Terminal);
+
+        /// <inheritdoc cref="ShortcutModeProperty"/>
+        public ShortcutMode ShortcutMode
+        {
+            get => GetValue(ShortcutModeProperty);
+            set => SetValue(ShortcutModeProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CutAsync"/>
+        public Task<bool> CutAsync() => _terminalControl?.CutAsync() ?? Task.FromResult(false);
+
         /// <inheritdoc cref="TerminalView.SuppressCursorProperty"/>
         /// <remarks>
         /// Styled and template-bound to the inner TerminalControl rather than forwarded onto the inner view: a
@@ -529,6 +545,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
+            _terminalControl.Bind(TerminalControl.ShortcutModeProperty, this.GetObservable(ShortcutModeProperty));
             _terminalControl.Bind(TerminalControl.SuppressCursorProperty, this.GetObservable(SuppressCursorProperty));
             _terminalControl.Bind(TerminalControl.OutputReceivedOnReadTaskProperty, this.GetObservable(OutputReceivedOnReadTaskProperty));
             _terminalControl.Bind(TerminalControl.AutoScrollToBottomProperty, this.GetObservable(AutoScrollToBottomProperty));

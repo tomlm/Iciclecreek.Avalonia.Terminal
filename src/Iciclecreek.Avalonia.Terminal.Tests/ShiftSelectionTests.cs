@@ -822,11 +822,14 @@ public class ShiftSelectionTests
     }
 
     /// <summary>
-    /// Copying clears the selection, so it retires the gesture too. Leaving the anchor set pins the caret
-    /// to a boundary the shell's cursor has since moved past.
+    /// Copying leaves the selection alone, so the caret stays with it — there is nothing to retire.
     /// </summary>
+    /// <remarks>
+    /// This test used to assert the opposite, back when copy cleared the selection. It does not any more:
+    /// copying is not a destructive act, and every other application leaves the selection standing.
+    /// </remarks>
     [AvaloniaTest]
-    public async Task Copying_a_selection_releases_the_caret()
+    public async Task Copying_leaves_the_selection_and_the_caret_alone()
     {
         var (view, pty, window) = LiveView();
         Type(view, "hello");
@@ -834,17 +837,23 @@ public class ShiftSelectionTests
 
         Press(view, Key.Left, KeyModifiers.Shift);
         await Task.Delay(40);
+        var caretWhileSelecting = view.CaretPosition;
         Assert.That(view.Terminal.Selection.HasSelection, Is.True, "sanity");
 
-        Press(view, Key.C, KeyModifiers.Control | KeyModifiers.Shift);   // copy, which clears
-        await Task.Delay(120);
+        Press(view, Key.C, KeyModifiers.Control | KeyModifiers.Shift);   // copy
+        await Task.Delay(150);
 
+        Assert.That(view.Terminal.Selection.HasSelection, Is.True, "the selection survives the copy");
+        Assert.That(view.CaretPosition, Is.EqualTo(caretWhileSelecting), "and so does the caret");
+
+        // Typing is what retires it, and the caret goes back to the shell's cursor.
+        Press(view, Key.X);
+        await Task.Delay(60);
         Type(view, "world");
         await Task.Delay(60);
 
         Assert.That(view.CaretPosition, Is.EqualTo((view.Terminal.Buffer.X,
-                                                    view.Terminal.Buffer.YBase + view.Terminal.Buffer.Y)),
-            "the caret is back on the shell's cursor");
+                                                    view.Terminal.Buffer.YBase + view.Terminal.Buffer.Y)));
         window.Close();
     }
 

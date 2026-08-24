@@ -369,6 +369,22 @@ namespace Iciclecreek.Terminal
             set => SetValue(ShowCaretOnClickProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.ShortcutModeProperty"/>
+        public static readonly StyledProperty<ShortcutMode> ShortcutModeProperty =
+            AvaloniaProperty.Register<TerminalControl, ShortcutMode>(
+                nameof(ShortcutMode),
+                defaultValue: ShortcutMode.Terminal);
+
+        /// <inheritdoc cref="ShortcutModeProperty"/>
+        public ShortcutMode ShortcutMode
+        {
+            get => GetValue(ShortcutModeProperty);
+            set => SetValue(ShortcutModeProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CutAsync"/>
+        public Task<bool> CutAsync() => _terminalView?.CutAsync() ?? Task.FromResult(false);
+
         /// <inheritdoc cref="TerminalView.SuppressCursorProperty"/>
         /// <remarks>
         /// Styled and template-bound to PART_TerminalView rather than forwarded onto the inner view: a

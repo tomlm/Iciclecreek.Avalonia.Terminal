@@ -39,6 +39,7 @@
                                        Args="{TemplateBinding Args}"
                                        BufferSize="{TemplateBinding BufferSize}"
                                        ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
+                                       ShortcutMode="{TemplateBinding ShortcutMode}"
                                        SuppressCursor="{TemplateBinding SuppressCursor}"
                                        OutputReceivedOnReadTask="{TemplateBinding OutputReceivedOnReadTask}"
                                        AutoScrollToBottom="{TemplateBinding AutoScrollToBottom}"

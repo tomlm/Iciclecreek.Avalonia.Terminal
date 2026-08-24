@@ -129,6 +129,11 @@ namespace Iciclecreek.Terminal
         // cell instead of two. Null anchor = no keyboard selection in flight.
         private int? _kbSelAnchor;
 
+        // True while the selection covers the WHOLE input, from a select-all rather than from a gesture the
+        // user steered. The caret is then hidden: with everything selected there is no one place it belongs,
+        // and every editor that can select all hides it rather than parking it at an arbitrary end.
+        private bool _kbSelWholeInput;
+
         // Where the shell's editable input begins, as an absolute row and a column on it. A keyboard
         // selection stops here rather than running back over the prompt.
         //
@@ -332,6 +337,25 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Which convention the terminal follows for Ctrl+A, Ctrl+C, Ctrl+V and Ctrl+X. Defaults to
+        /// <see cref="ShortcutMode.Terminal"/>, which changes nothing.
+        /// </summary>
+        /// <remarks>
+        /// See <see cref="ShortcutMode"/> for what each mode does and why the choice exists at all.
+        /// </remarks>
+        public static readonly StyledProperty<ShortcutMode> ShortcutModeProperty =
+            AvaloniaProperty.Register<TerminalView, ShortcutMode>(
+                nameof(ShortcutMode),
+                defaultValue: ShortcutMode.Terminal);
+
+        /// <inheritdoc cref="ShortcutModeProperty"/>
+        public ShortcutMode ShortcutMode
+        {
+            get => GetValue(ShortcutModeProperty);
+            set => SetValue(ShortcutModeProperty, value);
+        }
+
+        /// <summary>
         /// Hold the cursor back even when a process IS attached. Between spawning a shell and
         /// its first byte of output the buffer is still empty, so the cursor paints at (0,0) — which is
         /// wrong wherever the host layers something over the view during that window: an overlay drawing
@@ -401,12 +425,6 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// The scrollback ring dropped <paramref name="count"/> lines off the top, so every absolute index
-        /// below shifted by that much. A following view is about to be scrolled to the bottom anyway; a view
-        /// parked up in the scrollback is moved down by the same amount, so the content the user is reading
-        /// stays under their eye instead of sliding upward as output arrives.
-        /// </summary>
-        /// <summary>
         /// OSC 133 — shell integration. Only the marker for "the prompt ends here" is acted on.
         /// </summary>
         /// <remarks>
@@ -433,6 +451,12 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// The scrollback ring dropped <paramref name="count"/> lines off the top, so every absolute index
+        /// below shifted by that much. A following view is about to be scrolled to the bottom anyway; a view
+        /// parked up in the scrollback is moved down by the same amount, so the content the user is reading
+        /// stays under their eye instead of sliding upward as output arrives.
+        /// </summary>
         private void OnBufferTrimmed(int count)
         {
             if (_followBottom || count <= 0)
@@ -1100,8 +1124,53 @@ namespace Iciclecreek.Terminal
                     text = $"\u001b[200~{text}\u001b[201~";
                 }
 
-                await SendToPtyAsync(text);
+                // Pasting over a selection REPLACES it, the way typing over one does. Taken before the
+                // text and written with it in a single call, so the deletion cannot lose the race against
+                // whatever arrives next — the same reason typing does it that way.
+                await SendToPtyAsync(TakeKeyboardSelectionDeletion() + text);
             }
+        }
+
+        /// <summary>
+        /// Copy the selection and then remove it, when it is removable. Returns false when there was
+        /// nothing to copy.
+        /// </summary>
+        /// <remarks>
+        /// <para>Cut is copy plus exactly the deletion that typing over a selection performs, so the same
+        /// limit applies: only a KEYBOARD selection can be removed, because a mouse selection may sit
+        /// anywhere on screen — including the scrollback — with no fixed relationship to the shell's
+        /// cursor.</para>
+        /// <para>Where it cannot remove, it does NOTHING and returns false — the clipboard is not touched
+        /// and the selection is left standing. Copying instead would be worse than failing: the selection
+        /// would clear, the clipboard would fill, and the source would still be there, which reads as a
+        /// completed cut right until the user goes looking for what they moved.</para>
+        /// </remarks>
+        public async Task<bool> CutAsync()
+        {
+            if (!_terminal.Selection.HasSelection)
+                return false;
+
+            // Asked BEFORE anything is done, and answered without doing it.
+            //
+            // A cut that quietly turns into a copy is worse than a cut that does not happen: the selection
+            // clears, the clipboard fills, and the source is still there — which reads as a completed cut
+            // right until the user goes looking for what they moved. So a selection that cannot be removed
+            // is left entirely alone, clipboard included, and false says so.
+            //
+            // The question has to be asked without consuming the answer: TakeKeyboardSelectionDeletion
+            // CLEARS the selection as it takes it, so calling it first leaves CopyAsync nothing to copy.
+            if (!CanRemoveSelection)
+                return false;
+
+            if (!await CopyAsync().ConfigureAwait(false))
+                return false;
+
+            var deletion = TakeKeyboardSelectionDeletion();
+            if (deletion.Length == 0)
+                return false;
+
+            await SendToPtyAsync(deletion).ConfigureAwait(false);
+            return true;
         }
 
         /// <summary>
@@ -1596,17 +1665,24 @@ namespace Iciclecreek.Terminal
             // When the process has exited, stop eating keyboard input so that Avalonia's
             // normal focus navigation (Tab/Shift+Tab etc.) works again.  We still handle
             // the copy shortcut so the user can copy terminal output after a run.
+            // ShortcutMode.None hands the whole keyboard to the program: no copy, no paste, and Ctrl+C
+            // reaching it as plain SIGINT because nothing intercepts it first.
+            bool shortcuts = ShortcutMode != ShortcutMode.None;
+
             if (_processExitHandled != 0)
             {
-                bool isCopy = e.Key == Key.C &&
+
+                bool isCopy = shortcuts && e.Key == Key.C &&
                               (e.KeyModifiers == KeyModifiers.Control ||
                                e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift) ||
                                (IsMacOS && e.KeyModifiers == KeyModifiers.Meta));
                 if (isCopy && _terminal.Selection.HasSelection)
                 {
                     e.Handled = true;
+                    // Copy leaves the selection in place, the way every other application does:
+                    // copying is not a destructive act, and a selection you can no longer see is one
+                    // you cannot copy again, extend, or replace.
                     await CopyAsync();
-                    _terminal.Selection.ClearSelection();
                     this.RequestInvalidate();
                 }
                 else
@@ -1622,7 +1698,7 @@ namespace Iciclecreek.Terminal
                 // with terminal control codes (SIGINT is Ctrl+C, not Cmd+C), so we can handle
                 // them directly here. On Windows/Linux this block is skipped and the
                 // Ctrl / Ctrl+Shift shortcuts below are used instead.
-                if (IsMacOS && e.KeyModifiers == KeyModifiers.Meta)
+                if (shortcuts && IsMacOS && e.KeyModifiers == KeyModifiers.Meta)
                 {
                     // Cmd+C - copy the selection (no-op when nothing is selected, matching macOS)
                     if (e.Key == Key.C)
@@ -1630,8 +1706,10 @@ namespace Iciclecreek.Terminal
                         e.Handled = true;
                         if (_terminal.Selection.HasSelection)
                         {
+                            // Copy leaves the selection in place, the way every other application does:
+                            // copying is not a destructive act, and a selection you can no longer see is one
+                            // you cannot copy again, extend, or replace.
                             await CopyAsync();
-                            _terminal.Selection.ClearSelection();
                             this.RequestInvalidate();
                         }
                         return;
@@ -1646,14 +1724,95 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // The macOS clipboard gestures are Cmd-based, and every one of them is unbound in a
+                // terminal — so they are unconditional, like the Cmd+C and Cmd+V above. There is nothing to
+                // take and so nothing to opt into.
+                if (shortcuts && IsMacOS && e.KeyModifiers == KeyModifiers.Meta)
+                {
+                    if (e.Key == Key.X)
+                    {
+                        // Only claimed when it actually cuts. A selection it cannot remove — one made with
+                        // the mouse, or sitting up in the scrollback — is left alone rather than quietly
+                        // copied, so nothing looks like it moved when it did not.
+                        if (await CutAsync().ConfigureAwait(false))
+                        {
+                            e.Handled = true;
+                            return;
+                        }
+                    }
+
+                    if (e.Key == Key.A)
+                    {
+                        e.Handled = true;
+                        await SelectInputAsync().ConfigureAwait(false);
+                        return;
+                    }
+                }
+
+                // The desktop map. Three things switch it off, each for its own reason.
+                //
+                // ShortcutMode, because these keys are contested and the host has to say which it wants.
+                //
+                // The ALTERNATE SCREEN, because a full-screen application owns its own keys: vim's Ctrl+V is
+                // blockwise-visual, not paste. While one is running the terminal stands aside and behaves as
+                // Terminal mode, so Ctrl+Shift+C still copies text out of it.
+                //
+                // macOS, because there the desktop clipboard lives on Cmd — handled above, in either mode —
+                // while Ctrl+A and Ctrl+E are the system-wide emacs line bindings every macOS text field
+                // honours. Leaving them to the program IS the desktop behaviour on that platform.
+                if (ShortcutMode == ShortcutMode.Desktop && !IsMacOS && !_terminal.IsAlternateBufferActive)
+                {
+                    if (e.KeyModifiers == KeyModifiers.Control)
+                    {
+                        switch (e.Key)
+                        {
+                            case Key.A:
+                                e.Handled = true;
+                                await SelectInputAsync().ConfigureAwait(false);
+                                return;
+
+                            case Key.V:
+                                e.Handled = true;
+                                await PasteAsync().ConfigureAwait(false);
+                                return;
+
+                            case Key.X:
+                                // Only when there is something to cut, and only when it can actually be
+                                // removed. Otherwise the chord falls through to the program — where it is
+                                // readline's prefix, and worth more than a cut that silently became a copy.
+                                if (await CutAsync().ConfigureAwait(false))
+                                {
+                                    e.Handled = true;
+                                    return;
+                                }
+                                break;
+                        }
+                    }
+
+                    // Shift carries what the unshifted chord used to send: the literal control character.
+                    if (e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key is Key.V or Key.X)
+                    {
+                        var literal = _terminal.GenerateCharInput(
+                            e.Key == Key.V ? 'v' : 'x', XT.Input.KeyModifiers.Control);
+                        if (!string.IsNullOrEmpty(literal))
+                        {
+                            e.Handled = true;
+                            await SendToPtyAsync(literal).ConfigureAwait(false);
+                            return;
+                        }
+                    }
+                }
+
                 // Handle Ctrl+C - copy if there's a selection, otherwise send SIGINT
-                if (e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control)
+                if (shortcuts && e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control)
                 {
                     if (_terminal.Selection.HasSelection)
                     {
                         e.Handled = true;
+                        // Copy leaves the selection in place, the way every other application does:
+                        // copying is not a destructive act, and a selection you can no longer see is one
+                        // you cannot copy again, extend, or replace.
                         await CopyAsync();
-                        _terminal.Selection.ClearSelection();
                         this.RequestInvalidate();
                         return;
                     }
@@ -1661,13 +1820,15 @@ namespace Iciclecreek.Terminal
                 }
 
                 // Handle Ctrl+Shift+C for copy (always copies, doesn't send SIGINT)
-                if (e.Key == Key.C && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                if (shortcuts && e.Key == Key.C && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
                 {
                     if (_terminal.Selection.HasSelection)
                     {
                         e.Handled = true;
+                        // Copy leaves the selection in place, the way every other application does:
+                        // copying is not a destructive act, and a selection you can no longer see is one
+                        // you cannot copy again, extend, or replace.
                         await CopyAsync();
-                        _terminal.Selection.ClearSelection();
                         this.RequestInvalidate();
                         return;
                     }
@@ -1713,6 +1874,7 @@ namespace Iciclecreek.Terminal
                         // and gating this on HasSelection then leaves the caret pinned to that boundary while
                         // typed characters append somewhere else.
                         _kbSelAnchor = null;
+                        _kbSelWholeInput = false;
 
                         if (_terminal.Selection.HasSelection)
                         {
@@ -1725,7 +1887,7 @@ namespace Iciclecreek.Terminal
                 // Handle Ctrl+Shift+V for paste (standard terminal shortcut)
                 // Ctrl+V is NOT intercepted - it gets passed to the application
                 // (some apps use Ctrl+V for literal character input mode)
-                if (e.Key == Key.V && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                if (shortcuts && e.Key == Key.V && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
                 {
                     e.Handled = true;
                     await PasteAsync();
@@ -1880,6 +2042,16 @@ namespace Iciclecreek.Terminal
         /// clears it without deleting. The alternate buffer is excluded: a full-screen app owns its own
         /// editing.</para>
         /// </remarks>
+        /// <summary>
+        /// Whether the current selection is one this view can remove — the same conditions
+        /// <see cref="TakeKeyboardSelectionDeletion"/> applies, asked without consuming them.
+        /// </summary>
+        private bool CanRemoveSelection
+            => _kbSelAnchor is not null
+               && _terminal.Selection.HasSelection
+               && !_terminal.IsAlternateBufferActive
+               && _kbSelAnchor.Value != _kbSelFocus;
+
         private string TakeKeyboardSelectionDeletion()
         {
             if (_kbSelAnchor is null || !_terminal.Selection.HasSelection)
@@ -1918,6 +2090,8 @@ namespace Iciclecreek.Terminal
             }
 
             _kbSelAnchor = null;
+
+            _kbSelWholeInput = false;
             _terminal.Selection.ClearSelection();
             this.RequestInvalidate();
 
@@ -2013,6 +2187,7 @@ namespace Iciclecreek.Terminal
             int floor = InputStartBoundary(cols, lastBoundary);
             int ceiling = Math.Max(floor, InputEndBoundary(cols, lastBoundary));
             _kbSelFocus = Math.Clamp(focus, floor, ceiling);
+            _kbSelWholeInput = false;   // the user is steering an edge again, so the caret means something
 
             int anchor = _kbSelAnchor.Value;
             if (_kbSelFocus == anchor)
@@ -2023,6 +2198,7 @@ namespace Iciclecreek.Terminal
                 // caret stays pinned to this boundary and the next thing the shell prints moves the real
                 // cursor out from under a caret that no longer follows it.
                 _kbSelAnchor = null;
+                _kbSelWholeInput = false;
             }
             else
             {
@@ -2034,6 +2210,55 @@ namespace Iciclecreek.Terminal
                 _terminal.Selection.EndSelection();
             }
 
+            this.RequestInvalidate();
+            return true;
+        }
+
+        /// <summary>
+        /// Select the shell's editable input — what the user has typed — rather than the whole screen.
+        /// </summary>
+        /// <remarks>
+        /// <para>Select-all at a prompt means the command being edited, not the scrollback and not the
+        /// screenful of blanks around it. The emulator's own SelectAll takes the buffer, which is almost
+        /// never what was wanted.</para>
+        /// <para>Recorded as a KEYBOARD selection so it can be replaced or cut like any other. That needs
+        /// the anchor to be where the shell's cursor actually is, because the deletion is expressed as
+        /// keystrokes from there — so the cursor is moved to the end of the input first, which is where a
+        /// select-all leaves the caret in any editor anyway.</para>
+        /// </remarks>
+        private async Task<bool> SelectInputAsync()
+        {
+            // Sample the prompt edge if it has not been sampled yet — pressing this before typing anything
+            // is a perfectly ordinary thing to do, and the cursor is sitting on the answer.
+            NoteInputStart();
+
+            int cols = Math.Max(1, _terminal.Cols);
+            int lastBoundary = cols * Math.Max(1, _terminal.Rows);
+
+            int start = InputStartBoundary(cols, lastBoundary);
+            int end = InputEndBoundary(cols, lastBoundary);
+
+            if (end <= start)
+            {
+                // Nothing typed yet, so there is no input to select.
+                _terminal.Selection.ClearSelection();
+                _kbSelAnchor = null;
+                _kbSelWholeInput = false;
+                this.RequestInvalidate();
+                return false;
+            }
+
+            var toEnd = _terminal.GenerateKeyInput(XT.Input.Key.End, XT.Input.KeyModifiers.None);
+            if (!string.IsNullOrEmpty(toEnd))
+                await SendToPtyAsync(toEnd).ConfigureAwait(false);
+
+            _kbSelAnchor = end;
+            _kbSelFocus = start;
+            _kbSelWholeInput = true;
+
+            _terminal.Selection.StartSelection(start % cols, start / cols, XT.Selection.SelectionMode.Normal);
+            _terminal.Selection.UpdateSelection((end - 1) % cols, (end - 1) / cols);
+            _terminal.Selection.EndSelection();
             this.RequestInvalidate();
             return true;
         }
@@ -2100,34 +2325,12 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// The next word boundary from <paramref name="from"/> in <paramref name="direction"/>, as a caret
-        /// boundary ordinal.
-        /// </summary>
-        /// <remarks>
-        /// Readline's rule, which is what a shell user already has in their fingers: skip any run of
-        /// separators, then skip the run of word characters beyond it. Moving left looks at the cell BEFORE
-        /// the caret and moving right at the cell after, because a caret sits between cells — the same
-        /// asymmetry that makes one Shift+Right cover exactly one cell.
-        ///
-        /// Always advances by at least one cell when there is room, so holding the chord cannot stall on a
-        /// boundary it is already sitting on.
-        /// </remarks>
-        /// <summary>
         /// The caret boundary just past the last non-blank cell on <paramref name="from"/>'s row.
         /// </summary>
         /// <remarks>
         /// End means "end of what is written", not "end of the grid". A terminal row is padded out to the
         /// full width with blanks, so jumping to the row edge selects a screenful of spaces after the
         /// prompt — the same surprise as walking a word chord into empty space.
-        /// </remarks>
-        /// <summary>
-        /// The lowest boundary a keyboard selection may reach: the start of the shell's editable input when
-        /// that is on screen, otherwise the top of the viewport.
-        /// </summary>
-        /// <remarks>
-        /// Selecting back over the prompt is never what the user meant — the prompt is not theirs to edit,
-        /// and readline will not delete it either, so a selection covering it could not be replaced.
-        /// Stopping the selection where the input starts keeps the two agreeing.
         /// </remarks>
         private int LineEndBoundary(int from, int cols)
         {
@@ -2285,6 +2488,7 @@ namespace Iciclecreek.Terminal
             if (replaceKeys.Length == 0)
             {
                 _kbSelAnchor = null;
+                _kbSelWholeInput = false;
                 if (_terminal.Selection.HasSelection)
                 {
                     _terminal.Selection.ClearSelection();
@@ -2323,6 +2527,7 @@ namespace Iciclecreek.Terminal
                 // cursor rather than extending whatever the pointer just drew. FIRST, so it still runs
                 // when the Ctrl+Click path below returns early.
                 _kbSelAnchor = null;
+                _kbSelWholeInput = false;
 
                 // Ctrl+Click on a URL. Resolved from the press position rather than the hover state,
                 // which goes stale whenever the viewport moves without the pointer (wheel scroll, new
@@ -4445,6 +4650,16 @@ namespace Iciclecreek.Terminal
         /// <para>Internal rather than private so this is directly assertable. It is otherwise only
         /// observable as pixels, and the test suite runs on the headless drawing backend.</para>
         /// </remarks>
+        /// <summary>
+        /// True while the caret should not be drawn at all, because there is no one place it belongs.
+        /// </summary>
+        /// <remarks>
+        /// Select-all leaves the caret indeterminate: the whole input is selected, so neither end is more
+        /// the cursor than the other. Drawing it at one of them reads as though only that end were live.
+        /// Editors hide it; so does this. Steering an edge with Shift+arrow makes it meaningful again.
+        /// </remarks>
+        internal bool CaretHidden => _kbSelWholeInput && _terminal.Selection.HasSelection;
+
         internal (int Column, int AbsoluteRow) CaretPosition
         {
             get
@@ -4471,6 +4686,10 @@ namespace Iciclecreek.Terminal
             // it. A cursor represents a shell waiting for input; when there is no shell there is nothing for
             // it to represent, and offering one to type at is a lie.
             if (!IsLive || SuppressCursor)
+                return;
+
+            // Nowhere meaningful to put it — see CaretHidden.
+            if (CaretHidden)
                 return;
 
             // Only show cursor if terminal wants it visible (controlled by escape sequences)
