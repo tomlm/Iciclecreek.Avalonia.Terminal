@@ -3545,6 +3545,20 @@ namespace Iciclecreek.Terminal
 
         public override void Render(DrawingContext context)
         {
+            // The terminal's own background, painted once for the whole surface.
+            //
+            // Nothing else paints it. TerminalView is a plain Control, so Avalonia has no Background of its
+            // own to draw, and the control template is a bare Grid with no Border in it. The only thing that
+            // ever filled the surface was the per-cell fill — which no longer runs for a cell using the
+            // default background, so Background became a property that was read and then thrown away, and
+            // setting it did nothing at all.
+            //
+            // Painting it here rather than per cell keeps what that change was after: a host layering the
+            // terminal over its own surface sets Background to Transparent and still sees through.
+            var surface = GetValue(BackgroundProperty);
+            if (surface is not null)
+                context.FillRectangle(surface, new Rect(Bounds.Size));
+
             var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
             //Debug.WriteLine("======");
             //Debug.WriteLine(_terminal.Buffer.PrintViewport());
