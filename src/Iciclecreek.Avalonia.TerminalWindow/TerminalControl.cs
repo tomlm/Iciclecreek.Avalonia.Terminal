@@ -362,6 +362,39 @@ namespace Iciclecreek.Terminal
             set => SetValue(ShowCaretOnClickProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.SuppressCursorProperty"/>
+        /// <remarks>
+        /// Styled and template-bound to PART_TerminalView rather than forwarded onto the inner view: a
+        /// forwarder drops any value assigned before the template runs, which is the normal timing for XAML
+        /// attributes and object initialisers.
+        /// </remarks>
+        public static readonly StyledProperty<bool> SuppressCursorProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(SuppressCursor),
+                defaultValue: false);
+
+        /// <inheritdoc cref="SuppressCursorProperty"/>
+        public bool SuppressCursor
+        {
+            get => GetValue(SuppressCursorProperty);
+            set => SetValue(SuppressCursorProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.CharWidth"/>
+        public double CharWidth => _terminalView?.CharWidth ?? 0;
+
+        /// <inheritdoc cref="TerminalView.CharHeight"/>
+        public double CharHeight => _terminalView?.CharHeight ?? 0;
+
+        /// <inheritdoc cref="TerminalView.CurrentLineText"/>
+        public string CurrentLineText => _terminalView?.CurrentLineText ?? string.Empty;
+
+        /// <inheritdoc cref="TerminalView.ClearScreen"/>
+        public void ClearScreen() => _terminalView?.ClearScreen();
+
+        /// <inheritdoc cref="TerminalView.Refresh"/>
+        public void Refresh() => _terminalView?.Refresh();
+
         /// <inheritdoc cref="TerminalView.OutputReceivedOnReadTaskProperty"/>
         /// <remarks>
         /// Styled and template-bound to PART_TerminalView rather than forwarded onto the inner view. A

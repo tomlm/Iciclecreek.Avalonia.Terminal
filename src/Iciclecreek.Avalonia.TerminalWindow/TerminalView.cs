@@ -279,6 +279,24 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Hold the cursor back even when a process IS attached. Between spawning a shell and
+        /// its first byte of output the buffer is still empty, so the cursor paints at (0,0) — which is
+        /// wrong wherever the host layers something over the view during that window: an overlay drawing
+        /// its own caret would leave the shell's stranded in the corner beneath it. Clear it once the shell
+        /// has painted — <see cref="ShellReady"/> is the signal.
+        /// </summary>
+        public static readonly StyledProperty<bool> SuppressCursorProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(SuppressCursor),
+                defaultValue: false);
+
+        public bool SuppressCursor
+        {
+            get => GetValue(SuppressCursorProperty);
+            set => SetValue(SuppressCursorProperty, value);
+        }
+
+        /// <summary>
         /// When <see langword="true"/>, <see cref="OutputReceived"/> is raised directly on the background
         /// read task instead of being marshalled to the UI thread. Default is <see langword="false"/>.
         /// </summary>
@@ -726,7 +744,8 @@ namespace Iciclecreek.Terminal
                 ViewportYProperty,
                 CursorColorProperty,
                 CursorStyleProperty,
-                CursorBlinkProperty);
+                CursorBlinkProperty,
+                SuppressCursorProperty);   // toggling it must repaint immediately
 
             AffectsMeasure<TerminalView>(
                 FontFamilyProperty,
@@ -897,6 +916,52 @@ namespace Iciclecreek.Terminal
         public void WaitForExit(int ms) => _ptyConnection?.WaitForExit(ms);
 
         public void Kill() => _ptyConnection?.Kill();
+
+        /// <summary>
+        /// Wipe the screen AND the scrollback back to an empty buffer, via the parser's own
+        /// erase sequences. Call it when a session returns to dormant, so the sleeping view is genuinely
+        /// blank behind whatever stand-in the host draws, instead of showing the dead output of the process
+        /// that just exited underneath it.
+        /// No-op before <see cref="OnInitialized"/> has run — a pooled view that was never attached has no
+        /// buffer to wipe, and a host posting this at Background priority can land the job on a view that
+        /// has since been detached (or was never realised at all).
+        /// </summary>
+        public void ClearScreen()
+        {
+            if (_terminal == null) return;
+
+            lock (_terminalLock)
+            {
+                _terminal.Write("\u001b[H\u001b[2J\u001b[3J");   // home · erase screen · erase scrollback
+                _terminal.Buffer.ScrollToBottom();
+            }
+            this.RequestInvalidate();
+        }
+
+        /// <summary>
+        /// The text of the row the cursor sits on, trailing blanks trimmed. Read it as a session goes
+        /// dormant so the sleeping view can show the shell's REAL last prompt instead of a synthesized one.
+        /// </summary>
+        public string CurrentLineText
+        {
+            get
+            {
+                if (_terminal == null)
+                    return string.Empty;
+
+                lock (_terminalLock)
+                {
+                    var buffer = _terminal.Buffer;
+                    var line = buffer.GetLine(buffer.YBase + buffer.Y);
+                    if (line == null) return string.Empty;
+
+                    var sb = new StringBuilder(line.Length);
+                    for (int x = 0; x < line.Length; x++)
+                        sb.Append(string.IsNullOrEmpty(line[x].Content) ? " " : line[x].Content);
+                    return sb.ToString().TrimEnd();
+                }
+            }
+        }
 
         /// <summary>
         /// Sends text to the running process, exactly as if it had been typed at the keyboard.
@@ -3258,6 +3323,24 @@ namespace Iciclecreek.Terminal
             _processCts = null;
         }
 
+        /// <summary>
+        /// One cell's width at the current font — text is drawn at <c>col * CharWidth</c>. A host overlay
+        /// can size its stand-in caret from this so waking the session shifts nothing.
+        /// </summary>
+        public double CharWidth
+        {
+            get { if (_charWidth <= 0) UpdateTextMetrics(); return _charWidth; }
+        }
+
+        /// <summary>
+        /// One row's height at the current font — row N's text top-left is <c>(0, N * CharHeight)</c>,
+        /// so a stand-in prompt lands on the live first row by placing it at the view's own origin.
+        /// </summary>
+        public double CharHeight
+        {
+            get { if (_charHeight <= 0) UpdateTextMetrics(); return _charHeight; }
+        }
+
         private void UpdateTextMetrics()
         {
             var typeface = new Typeface(FontFamily, FontStyle, FontWeight);
@@ -3271,6 +3354,34 @@ namespace Iciclecreek.Terminal
 
             _charWidth = _measureText.Width;
             _charHeight = _measureText.Height;
+        }
+
+        /// <summary>
+        /// Force a correct full re-render. Upstream's first paint is focus-gated (the blink/redraw loop only runs
+        /// when focused) and frame-throttled, so a freshly-launched or just-shown terminal can stay blank until
+        /// clicked. This re-applies font metrics, re-grids to the current size, drops the per-line render caches,
+        /// and invalidates immediately (bypassing <see cref="TerminalRenderThrottle"/>). Safe to call any time
+        /// (no-op-ish before the terminal is initialised).
+        /// </summary>
+        public void Refresh()
+        {
+            if (_terminal == null)
+                return;
+
+            UpdateTextMetrics();
+
+            // Drop cached text runs so each line rebuilds at the current metrics/size.
+            for (int y = 0; y < _terminal.Buffer.Length; y++)
+            {
+                var line = _terminal.Buffer.GetLine(y);
+                if (line != null)
+                    line.Cache = null;
+            }
+
+            // Re-run layout (ArrangeOverride re-grids the terminal + PTY for the current size), then paint now.
+            InvalidateMeasure();
+            InvalidateArrange();
+            InvalidateVisual();
         }
 
         protected override Size MeasureOverride(Size availableSize)
@@ -3677,7 +3788,7 @@ namespace Iciclecreek.Terminal
             // or whose process has exited, paints a block cursor in its top-left corner with nothing behind
             // it. A cursor represents a shell waiting for input; when there is no shell there is nothing for
             // it to represent, and offering one to type at is a lie.
-            if (!IsLive)
+            if (!IsLive || SuppressCursor)
                 return;
 
             // Only show cursor if terminal wants it visible (controlled by escape sequences)
