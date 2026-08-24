@@ -13,6 +13,18 @@
         <Setter Property="FocusAdorner" Value="{x:Null}"/>
         <Setter Property="Template">
             <ControlTemplate>
+                <!-- The scrollbar keeps its own column and never gives it up.
+
+                     Hiding it collapsed the Auto column, the terminal grew into it, and the process was
+                     told the terminal had changed width — mid-frame, for a program that had just switched
+                     to the alternate buffer, which is what hid the bar in the first place.
+
+                     Overlaying it on the terminal would also keep the width fixed, but the bar would then
+                     sit over real cells and eat the mouse events belonging to them. These programs turn
+                     mouse reporting on; the cells under an overlay would stop being clickable.
+
+                     So it stays, always, exactly as Windows Terminal and xterm leave it. It goes inert
+                     rather than absent when there is nothing to scroll. -->
                 <Grid ColumnDefinitions="*,Auto">
                     <local:TerminalView Name="PART_TerminalView"
                                        FontFamily="{TemplateBinding FontFamily}"

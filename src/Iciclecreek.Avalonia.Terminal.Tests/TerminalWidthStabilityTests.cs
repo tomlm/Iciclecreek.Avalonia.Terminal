@@ -68,10 +68,16 @@ public class TerminalWidthStabilityTests
     }
 
     /// <summary>
-    /// The scrollbar still hides — it just stops taking the terminal's width with it when it goes.
+    /// The scrollbar keeps its column when it has nothing to do, rather than handing it to the terminal.
     /// </summary>
+    /// <remarks>
+    /// <para>Overlaying it on the terminal would keep the width fixed too, and would look tidier when there
+    /// is nothing to scroll. It is not worth it: the bar would sit over real cells and eat the mouse events
+    /// belonging to them, and full-screen programs turn mouse reporting on. Windows Terminal and xterm both
+    /// keep the bar in place for the same reason.</para>
+    /// </remarks>
     [AvaloniaTest]
-    public void The_scrollbar_hides_without_giving_up_its_room()
+    public void The_scrollbar_keeps_its_column_when_it_goes_inert()
     {
         var control = new TerminalControl { Process = "" };
         var window = TerminalHost.Show(control);
@@ -80,14 +86,16 @@ public class TerminalWidthStabilityTests
         var view = control.View();
         var bar = ScrollBarOf(control);
         var before = view.Terminal.Cols;
+        var barWidth = bar.Bounds.Width;
 
-        view.Terminal.Write("[?1049h");
+        Assert.That(barWidth, Is.GreaterThan(0), "sanity: the bar has a column to keep");
+
+        view.Terminal.Write("\u001b[?1049h");
         window.UpdateLayout();
 
-        Assert.That(bar.Opacity, Is.EqualTo(0), "it has to actually disappear");
-        Assert.That(bar.IsHitTestVisible, Is.False, "and stop swallowing clicks while invisible");
-        Assert.That(bar.Bounds.Width, Is.GreaterThan(0), "but keep its column, or the terminal grows into it");
-        Assert.That(view.Terminal.Cols, Is.EqualTo(before));
+        Assert.That(bar.IsEnabled, Is.False, "nothing to scroll in the alternate buffer");
+        Assert.That(bar.Bounds.Width, Is.EqualTo(barWidth).Within(0.5), "but the column is still its own");
+        Assert.That(view.Terminal.Cols, Is.EqualTo(before), "so the terminal never moved");
 
         window.Close();
     }

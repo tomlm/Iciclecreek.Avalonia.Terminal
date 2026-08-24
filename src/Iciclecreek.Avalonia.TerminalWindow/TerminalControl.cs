@@ -648,8 +648,9 @@ namespace Iciclecreek.Terminal
 
             if (_terminalView.IsAlternateBuffer)
             {
-                ShowScrollBar(false);
-                _scrollBar.Value = 0;
+                // Inert, not gone. The alternate buffer has no scrollback to offer a range over, but taking
+                // the bar away would hand its column to the terminal — see ScrollBarKeepsItsColumn below.
+                MakeScrollBarInert();
                 return;
             }
 
@@ -657,11 +658,19 @@ namespace Iciclecreek.Terminal
             var viewportLines = _terminalView.ViewportLines;
             var currentScroll = _terminalView.ViewportY;
 
+            if (maxScrollback <= 0)
+            {
+                // Nothing above the screen yet. Same reasoning: a bar that vanished the first time a line
+                // scrolled off would narrow the terminal mid-session, under whatever is running.
+                MakeScrollBarInert();
+                return;
+            }
+
             // Scrollbar range: 0 (top of buffer) to maxScrollback (bottom/current output)
             _scrollBar.Minimum = 0;
             _scrollBar.Maximum = maxScrollback;
             _scrollBar.ViewportSize = viewportLines;
-            ShowScrollBar(maxScrollback > 0);
+            _scrollBar.IsEnabled = true;
 
             // Not while the user is dragging. ViewportY raises its change synchronously, so this method runs
             // inside OnScrollBarScroll — and writing Value here would replace the fractional position the
@@ -675,33 +684,32 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Show or hide the scrollbar WITHOUT changing how much room it takes.
+        /// Leave the scrollbar where it is, with nothing to scroll: it keeps its column and stops responding.
         /// </summary>
         /// <remarks>
-        /// <para><c>IsVisible = false</c> removes it from layout. The template puts it in an <c>Auto</c>
-        /// column, so that column collapses, the terminal's column grows, and ArrangeOverride resizes the
-        /// emulator AND the pty. The process is then told the terminal changed width.</para>
+        /// <para>The bar must never leave the layout. It lives in the template's <c>Auto</c> column, so
+        /// hiding it collapses that column, the terminal grows into it, and ArrangeOverride resizes the
+        /// emulator AND the pty — the process is told the terminal changed width.</para>
         ///
-        /// <para>That is not a cosmetic problem. A full-screen program switches to the alternate buffer as
-        /// its very first action, which hides the scrollbar, which resized the terminal underneath it while
-        /// it was drawing its opening frame. A program that writes one screen-width per row and lets the
-        /// cursor wrap — rather than positioning it explicitly — then has every row after the first land
-        /// somewhere it did not intend. It repaints the whole screen trying to recover, and what the reader
-        /// sees is a terminal that came up blank.</para>
+        /// <para>That is what made a full-screen program come up blank. Switching to the alternate buffer is
+        /// its very first action, that hid the bar, and the resize landed while the program was drawing its
+        /// opening frame. A program that writes one screen-width per row and lets the cursor wrap, rather
+        /// than positioning it explicitly, then had every row after the first land somewhere it did not
+        /// intend; it repainted the whole screen trying to recover.</para>
         ///
-        /// <para>The same applied in the normal buffer the moment the first line scrolled off and the
-        /// scrollbar appeared: the terminal silently narrowed by two columns mid-session.</para>
-        ///
-        /// <para>Hiding it by opacity keeps the column reserved, so the width the process was told stays
-        /// true. It stops taking clicks as well, or an invisible scrollbar would still swallow them.</para>
+        /// <para>Windows Terminal and xterm both leave the bar in place for exactly this reason. Overlaying
+        /// it on the terminal would keep the width fixed too, but the bar would sit over real cells and eat
+        /// the mouse events belonging to them — and these programs turn mouse reporting on.</para>
         /// </remarks>
-        private void ShowScrollBar(bool shown)
+        private void MakeScrollBarInert()
         {
             if (_scrollBar == null)
                 return;
 
-            _scrollBar.Opacity = shown ? 1 : 0;
-            _scrollBar.IsHitTestVisible = shown;
+            _scrollBar.Minimum = 0;
+            _scrollBar.Maximum = 0;
+            _scrollBar.Value = 0;
+            _scrollBar.IsEnabled = false;
         }
     }
 }
