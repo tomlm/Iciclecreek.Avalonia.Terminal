@@ -14,6 +14,8 @@ namespace Iciclecreek.Terminal.Tests;
 [TestFixture]
 public class ShiftSelectionTests
 {
+    private const string Esc = "\u001b";
+
     private static (TerminalView view, RecordingConnection pty, Window window) LiveView()
     {
         var view = new TerminalView { Process = "" };
@@ -253,7 +255,6 @@ public class ShiftSelectionTests
         Assert.That(pty.Written, Is.Empty);
         window.Close();
     }
-        private const string Esc = "\u001b";
 
     /// <summary>
     /// Option+Shift is the macOS word-selection gesture, and on that platform it is the ONLY one — Ctrl+arrow
@@ -295,6 +296,58 @@ public class ShiftSelectionTests
 
         Assert.That(pty.Written, Is.EqualTo(Esc + letter), "still ESC-b / ESC-f to the shell");
         Assert.That(view.Terminal.Selection.HasSelection, Is.False, "and no selection is made");
+        window.Close();
+    }
+
+    /// <summary>
+    /// Ctrl+arrow the same way, for a shell reading VT sequences.
+    /// </summary>
+    [TestCase(Key.Left, "b")]
+    [TestCase(Key.Right, "f")]
+    [AvaloniaTest]
+    public async Task Bare_ctrl_arrow_moves_the_shell_cursor_by_a_word(Key key, string letter)
+    {
+        var (view, pty, window) = LiveView();
+        Type(view, "hello world");
+        await Task.Delay(60);
+
+        Press(view, key, KeyModifiers.Control);
+        await Task.Delay(60);
+
+        Assert.That(pty.Written, Is.EqualTo(Esc + letter));
+        Assert.That(view.Terminal.Selection.HasSelection, Is.False);
+        window.Close();
+    }
+
+    /// <summary>
+    /// But NOT when the process is reading Win32 input records — there the real key event has to go through.
+    /// </summary>
+    /// <remarks>
+    /// <para>cmd.exe turns that mode on as it starts (<c>CSI ?9001h</c>, visible in the first bytes of any
+    /// session it runs in). Both it and PSReadLine already move by word on a real Ctrl+Left, and neither
+    /// binds ESC-b — so translating the chord replaced one they understand with one they ignore, and on
+    /// Windows the key did nothing whatsoever.</para>
+    /// <para>Asserted as "not the translation" rather than against an exact Win32 record, because the record
+    /// encodes scan codes and repeat counts that are not this test's business.</para>
+    /// </remarks>
+    [TestCase(Key.Left)]
+    [TestCase(Key.Right)]
+    [AvaloniaTest]
+    public async Task Ctrl_arrow_is_not_translated_under_win32_input_mode(Key key)
+    {
+        var (view, pty, window) = LiveView();
+        view.Terminal.Write(Esc + "[?9001h");      // what cmd.exe sends on startup
+        await Task.Delay(60);
+        Assert.That(view.Terminal.Win32InputMode, Is.True, "sanity: the mode is on");
+
+        Press(view, key, KeyModifiers.Control);
+        await Task.Delay(60);
+
+        Assert.That(pty.Written, Is.Not.Empty, "the keystroke still has to reach the process");
+        Assert.That(pty.Written, Is.Not.EqualTo(Esc + "b"), "ESC-b is a binding cmd.exe does not have");
+        Assert.That(pty.Written, Is.Not.EqualTo(Esc + "f"));
+        Assert.That(pty.Written, Does.EndWith("_"), "a Win32 input record, which it does understand");
+
         window.Close();
     }
 

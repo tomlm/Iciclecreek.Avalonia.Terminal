@@ -1757,8 +1757,15 @@ namespace Iciclecreek.Terminal
                 // bind out of the box, so that is what these chords send.
                 //
                 // Left alone in the alternate buffer, where a full-screen app reads the real sequence itself.
+                //
+                // And left alone when the process is reading WIN32 INPUT RECORDS. cmd.exe turns that mode on
+                // as it starts (CSI ?9001h), and both it and PSReadLine already move by word on a real
+                // Ctrl+Left — while neither binds ESC-b. Translating here replaced a chord they understand
+                // with one they ignore, so on Windows the key did nothing at all. Falling through hands them
+                // the actual key event a few lines below.
                 if (e.Key is Key.Left or Key.Right
                     && e.KeyModifiers is KeyModifiers.Alt or KeyModifiers.Control
+                    && !_terminal.Win32InputMode
                     && !_terminal.IsAlternateBufferActive)
                 {
                     e.Handled = true;
