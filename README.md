@@ -203,6 +203,24 @@ Window manipulation commands from the terminal (resize, move, minimize, maximize
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. If `CloseOnProcessExit` is `true`, the event is raised before the window closes. |
 
 
+### Render frame rate
+
+Terminals repaint on a shared, throttled frame rather than on every chunk of output, so a window hosting
+several of them does one invalidation pass instead of one per terminal per chunk. The rate defaults to 30 FPS
+and is settable:
+
+```csharp
+using Iciclecreek.Terminal;
+
+TerminalRenderThrottle.TargetFrameRate = 60;   // valid range 1–1000
+```
+
+Raise it for a smoother repaint on a high-refresh display, or lower it to hand UI-thread time back to the rest
+of the app — a terminal streaming build output at 10 FPS is still perfectly readable and costs a third of the
+invalidations. Because the frame is shared, the setting is global rather than per-terminal: it applies to every
+terminal already open, from the next frame scheduled. Safe to set from any thread.
+
+
 ## Links
 
 - **GitHub Repository:** [https://github.com/tomlm/Iciclecreek.Avalonia.TerminalWindow](https://github.com/tomlm/Iciclecreek.Avalonia.TerminalWindow)
