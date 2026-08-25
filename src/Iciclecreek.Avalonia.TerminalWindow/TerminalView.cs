@@ -4373,10 +4373,21 @@ namespace Iciclecreek.Terminal
                 int cellCount = 0;
                 int runStartX = 0;
 
-                // Skip placeholder cells (width 0) that follow wide characters
+                // Skip width-0 cells. There are TWO kinds, and only one of them is a placeholder.
+                //
+                // The placeholder behind a wide glyph carries no content, and skipping it is what stops the
+                // glyph being drawn twice. The other kind is a combining character that had nothing in front
+                // of it to combine with — a line beginning with U+0301, a stray variation selector, a keycap
+                // with no digit — which the emulator stores in a cell of its own after
+                // TryAppendToPreviousCell finds no base. That one DOES carry content, and skipping it is
+                // also right: a combining mark with nothing to combine with has nothing to draw.
+                //
+                // This used to assert the content was empty, on the assumption that a placeholder was the
+                // only way to reach here. It is not, so the assert fired on ordinary output — printing a
+                // lone combining acute is enough — and cost a debugging session before anyone questioned
+                // the premise rather than the buffer.
                 if (cell.Width == 0)
                 {
-                    Debug.Assert(cell.Content == BufferCell.Empty.Content, "Placeholder cell should be null content");
                     x++;
                     continue;
                 }
