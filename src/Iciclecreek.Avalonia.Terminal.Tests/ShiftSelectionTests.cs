@@ -771,35 +771,49 @@ public class ShiftSelectionTests
     /// the middle of one character, and the selection covers half of it.
     /// </summary>
     /// <remarks>
-    /// Driven through a real shell because the cursor has to be somewhere other than the end of the line
-    /// for Shift+End to have anywhere to go, and only the shell can move it there.
+    /// The caret has to be somewhere other than the end of the line for Shift+End to have anywhere to go.
+    /// It is put there with a cursor-position escape, which the EMULATOR carries out — no shell involved.
+    ///
+    /// The first version of this test drove a real bash and pressed Home, which sends ESC[H and needs the
+    /// shell to have that bound. Whether it does depends on the readline version and the terminfo entry, so
+    /// the test passed on one machine and failed on another with the selection running to the row edge.
+    /// Nothing about a wide glyph requires a shell, so there is no longer one.
     /// </remarks>
     [AvaloniaTest]
-    [Platform(Exclude = "Win", Reason = "drives a real bash")]
     public async Task Shift_end_covers_a_whole_wide_glyph()
     {
-        var (view, window) = await RealShell();
-        try
+        var (view, pty, window) = LiveView();
+
+        Type(view, "ab\u4e16\u754c");
+        await Task.Delay(80);
+
+        // Cursor to column 1, past nothing — CHA, handled by the emulator itself.
+        view.Terminal.Write("\u001b[1G");
+        await Task.Delay(60);
+        Assert.That(view.Terminal.Buffer.X, Is.Zero, "sanity: the caret is back at the line start");
+
+        Press(view, Key.End, KeyModifiers.Shift);
+        await Task.Delay(80);
+
+        // "ab世界" lays out as: a=0, b=1, 世=2 with its placeholder at 3, 界=4 with its placeholder at 5.
+        //
+        // The text alone cannot tell the two behaviours apart — an unselected trailing placeholder
+        // contributes no characters, so GetSelectionText returns "ab世界" either way. What differs is
+        // whether the selection reaches cell 5, and that is what has to be asserted. The first rewrite of
+        // this test checked only the text and passed against the bug.
+        int row = view.Terminal.Buffer.Y;
+        Assert.Multiple(() =>
         {
-
-            TypeText(view, "ab\u4e16\u754c");
-            await Task.Delay(700);
-
-            Press(view, Key.Home);              // move the SHELL's cursor to the line start
-            await Task.Delay(400);
-
-            Press(view, Key.End, KeyModifiers.Shift);
-            await Task.Delay(300);
-
             Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("ab\u4e16\u754c"),
-                "the last glyph is selected whole, not cut in half");
+                "every character is in the selection");
+            Assert.That(view.Terminal.Selection.IsCellSelected(4, row), Is.True,
+                "sanity: the last glyph itself is selected");
+            Assert.That(view.Terminal.Selection.IsCellSelected(5, row), Is.True,
+                "and its placeholder with it — the boundary is past the WHOLE glyph, not inside it");
+            Assert.That(pty.Written, Is.Empty, "and nothing reached the program");
+        });
 
-        }
-        finally
-        {
-            view.Kill();
-            window.Close();
-        }
+        window.Close();
     }
 
     /// <summary>
@@ -927,7 +941,10 @@ public class ShiftSelectionTests
     /// The first version of this test pressed Shift+Left and then Shift+Home, which leaves the focus BELOW
     /// the anchor — a backwards selection, taking the Backspace-only path. It asserted the absence of a
     /// forward-delete sequence that was never going to be emitted, and would have passed against the bug.
-    /// Home first, so the shell's cursor is at the input start and Shift+Right can select forwards from it.
+    /// Ctrl+A first, so the shell's cursor is at the input start and Shift+Right can select forwards from it.
+    /// Ctrl+A rather than Home: only the shell can move its own cursor, and readline binds Ctrl+A to
+    /// beginning-of-line unconditionally, whereas ESC[H — what Home sends — is bound only if the terminfo
+    /// entry supplies it. A sibling test that used Home passed on one machine and failed on another.
     /// </remarks>
     [AvaloniaTest]
     [Platform(Exclude = "Win", Reason = "drives a real bash")]
@@ -939,7 +956,7 @@ public class ShiftSelectionTests
             TypeText(view, "hello world");
             await Task.Delay(700);
 
-            Press(view, Key.Home);          // move the SHELL's cursor to the input start
+            Press(view, Key.A, KeyModifiers.Control);   // move the SHELL's cursor to the input start
             await Task.Delay(400);
 
             Press(view, Key.Right, KeyModifiers.Shift);
