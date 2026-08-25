@@ -5,11 +5,21 @@
     <!-- FontFamily is set here rather than only as a default value, because a default LOSES to an inherited
          one: FluentTheme puts a proportional font (Inter) on the tree and it flows straight down into the
          terminal. A terminal in a proportional font is broken, not just ugly - the cell grid comes from one
-         measured advance width. A host setting FontFamily directly still wins over this setter. -->
+         measured advance width. A host setting FontFamily directly still wins over this setter.
+
+         The emoji fonts sit AFTER the monospace ones and never in front of them, for that same reason: the
+         grid is measured from the first font, and these are proportional. They are only consulted for
+         codepoints the monospace fonts do not have.
+
+         They are named because leaving the fallback to chance picks badly for a joined sequence. Without an
+         emoji font in the chain, a cluster the monospace font cannot shape falls to whatever monochrome
+         symbol font happens to carry the COMPONENTS - so the parts get drawn side by side inside one cell,
+         in the terminal's foreground colour, instead of the single glyph they spell. Measured against
+         ucs-detect's 1,445 ZWJ sequences, which is where that is easiest to see. -->
     <Style Selector="local|TerminalControl">
         <Setter Property="Background" Value="Black"/>
         <Setter Property="Foreground" Value="White"/>
-        <Setter Property="FontFamily" Value="Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New,monospace"/>
+        <Setter Property="FontFamily" Value="Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New,Segoe UI Emoji,Apple Color Emoji,Noto Color Emoji,monospace"/>
         <Setter Property="FocusAdorner" Value="{x:Null}"/>
         <Setter Property="Template">
             <ControlTemplate>
