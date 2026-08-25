@@ -31,24 +31,64 @@ public class GraphemeRunTests
         return terminal.Buffer.Lines[0];
     }
 
-    /// <summary>The emulator's layout, asserted directly — every other test here depends on this shape.</summary>
+    /// <summary>
+    /// The emulator's layout, asserted directly - every other test here depends on this shape.
+    /// </summary>
+    /// <remarks>
+    /// <para>It CHANGED in XTerm.NET 1.1.1. A joined sequence used to be spread across one cell pair per
+    /// component, with U+200D tacked onto all but the last, so a four-component family claimed eight
+    /// columns for a glyph two wide and the renderer had to stitch them back together before the shaper
+    /// could ligate them. The emulator now keeps the whole cluster in one cell, which is where it belonged.
+    /// </para>
+    /// <para>This test is why that arrived as a failing build rather than as a rendering fault somebody
+    /// noticed weeks later. It was written to fail loudly if the packing ever moved, and it did.</para>
+    /// </remarks>
     [Test]
-    public void Emulator_Splits_A_Zwj_Sequence_Across_Cells_Keeping_The_Joiner()
+    public void Emulator_Keeps_A_Zwj_Sequence_In_One_Cell()
     {
         var line = LineOf(Family, out _);
 
-        // ORDINAL, deliberately. string.EndsWith(string) defaults to a CULTURE-SENSITIVE comparison, and ICU
-        // treats U+200D as an ignorable character — so "👧".EndsWith("\u200D") is TRUE under the default and
-        // every assertion here would hold no matter what the emulator did.
-        Assert.That(EndsWithJoiner(line[0].Content), Is.True, "the joiner rides on the first component");
-        Assert.That(line[0].Width, Is.EqualTo(2));
+        Assert.That(line[0].Content, Is.EqualTo(Family), "the whole cluster, in one cell");
+        Assert.That(line[0].Width, Is.EqualTo(2), "and two columns wide, as the glyph is");
         Assert.That(line[1].Width, Is.EqualTo(0), "wide cells are followed by a placeholder");
-        Assert.That(EndsWithJoiner(line[2].Content), Is.True);
-        Assert.That(EndsWithJoiner(line[4].Content), Is.False, "the last component carries no joiner");
+
+        // ORDINAL, deliberately. string.EndsWith(string) defaults to a CULTURE-SENSITIVE comparison, and
+        // ICU treats U+200D as ignorable, so this assertion would hold under the default no matter what
+        // the emulator did.
+        Assert.That(EndsWithJoiner(line[0].Content), Is.False, "nothing is left dangling for the renderer");
     }
 
+    /// <summary>
+    /// And it holds when the sequence arrives in PIECES, which is what decides whether the renderer still
+    /// has to stitch at all.
+    /// </summary>
+    /// <remarks>
+    /// A pty hands over whatever the read returned, so a cluster is split across two writes whenever the
+    /// boundary happens to fall inside one. If the emulator only merged within a single write, the renderer
+    /// would still meet the split form some of the time - and "some of the time" is how an intermittent
+    /// rendering fault gets written.
+    /// </remarks>
     [Test]
-    public void Absorbs_A_Family_Sequence_Into_One_Run()
+    public void The_cluster_survives_arriving_in_two_writes()
+    {
+        var terminal = new XTerm.Terminal(new TerminalOptions());
+
+        // 3 UTF-16 units: the surrogate pair for the first component, then U+200D. Split there so the
+        // second write begins mid-cluster.
+        terminal.Write(Family.Substring(0, 3));
+        terminal.Write(Family.Substring(3));
+
+        var line = terminal.Buffer.Lines[0]!;
+        Assert.That(line[0].Content, Is.EqualTo(Family), "still one cell, not two halves");
+        Assert.That(line[2].Content, Is.EqualTo(" "), "and nothing spilled into the next column");
+    }
+
+    /// <summary>
+    /// With the cluster already whole, absorbing has nothing to do - it must leave the run exactly as it
+    /// found it rather than reaching into the blanks past the glyph.
+    /// </summary>
+    [Test]
+    public void Absorbing_Is_A_No_Op_For_A_Complete_Sequence()
     {
         var line = LineOf(Family, out var terminal);
 
@@ -56,26 +96,29 @@ public class GraphemeRunTests
         var cellCount = 2;
         var text = GraphemeRuns.AbsorbJoinedCells(line, terminal.Cols, line[0], line[0].Content, ref x, ref cellCount);
 
-        Assert.That(text, Is.EqualTo(Family), "the shaper must receive the whole cluster");
-        Assert.That(cellCount, Is.EqualTo(6), "the run still spans every column the emulator advanced over");
-        Assert.That(x, Is.EqualTo(6), "and the cursor lands past the whole sequence");
+        Assert.That(text, Is.EqualTo(Family), "the shaper already had the whole cluster");
+        Assert.That(cellCount, Is.EqualTo(2), "two columns, which is what the glyph occupies");
+        Assert.That(x, Is.EqualTo(2), "and nothing beyond it was claimed");
     }
 
+    /// <summary>
+    /// Heart-on-fire used to begin in a NARROW cell and continue into a wide one, which is the case the
+    /// width-1 collection loop stopped short of. It is one wide cell now, like every other cluster.
+    /// </summary>
     [Test]
-    public void Absorbs_A_Sequence_That_Starts_Narrow_And_Continues_Wide()
+    public void A_Mixed_Width_Sequence_Is_One_Cell_Too()
     {
-        // ❤️‍🔥 — the base is a narrow cell, the tail is a wide one, so this is the case that the width-1
-        // collection loop would otherwise stop short of.
         var line = LineOf(HeartOnFire, out var terminal);
-        Assert.That(EndsWithJoiner(line[0].Content), Is.True, "precondition: the base carries the joiner");
 
-        // Start where the render loop would: past the first cell and whatever placeholder follows it.
+        Assert.That(line[0].Content, Is.EqualTo(HeartOnFire));
+        Assert.That(line[0].Width, Is.EqualTo(2), "no longer narrow-then-wide");
+
         var x = line[0].Width;
         var cellCount = line[0].Width;
         var text = GraphemeRuns.AbsorbJoinedCells(line, terminal.Cols, line[0], line[0].Content, ref x, ref cellCount);
 
-        Assert.That(text, Is.EqualTo(HeartOnFire), "the whole cluster, across the width change");
-        Assert.That(cellCount, Is.GreaterThan(line[0].Width), "the tail cell is included in the span");
+        Assert.That(text, Is.EqualTo(HeartOnFire));
+        Assert.That(cellCount, Is.EqualTo(line[0].Width), "nothing to pull in");
     }
 
     [Test]
