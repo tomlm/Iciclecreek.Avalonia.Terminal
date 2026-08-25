@@ -239,8 +239,21 @@ namespace Iciclecreek.Terminal
         /// and box drawing, alignment and cursor positioning all come apart. A terminal control has to be
         /// usable without the consumer knowing to style it.
         /// </remarks>
+        /// <remarks>
+        /// The emoji families are at the END and never in front. The cell grid comes from the first family
+        /// that exists on the machine, these are proportional, and one of them in that position breaks the
+        /// grid rather than fixing the glyphs.
+        ///
+        /// They are named rather than left to the platform because the fallback picks badly for a joined
+        /// sequence. With no emoji family in the chain, a cluster the monospace families cannot shape falls
+        /// to whatever monochrome symbol font the system offers — and that font has the COMPONENTS without a
+        /// ligature for the sequence, so a couple or a family is drawn as its separate parts, tinted by the
+        /// terminal's foreground. That tint is the giveaway: a colour emoji carries its own colours, so
+        /// anything wearing the foreground is not one.
+        /// </remarks>
         public static readonly FontFamily DefaultFontFamily = new FontFamily(
-            "Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New,monospace");
+            "Cascadia Mono,Cascadia Code,Consolas,Menlo,DejaVu Sans Mono,Liberation Mono,Courier New," +
+            "Segoe UI Emoji,Apple Color Emoji,Noto Color Emoji,monospace");
 
         public static readonly StyledProperty<FontFamily> FontFamilyProperty =
             AvaloniaProperty.Register<TerminalView, FontFamily>(
