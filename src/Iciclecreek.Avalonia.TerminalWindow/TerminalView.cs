@@ -3058,9 +3058,22 @@ namespace Iciclecreek.Terminal
             });
         }
 
+        /// <summary>
+        /// Answers a program asking about the window — its size in cells or pixels, its position, its title.
+        /// </summary>
+        /// <remarks>
+        /// <para>INVOKE, not Post, and the difference is the whole behaviour. The emulator raises this
+        /// synchronously and reads <c>e.Handled</c> the moment the handler returns, to decide whether it has
+        /// an answer to send. Post returns immediately, so Handled was still false and the reply was never
+        /// sent — the answer was written correctly, on the UI thread, after the only reader of it had moved
+        /// on. Every window query went unanswered and the program asking waited out its timeout.</para>
+        /// <para>Blocking the reader thread here is safe because nothing on the UI thread waits on it: output
+        /// is delivered by posting, and input is written asynchronously. Invoke also runs inline when this
+        /// is already the UI thread, so a host driving the terminal directly does not deadlock on itself.</para>
+        /// </remarks>
         private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
         {
-            Dispatcher.UIThread.Post(() =>
+            Dispatcher.UIThread.Invoke(() =>
             {
                 // Raise routed event so any parent can handle it without custom plumbing.
                 var args = new WindowInfoRequestedEventArgs(e.Request)
