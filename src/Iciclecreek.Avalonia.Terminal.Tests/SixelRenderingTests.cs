@@ -265,7 +265,7 @@ public class SixelRenderingTests
     private static TerminalImage EvenImage()
         => new(new byte[8 * 6 * 4], 8, 6, CellPixelWidth, CellPixelHeight);
 
-    [Test]
+    [AvaloniaTest]
     public void A_full_strip_maps_to_whole_cells()
     {
         var image = EvenImage();
@@ -277,7 +277,7 @@ public class SixelRenderingTests
         Assert.That(destination, Is.EqualTo(new Rect(0, 0, 40, 20)));
     }
 
-    [Test]
+    [AvaloniaTest]
     public void A_strip_further_down_reads_from_further_down_the_picture()
     {
         var image = EvenImage();
@@ -289,7 +289,7 @@ public class SixelRenderingTests
         Assert.That(destination, Is.EqualTo(new Rect(0, 20, 40, 20)));
     }
 
-    [Test]
+    [AvaloniaTest]
     public void A_run_starting_partway_across_is_offset_in_both_rectangles()
     {
         var image = EvenImage();
@@ -305,7 +305,7 @@ public class SixelRenderingTests
     /// The case that separates a picture from a smeared one: a tile holding half a cell's worth of pixels has
     /// to cover half a cell, not be stretched across a whole one.
     /// </summary>
-    [Test]
+    [AvaloniaTest]
     public void A_clipped_edge_tile_covers_only_the_fraction_of_a_cell_it_holds()
     {
         // Seven pixels wide over two-pixel cells: four columns, the last holding a single pixel.
@@ -319,7 +319,7 @@ public class SixelRenderingTests
             "three and a half cells of pixels should cover three and a half cells of screen");
     }
 
-    [Test]
+    [AvaloniaTest]
     public void A_clipped_bottom_tile_covers_only_the_fraction_of_a_row_it_holds()
     {
         // Eight pixels tall over three-pixel cells: three rows, the last holding two pixels.
@@ -334,7 +334,7 @@ public class SixelRenderingTests
         Assert.That(destination.Height, Is.EqualTo(Math.Round(20.0 * 2 / 3)).Within(0.0001));
     }
 
-    [Test]
+    [AvaloniaTest]
     public void A_tile_outside_the_picture_is_refused()
     {
         var image = EvenImage();
@@ -345,7 +345,7 @@ public class SixelRenderingTests
             Is.False);
     }
 
-    [Test]
+    [AvaloniaTest]
     public void An_empty_run_is_refused()
     {
         var image = EvenImage();
@@ -354,7 +354,7 @@ public class SixelRenderingTests
             Is.False);
     }
 
-    [Test]
+    [AvaloniaTest]
     public void A_run_with_no_picture_is_refused()
     {
         var run = new TerminalView.CachedTextRun(null, 0, 2, null);
@@ -366,7 +366,7 @@ public class SixelRenderingTests
     /// Coordinates go through the same snapping every other part of this renderer uses, or the picture shears
     /// against the text grid by a fraction of a pixel per row.
     /// </summary>
-    [Test]
+    [AvaloniaTest]
     public void Coordinates_are_snapped_to_the_device_pixel_grid()
     {
         var image = EvenImage();
@@ -378,6 +378,39 @@ public class SixelRenderingTests
         Assert.That(destination.X * 1.5, Is.EqualTo(Math.Round(destination.X * 1.5)).Within(0.0001));
         Assert.That((destination.X + destination.Width) * 1.5,
             Is.EqualTo(Math.Round((destination.X + destination.Width) * 1.5)).Within(0.0001));
+    }
+
+    // ---- giving up on images, and how far ----------------------------------------------------------
+
+    /// <summary>
+    /// A backend with no raster surface says so the same way every frame, so images are abandoned for
+    /// the life of the control rather than throwing out of Render thirty times a second.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_platform_that_cannot_draw_at_all_is_recognised()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new NotImplementedException()), Is.True);
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new PlatformNotSupportedException()), Is.True);
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new NotSupportedException()), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// Everything else is about one picture, not the platform. Latching on these would let a single bad
+    /// bitmap turn every image off for the life of the control, and hide whatever caused it.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_failure_in_one_picture_is_not_mistaken_for_the_platform()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new OutOfMemoryException()), Is.False);
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new ObjectDisposedException("bitmap")), Is.False);
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new ArgumentException()), Is.False);
+            Assert.That(TerminalView.IndicatesNoRasterBackend(new InvalidOperationException()), Is.False);
+        });
     }
 
     // ---- the pixel upload -------------------------------------------------------------------------
@@ -427,7 +460,7 @@ public class SixelRenderingTests
     /// The bytes the decoder produced have to arrive unchanged and in order. What can go wrong here fails
     /// silently rather than throwing -- as a picture with its colours swapped, or its rows sheared.
     /// </summary>
-    [Test]
+    [AvaloniaTest]
     public void The_decoded_pixels_are_copied_unchanged()
     {
         var (image, pixels) = DistinctPixels();
@@ -441,7 +474,7 @@ public class SixelRenderingTests
     /// A bitmap is free to pad its rows. Copying the picture as one contiguous block would then shear it --
     /// every row after the first offset by the padding.
     /// </summary>
-    [Test]
+    [AvaloniaTest]
     public void A_padded_destination_stride_does_not_shear_the_picture()
     {
         var (image, pixels) = DistinctPixels();

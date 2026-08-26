@@ -226,9 +226,13 @@ namespace Iciclecreek.Terminal
 
         private readonly System.Runtime.CompilerServices.ConditionalWeakTable<XT.Graphics.TerminalImage, CachedBitmap> _imageBitmaps = new();
 
-        // Set once if the platform cannot draw bitmaps at all. Consolonia runs this same control over a text-cell
-        // backend where DrawImage means nothing; the terminal should still render its text there rather than
-        // throwing out of Render on every frame.
+        // Set once if the PLATFORM cannot draw bitmaps at all. Consolonia runs this same control over a
+        // text-cell backend where DrawImage means nothing; the terminal should still render its text there
+        // rather than throwing out of Render on every frame.
+        //
+        // Only the exceptions that say so set this — see IndicatesNoRasterBackend. A picture that fails for
+        // its own reasons is remembered against that picture instead, because turning every image off for
+        // the life of the control on the strength of one bad bitmap would hide the thing that caused it.
         private bool _imageRenderingUnavailable;
 
         // The colours the frame currently being drawn resolves against. Taken once at the top of Render, so
@@ -4674,14 +4678,42 @@ namespace Iciclecreek.Terminal
             {
                 context.DrawImage(bitmap, source, destination);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (IndicatesNoRasterBackend(ex))
             {
-                // Consolonia and any other text-cell backend has no raster surface to draw onto. Give up on
-                // images once rather than throwing out of Render on every frame, and keep drawing the text.
+                // The backend cannot draw a bitmap at all -- Consolonia runs this same control over text
+                // cells, and the headless platform's recording context is the same. That will not change
+                // on the next frame, so stop trying rather than throwing out of Render thirty times a
+                // second, and let the text carry on drawing.
                 _imageRenderingUnavailable = true;
                 Debug.WriteLine($"[TerminalView] image rendering unavailable: {ex.Message}");
             }
+            catch (Exception ex)
+            {
+                // Anything else is about THIS picture rather than the platform: a bitmap that will not
+                // blit, a frame that ran out of memory. Remember the failure against the image so only
+                // that one is skipped. Latching here instead would let a single bad picture turn every
+                // picture off for the life of the control, and hide whatever caused it.
+                if (_imageBitmaps.TryGetValue(run.Image!, out var cached))
+                {
+                    try { cached.Bitmap?.Dispose(); } catch { /* already gone; nothing to salvage */ }
+                    cached.Bitmap = null;
+                }
+
+                Debug.WriteLine($"[TerminalView] could not draw image {run.Image!.Id}: {ex.Message}");
+            }
         }
+
+        /// <summary>
+        /// Whether an exception from <c>DrawImage</c> means the platform has no raster surface at all,
+        /// as opposed to something being wrong with one picture.
+        /// </summary>
+        /// <remarks>
+        /// The distinction decides whether images are abandoned for the life of the control or only for
+        /// the image that failed, so it is kept as a named predicate rather than an inline type test --
+        /// it is a policy, and it is worth being able to assert on it directly.
+        /// </remarks>
+        internal static bool IndicatesNoRasterBackend(Exception exception)
+            => exception is NotImplementedException or PlatformNotSupportedException or NotSupportedException;
 
         /// <summary>
         /// Works out which pixels of a picture go where on screen for one run of tiles.
