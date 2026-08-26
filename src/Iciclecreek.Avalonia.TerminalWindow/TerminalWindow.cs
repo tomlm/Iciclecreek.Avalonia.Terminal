@@ -481,10 +481,15 @@ namespace Iciclecreek.Terminal
             windowOptions.FullscreenWin = true;
         }
 
-        private void EnsureTerminalControl()
+        /// <returns>
+        /// The control, so a caller can use it without re-reading the field. The name promises it exists on
+        /// exit; handing it back is what lets the compiler agree, rather than every call site either testing
+        /// for a null that cannot happen or dereferencing one it cannot rule out.
+        /// </returns>
+        private TerminalControl EnsureTerminalControl()
         {
             if (_terminalControl != null)
-                return;
+                return _terminalControl;
 
             _terminalControl = new TerminalControl();
 
@@ -558,6 +563,8 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.CursorBlinkRateProperty, this.GetObservable(CursorBlinkRateProperty));
 
             Content = _terminalControl;
+
+            return _terminalControl;
         }
 
         /// <summary>
@@ -568,8 +575,7 @@ namespace Iciclecreek.Terminal
         /// <exception cref="InvalidOperationException"></exception>
         public virtual async Task LaunchProcess()
         {
-            EnsureTerminalControl();
-            await _terminalControl.LaunchProcess();
+            await EnsureTerminalControl().LaunchProcess();
 
             Dispatcher.UIThread.Post(() =>
             {
@@ -834,9 +840,23 @@ namespace Iciclecreek.Terminal
                         break;
 
                     case XTerm.Common.WindowInfoRequest.SizePixels:
-                        e.WidthPixels = (int)Width;
-                        e.HeightPixels = (int)Height;
-                        e.Handled = true;
+                        // The text area, and specifically the GRID: columns times the cell width by rows times
+                        // the cell height, which is what xterm reports and the only answer that is consistent
+                        // with the cell size reported below.
+                        //
+                        // Measuring the control instead over-reports twice over. It includes the scrollbar, and
+                        // it includes the strip below the last row -- the grid is a truncated division, so up to
+                        // one row of the control's height belongs to no row at all. A program that sizes a
+                        // picture by dividing this by the cell size then believes it has more rows than exist:
+                        // at 549px with a 15.26px row pitch reported as 15, 549/15 says 36 rows where there are
+                        // 35. The image comes back a row and a half too tall, runs off the bottom, and scrolls
+                        // whatever was above it off the top.
+                        if (_terminalControl is not null && Terminal is { } sizeTerminal)
+                        {
+                            e.WidthPixels = sizeTerminal.Cols * sizeTerminal.Options.CellWidthPixels;
+                            e.HeightPixels = sizeTerminal.Rows * sizeTerminal.Options.CellHeightPixels;
+                            e.Handled = true;
+                        }
                         break;
 
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
@@ -850,9 +870,16 @@ namespace Iciclecreek.Terminal
                         break;
 
                     case XTerm.Common.WindowInfoRequest.CellSizePixels:
-                        e.CellWidth = (int)(FontSize * 0.6);
-                        e.CellHeight = (int)(FontSize * 1.2);
-                        e.Handled = true;
+                        // Measured, not guessed, and taken from the emulator rather than re-derived here so it
+                        // is the same number images are laid out against. This used to answer FontSize * 0.6 by
+                        // FontSize * 1.2 -- 7x14 at the default font size -- while the cell actually drawn is
+                        // whatever the typeface measures.
+                        if (_terminalControl is not null && Terminal is { } cellTerminal)
+                        {
+                            e.CellWidth = cellTerminal.Options.CellWidthPixels;
+                            e.CellHeight = cellTerminal.Options.CellHeightPixels;
+                            e.Handled = true;
+                        }
                         break;
 
                     case XTerm.Common.WindowInfoRequest.Title:

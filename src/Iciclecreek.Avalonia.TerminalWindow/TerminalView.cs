@@ -6,6 +6,8 @@ using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Rendering;
 using Avalonia.Threading;
 using Iciclecreek.Avalonia.Terminal;
@@ -190,11 +192,52 @@ namespace Iciclecreek.Terminal
 
         // Background is null for a run that keeps the terminal's own default background — nothing is
         // painted for it, so a host that layers the view over its own themed surface still shows through.
-        private sealed record CachedTextRun(FormattedText Text, int StartX, int CellCount, IBrush? Background);
+        //
+        // Image is non-null for a run of cells showing pieces of a Sixel picture, in which case Text is null and
+        // CellCount is how many tiles the run covers. Both kinds live in the same cached list because the cache
+        // is replayed verbatim: a picture that was not in it would simply not be drawn on any frame the row was
+        // served from cache, which is most of them.
+        // Internal rather than private so the runs a frame decided on can be asserted directly. The headless
+        // platform's recording DrawingContext throws NotImplementedException from DrawImage, so a rendered frame
+        // cannot be inspected for pictures the way it can for text and fills — the cached run list is the last
+        // point at which what will be drawn is still observable.
+        internal sealed record CachedTextRun(
+            FormattedText? Text,
+            int StartX,
+            int CellCount,
+            IBrush? Background,
+            XT.Graphics.TerminalImage? Image = null,
+            int TileCol = 0,
+            int TileRow = 0);
+
+        // One bitmap per image, built on first sight and reused for the life of the picture.
+        //
+        // There is no dirty-rect culling — Render walks every visible row on every frame — so a picture on screen
+        // is re-blitted up to thirty times a second and must never be re-uploaded to do it. Keyed weakly on the
+        // image so the bitmap dies when the emulator drops its last cell: no eviction list, and nothing to keep
+        // in step with a buffer that scrolls.
+        //
+        // Wrapped rather than stored bare so a failed upload can be remembered as well as a successful one --
+        // otherwise a picture the platform cannot take would be retried on every frame it is on screen.
+        private sealed class CachedBitmap
+        {
+            public Bitmap? Bitmap;
+        }
+
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<XT.Graphics.TerminalImage, CachedBitmap> _imageBitmaps = new();
+
+        // Set once if the platform cannot draw bitmaps at all. Consolonia runs this same control over a text-cell
+        // backend where DrawImage means nothing; the terminal should still render its text there rather than
+        // throwing out of Render on every frame.
+        private bool _imageRenderingUnavailable;
 
         // The colours the frame currently being drawn resolves against. Taken once at the top of Render, so
         // every cell in a frame agrees even if a program repaints the palette midway through.
-        private XT.Common.ColorSnapshot? _palette;
+        //
+        // Not nullable: it is seeded alongside the emulator in OnInitialized and replaced at the top of every
+        // frame, so no drawing code can reach it unset. Declaring it nullable only pushed the question onto
+        // the several call sites that pass it to a non-null parameter, none of which could answer it either.
+        private XT.Common.ColorSnapshot _palette;
 
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
@@ -919,6 +962,10 @@ namespace Iciclecreek.Terminal
             SeedThemeFromBrushes(options.Theme);
 
             _terminal = new XT.Terminal(options);
+
+            // Seeded here so it is never unset. Render replaces it every frame; this is only what the very
+            // first one starts from, and what anything drawing before that frame would otherwise trip over.
+            _palette = _terminal.Colors.Take();
 
             // A program can move the palette out from under the renderer with OSC 4 or OSC 10/11/12. The
             // cached runs hold resolved brushes, so they have to go with it.
@@ -3698,14 +3745,17 @@ namespace Iciclecreek.Terminal
                     processToLaunch = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash";
                 }
 
-                SetAndRaise(CurrentDirectoryProperty, ref _currentDirectory, StartingDirectory ?? Environment.CurrentDirectory);
+                // Held in a local as well as raised, because the PTY needs a directory that is definitely not
+                // null and the field is only non-null by way of what SetAndRaise just did to it.
+                var workingDirectory = StartingDirectory ?? Environment.CurrentDirectory;
+                SetAndRaise(CurrentDirectoryProperty, ref _currentDirectory, workingDirectory);
 
                 var options = new PtyOptions
                 {
                     Name = processToLaunch,
                     Cols = _terminal.Cols,
                     Rows = _terminal.Rows,
-                    Cwd = _currentDirectory,
+                    Cwd = workingDirectory,
                     App = processToLaunch,
                     VerbatimCommandLine = VerbatimCommandLine
                 };
@@ -4129,6 +4179,7 @@ namespace Iciclecreek.Terminal
         private void CleanupProcess()
         {
             _processCts?.Cancel();
+            ReleaseImageBitmaps();
 
             if (_ptyConnection != null)
             {
@@ -4200,6 +4251,30 @@ namespace Iciclecreek.Terminal
 
             _charWidth = _measureText.Width;
             _charHeight = _measureText.Height;
+
+            PublishCellPixelSize();
+        }
+
+        /// <summary>
+        /// Tells the emulator how big a character cell is, in device pixels.
+        /// </summary>
+        /// <remarks>
+        /// <para>XTerm.NET is headless and cannot measure a font, so this is the only way it can know how many
+        /// columns a Sixel image of a given pixel width covers. It is also the answer given to a CSI 16 t query
+        /// when nothing handles that, which is how an application decides what size picture to send. Both have to
+        /// agree with what is actually drawn or images do not line up with the grid they were sized for.</para>
+        /// <para><see cref="_charWidth"/> and <see cref="_charHeight"/> are layout units rather than device
+        /// pixels, so the render scaling has to go in. That is also why this cannot be worked out once: moving a
+        /// window to a display with different scaling changes the answer without changing the font.</para>
+        /// </remarks>
+        private void PublishCellPixelSize()
+        {
+            if (_terminal is null || _charWidth <= 0 || _charHeight <= 0)
+                return;
+
+            var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+            _terminal.Options.CellWidthPixels = Math.Max(1, (int)Math.Round(_charWidth * scale));
+            _terminal.Options.CellHeightPixels = Math.Max(1, (int)Math.Round(_charHeight * scale));
         }
 
         /// <summary>
@@ -4380,9 +4455,15 @@ namespace Iciclecreek.Terminal
                     var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                     var position = new Point(startX, startYPos);
 
+                    // The background goes down first either way: a Sixel drawn with background select 1 leaves
+                    // its unset pixels transparent, and the cell's own background is meant to show through them.
                     if (run.Background is not null)
                         context.FillRectangle(run.Background, rect);
-                    context.DrawText(run.Text, position);
+
+                    if (run.Image is not null)
+                        DrawImageRun(context, run, screenY, startYPos, scale);
+                    else if (run.Text is not null)
+                        context.DrawText(run.Text, position);
                 }
                 return;
             }
@@ -4398,6 +4479,15 @@ namespace Iciclecreek.Terminal
                 string text = String.Empty;
                 int cellCount = 0;
                 int runStartX = 0;
+
+                // A cell showing part of a picture is a space as far as its content goes, so it would otherwise
+                // be swept into the text run beside it and never drawn. Take it first, and take as many adjacent
+                // tiles as belong to the same strip: one DrawImage per row of a picture rather than one per cell.
+                if (cell.Image is not null)
+                {
+                    x = AppendImageRun(context, line, x, screenY, startYPos, rowHeight, scale, textRuns);
+                    continue;
+                }
 
                 // Skip width-0 cells. There are TWO kinds, and only one of them is a placeholder.
                 //
@@ -4427,8 +4517,15 @@ namespace Iciclecreek.Terminal
                     {
                         var currentCell = line[x];
 
-                        // Stop if we hit a different attribute or a placeholder cell mid-run
-                        if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
+                        // Stop if we hit a different attribute or a placeholder cell mid-run.
+                        //
+                        // Also stop at a cell showing part of a picture. Those hold a space and usually the
+                        // same attributes as the text beside them, so without this they are collected into
+                        // the run as blanks and the picture is never drawn — but only when the run happens to
+                        // start on text, which is what makes it look like an intermittent fault rather than a
+                        // missing case.
+                        if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes ||
+                            currentCell.Image is not null)
                             break;
                         textBuilder.Append(currentCell.Content);
                         cellCount += currentCell.Width;
@@ -4490,6 +4587,257 @@ namespace Iciclecreek.Terminal
             // Cache the text runs (but not when ReverseVideo mode is active)
             if (!_terminal.ReverseVideo)
                 line.Cache = textRuns;
+        }
+
+        /// <summary>
+        /// Collects the run of image tiles starting at <paramref name="x"/>, draws it, and adds it to the row's
+        /// cache.
+        /// </summary>
+        /// <returns>The column after the run.</returns>
+        /// <remarks>
+        /// Cells continue a run while they show the next tile along of the same picture. Comparing the image by
+        /// reference is what keeps two pictures that happen to sit side by side apart, and comparing the tile
+        /// coordinates is what stops a run being drawn across a gap where something was typed over the middle of
+        /// one.
+        /// </remarks>
+        private int AppendImageRun(DrawingContext context, BufferLine line, int x, int screenY,
+                                   double startYPos, double rowHeight, double scale, List<CachedTextRun> textRuns)
+        {
+            var first = line[x];
+            var image = first.Image!;
+            var tileRow = first.ImageRow;
+            var tileCol = first.ImageCol;
+            var runStartX = x;
+
+            int cellCount = 0;
+            while (x < line.Length && x < _terminal.Cols)
+            {
+                var current = line[x];
+                if (!ReferenceEquals(current.Image, image) ||
+                    current.ImageRow != tileRow ||
+                    current.ImageCol != tileCol + cellCount)
+                    break;
+
+                cellCount++;
+                x++;
+            }
+
+            // Cannot happen -- the cell this was entered on matches by construction -- but a run of no cells
+            // would return x unadvanced and hang the caller's loop, which is too grim a failure to leave to
+            // reasoning about an invariant three call sites away.
+            if (cellCount == 0)
+                return x + 1;
+
+            // Image cells carry the pen that was active when the picture was placed, so a cell with a background
+            // of its own still paints it — underneath, where a transparent Sixel lets it through.
+            var background = first.GetBackgroundBrush(_palette, this.Background);
+            var fill = first.GetBackgroundColor(_palette).HasValue ? background : null;
+
+            var run = new CachedTextRun(null, runStartX, cellCount, fill, image, tileCol, tileRow);
+            textRuns.Add(run);
+
+            if (fill is not null)
+            {
+                var startX = Snap(runStartX * _charWidth, scale);
+                var endX = Snap((runStartX + cellCount) * _charWidth, scale);
+                context.FillRectangle(fill, new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight));
+            }
+
+            DrawImageRun(context, run, screenY, startYPos, scale);
+            return x;
+        }
+
+        /// <summary>
+        /// Blits one strip of a picture into the cells it belongs to.
+        /// </summary>
+        /// <remarks>
+        /// The destination is derived from the cell grid rather than from the image's own pixel size, so a
+        /// picture stays locked to the text it was placed among even after a font or DPI change has moved the
+        /// grid out from under it. Tiles on the right and bottom edges cover only part of a cell, so the
+        /// destination is scaled by how much of one the source actually holds -- stretching a half-tile over a
+        /// whole cell is the difference between a picture and a smeared one.
+        /// </remarks>
+        private void DrawImageRun(DrawingContext context, CachedTextRun run, int screenY, double startYPos, double scale)
+        {
+            if (_imageRenderingUnavailable)
+                return;
+
+            if (!TryPlanImageBlit(run, screenY, startYPos, _charWidth, _charHeight, scale,
+                                  out var source, out var destination))
+                return;
+
+            var bitmap = GetOrCreateBitmap(run.Image!);
+            if (bitmap is null)
+                return;
+
+            try
+            {
+                context.DrawImage(bitmap, source, destination);
+            }
+            catch (Exception ex)
+            {
+                // Consolonia and any other text-cell backend has no raster surface to draw onto. Give up on
+                // images once rather than throwing out of Render on every frame, and keep drawing the text.
+                _imageRenderingUnavailable = true;
+                Debug.WriteLine($"[TerminalView] image rendering unavailable: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Works out which pixels of a picture go where on screen for one run of tiles.
+        /// </summary>
+        /// <remarks>
+        /// <para>Separated from the drawing so the arithmetic can be asserted directly. It is the part with
+        /// something to get wrong, and it cannot be observed through a rendered frame: the headless platform's
+        /// recording context throws from DrawImage.</para>
+        /// <para>The destination comes off the cell grid rather than the picture's own pixel size, so an image
+        /// stays locked to the text it was placed among after a font or DPI change has moved the grid. Edge
+        /// tiles hold only part of a cell, so the destination is scaled by how much of one the source actually
+        /// covers -- stretching a half tile across a whole cell is the difference between a picture and a
+        /// smeared one.</para>
+        /// </remarks>
+        internal static bool TryPlanImageBlit(CachedTextRun run, int screenY, double startYPos,
+                                              double charWidth, double charHeight, double scale,
+                                              out Rect source, out Rect destination)
+        {
+            source = default;
+            destination = default;
+
+            var image = run.Image;
+            if (image is null || run.CellCount <= 0 || charWidth <= 0 || charHeight <= 0)
+                return false;
+
+            if (!image.TryGetTileSource(run.TileCol, run.TileRow, out var sourceX, out var sourceY, out _, out var sourceHeight))
+                return false;
+
+            // The run's width in source pixels, clipped at the right edge of the picture.
+            var sourceWidth = Math.Min(run.CellCount * image.CellWidth, image.PixelWidth - sourceX);
+            if (sourceWidth <= 0 || sourceHeight <= 0)
+                return false;
+
+            var cellsWide = sourceWidth / (double)image.CellWidth;
+            var cellsHigh = sourceHeight / (double)image.CellHeight;
+
+            // Snapped the same way every other coordinate in this renderer is, or the picture shears against the
+            // grid by a fraction of a pixel per row.
+            var startX = Snap(run.StartX * charWidth, scale);
+            var endX = Snap((run.StartX + cellsWide) * charWidth, scale);
+            var endY = Snap((screenY + cellsHigh) * charHeight, scale);
+
+            destination = new Rect(startX, startYPos,
+                                   Math.Max(0, endX - startX),
+                                   Math.Max(0, endY - startYPos));
+            if (destination.Width <= 0 || destination.Height <= 0)
+            {
+                destination = default;
+                return false;
+            }
+
+            source = new Rect(sourceX, sourceY, sourceWidth, sourceHeight);
+            return true;
+        }
+
+        /// <summary>
+        /// Gets the bitmap for a picture, uploading its pixels the first time it is seen.
+        /// </summary>
+        private Bitmap? GetOrCreateBitmap(XT.Graphics.TerminalImage image)
+        {
+            // A cached null is a remembered failure — worth keeping, so a picture that cannot be uploaded is not
+            // retried thirty times a second.
+            if (_imageBitmaps.TryGetValue(image, out var existing))
+                return existing.Bitmap;
+
+            Bitmap? bitmap = null;
+            try
+            {
+                bitmap = CreateBitmap(image);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TerminalView] could not upload image {image.Id}: {ex.Message}");
+            }
+
+            _imageBitmaps.Add(image, new CachedBitmap { Bitmap = bitmap });
+            return bitmap;
+        }
+
+        /// <summary>
+        /// Disposes every cached bitmap and empties the cache.
+        /// </summary>
+        /// <remarks>
+        /// The weak table drops its entries by itself once the emulator lets go of the pictures, but that only
+        /// makes the bitmaps collectable -- it does not free what they hold on the GPU until a finaliser runs.
+        /// A terminal being torn down knows it is finished with all of them, and a program animating with Sixel
+        /// produces one per frame, so it is worth saying so rather than waiting.
+        /// </remarks>
+        private void ReleaseImageBitmaps()
+        {
+            foreach (var entry in _imageBitmaps)
+            {
+                if (entry.Value is not { } cached)
+                    continue;
+
+                cached.Bitmap?.Dispose();
+                cached.Bitmap = null;
+            }
+
+            _imageBitmaps.Clear();
+        }
+
+        /// <summary>
+        /// Uploads a decoded picture's pixels into a bitmap.
+        /// </summary>
+        /// <remarks>
+        /// Separated from the caching so the upload itself can be asserted: the byte order and the stride
+        /// handling are the two things here that fail silently, as a picture with its colours swapped or its
+        /// rows sheared rather than as an error.
+        /// </remarks>
+        internal static WriteableBitmap CreateBitmap(XT.Graphics.TerminalImage image)
+        {
+            var writeable = new WriteableBitmap(
+                new PixelSize(image.PixelWidth, image.PixelHeight),
+                new Vector(96, 96),
+                PixelFormat.Bgra8888,
+                AlphaFormat.Unpremul);
+
+            using (var locked = writeable.Lock())
+            {
+                CopyPixels(image, locked.Address, locked.RowBytes);
+            }
+
+            return writeable;
+        }
+
+        /// <summary>
+        /// Copies a decoded picture's pixels into a locked framebuffer.
+        /// </summary>
+        /// <remarks>
+        /// Both channel order and stride are handled here, and both fail silently rather than throwing --
+        /// as a picture with its colours swapped, or one whose rows are sheared. Split out so they can be
+        /// asserted directly: the headless platform's WriteableBitmap hands back a fresh buffer on every
+        /// Lock, so nothing written through one can be read back from the bitmap itself.
+        /// </remarks>
+        internal static void CopyPixels(XT.Graphics.TerminalImage image, IntPtr destination, int destinationRowBytes)
+        {
+            // The decoder hands over a plain array in the layout the bitmap wants, so this is a copy rather
+            // than a conversion.
+            if (!MemoryMarshal.TryGetArray(image.Pixels, out ArraySegment<byte> source))
+                source = new ArraySegment<byte>(image.Pixels.ToArray());
+
+            var sourceStride = image.Stride;
+            if (destinationRowBytes == sourceStride)
+            {
+                // Same stride, so the whole picture is one contiguous run.
+                Marshal.Copy(source.Array!, source.Offset, destination, sourceStride * image.PixelHeight);
+                return;
+            }
+
+            // A bitmap is free to pad its rows; copying the picture as one block would then shear it.
+            for (int y = 0; y < image.PixelHeight; y++)
+            {
+                Marshal.Copy(source.Array!, source.Offset + (y * sourceStride),
+                             IntPtr.Add(destination, y * destinationRowBytes), sourceStride);
+            }
         }
 
         private void RenderHoveredUrl(DrawingContext context, int viewportY, double scale)

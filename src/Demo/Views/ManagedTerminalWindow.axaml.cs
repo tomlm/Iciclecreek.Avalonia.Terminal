@@ -446,9 +446,21 @@ namespace Demo.Views
                         break;
 
                     case XTerm.Common.WindowInfoRequest.SizePixels:
-                        e.WidthPixels = (int)Width;
-                        e.HeightPixels = (int)Height;
-                        e.Handled = true;
+                        // The text area, and specifically the GRID: columns times the cell width by rows times
+                        // the cell height. That is what xterm reports, and the only answer consistent with the
+                        // cell size reported below.
+                        //
+                        // Width and Height are this window's, chrome and all -- a title bar and a border that
+                        // no character ever occupies. An image viewer divides this figure by the row count to
+                        // work out a cell height, then fills what it believes is left, so every pixel of chrome
+                        // in the number comes back as picture that does not fit. It runs off the bottom and
+                        // scrolls the screen.
+                        if (_terminalControl?.Terminal is { } sizeTerminal)
+                        {
+                            e.WidthPixels = sizeTerminal.Cols * sizeTerminal.Options.CellWidthPixels;
+                            e.HeightPixels = sizeTerminal.Rows * sizeTerminal.Options.CellHeightPixels;
+                            e.Handled = true;
+                        }
                         break;
 
                     case XTerm.Common.WindowInfoRequest.ScreenSizePixels:
@@ -462,9 +474,14 @@ namespace Demo.Views
                         break;
 
                     case XTerm.Common.WindowInfoRequest.CellSizePixels:
-                        e.CellWidth = (int)(FontSize * 0.6);
-                        e.CellHeight = (int)(FontSize * 1.2);
-                        e.Handled = true;
+                        // Taken from the emulator, so it is the same number images are laid out against rather
+                        // than a guess from the font size.
+                        if (_terminalControl?.Terminal is { } cellTerminal)
+                        {
+                            e.CellWidth = cellTerminal.Options.CellWidthPixels;
+                            e.CellHeight = cellTerminal.Options.CellHeightPixels;
+                            e.Handled = true;
+                        }
                         break;
 
                     case XTerm.Common.WindowInfoRequest.Title:

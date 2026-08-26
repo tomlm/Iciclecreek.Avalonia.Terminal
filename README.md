@@ -19,6 +19,7 @@ A cross-platform XTerm terminal emulator control for [Avalonia UI](https://avalo
 - Terminal window manipulation commands (resize, move, minimize, maximize, etc.)
 - Dynamic title updates from terminal escape sequences
 - Customizable fonts, colors, and styling
+- [Sixel graphics](#sixel-graphics) 
 
 ## Installation
 
@@ -219,6 +220,32 @@ Raise it for a smoother repaint on a high-refresh display, or lower it to hand U
 of the app — a terminal streaming build output at 10 FPS is still perfectly readable and costs a third of the
 invalidations. Because the frame is shared, the setting is global rather than per-terminal: it applies to every
 terminal already open, from the next frame scheduled. Safe to set from any thread.
+
+### Sixel graphics
+
+Sixel images (`ESC P … q … ESC \`) are decoded by XTerm.NET and drawn by the terminal — `img2sixel`,
+`chafa`, `lsix` and `timg` work with no configuration. An image behaves like terminal content rather
+than an overlay: typing over it replaces that part of the picture, `clear` removes it, and it scrolls
+with the text around it and is freed when it falls out of the scrollback.
+
+Two things are handled for you and are worth knowing about:
+
+- The cell size measured from your font is published to the emulator and is the answer given to a
+  `CSI 16 t` query. That is what applications use to size their images, so a picture lines up with the
+  grid it was drawn for — including after a font change or a move to a display with different scaling.
+- One bitmap is uploaded per image and cached weakly against it, so a picture on screen is re-blitted
+  rather than re-decoded on every frame, and the bitmap is released when the terminal drops the image.
+
+A run of adjacent cells belonging to the same strip of a picture is drawn in a single call rather than
+one per cell. On a backend with no raster surface — Consolonia, for instance — images are skipped and
+the text still renders.
+
+Sixel can be turned off, which also stops the terminal advertising it, so applications send text
+instead of pictures rather than pictures that get dropped:
+
+```csharp
+terminalControl.Terminal.Options.SixelEnabled = false;
+```
 
 
 ## Links
