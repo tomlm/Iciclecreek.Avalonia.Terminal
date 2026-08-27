@@ -6,6 +6,7 @@ using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Rendering;
@@ -207,7 +208,9 @@ namespace Iciclecreek.Terminal
             int CellCount,
             IBrush? Background,
             XT.Graphics.LinePlacement? Placement = null,
-            XT.Graphics.TerminalImage? Image = null)
+            XT.Graphics.TerminalImage? Image = null,
+            XT.Common.UnderlineStyle UnderlineStyle = XT.Common.UnderlineStyle.None,
+            IBrush? UnderlineBrush = null)
         {
             /// <summary>Whether this run draws a picture rather than text.</summary>
             public bool IsImage => Placement is not null && Image is not null;
@@ -4618,6 +4621,9 @@ namespace Iciclecreek.Terminal
                         DrawImageRun(context, run, startYPos, rowHeight, scale);
                     else if (run.Text is not null)
                         context.DrawText(run.Text, position);
+
+                    if (run.UnderlineStyle != XT.Common.UnderlineStyle.None)
+                        DrawUnderline(context, run, position, _charWidth, _charHeight);
                 }
                 return;
             }
@@ -4740,16 +4746,37 @@ namespace Iciclecreek.Terminal
                 if (td != null)
                     formattedText.SetTextDecorations(td);
 
+                // Underlines are drawn by hand below rather than through TextDecorations, because
+                // Avalonia has no curly decoration and SGR 58 gives the underline a colour of its own.
+                var underlineStyle = cell.Attributes.GetUnderlineStyle();
+                IBrush? underlineBrush = null;
+                if (underlineStyle != XT.Common.UnderlineStyle.None)
+                {
+                    underlineBrush = cell.GetUnderlineColor(_palette) is { } uc
+                        ? new ImmutableSolidColorBrush(uc)
+                        : foreground;
+                }
+
                 var position = new Point(startX, startYPos);
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
                 var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
                 // Cache only content-dependent data, not screen position
-                textRuns.Add(new CachedTextRun(formattedText, runStartX, cellCount, fill));
+                // Named rather than positional: the record gained Placement and Image ahead of these
+                // when pictures moved onto lines, so position no longer says which is which.
+                var run = new CachedTextRun(formattedText, runStartX, cellCount, fill,
+                                            UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush);
+                textRuns.Add(run);
 
                 if (fill is not null)
                     context.FillRectangle(fill, rect);
                 context.DrawText(formattedText, position);
+
+                // Drawn on the BUILD path as well as the cached replay below. A line is painted here
+                // on the frame it changes and replayed afterwards, so wiring only the replay leaves
+                // every newly written underline missing until something else invalidates the line.
+                if (underlineStyle != XT.Common.UnderlineStyle.None)
+                    DrawUnderline(context, run, position, _charWidth, _charHeight);
             }
 
             // And the pictures that cover the text, still back to front, now that it is down.
@@ -4874,6 +4901,90 @@ namespace Iciclecreek.Terminal
         /// destination is scaled by how much of one the source actually holds -- stretching a half-tile over a
         /// whole cell is the difference between a picture and a smeared one.
         /// </remarks>
+        /// <summary>
+        /// Draws a run's underline in whatever style it asked for.
+        /// </summary>
+        /// <remarks>
+        /// By hand rather than through Avalonia's TextDecorations, which have no curly form. Both
+        /// renderers use the same geometry so a squiggle looks the same whichever is switched on —
+        /// keeping them identical has caught real bugs all through this work, and a decoration that
+        /// differed between them would be one more place for the two to drift apart.
+        /// </remarks>
+        private static void DrawUnderline(DrawingContext context, CachedTextRun run, Point position,
+                                          double cellWidth, double cellHeight)
+        {
+            var brush = run.UnderlineBrush;
+            if (brush is null)
+                return;
+
+            var thickness = Math.Max(1.0, cellHeight / 14.0);
+            var width = run.CellCount * cellWidth;
+            var x = position.X;
+            var baseY = position.Y + cellHeight - thickness * 2;
+
+            switch (run.UnderlineStyle)
+            {
+                case XT.Common.UnderlineStyle.Double:
+                    // The pair straddles where a single line would sit; a second line below would
+                    // fall out of the cell.
+                    context.FillRectangle(brush, new Rect(x, baseY - thickness, width, thickness));
+                    context.FillRectangle(brush, new Rect(x, baseY + thickness, width, thickness));
+                    break;
+
+                case XT.Common.UnderlineStyle.Curly:
+                {
+                    var amplitude = thickness * 1.5;
+                    var period = Math.Max(4.0, cellWidth / 2.0);
+                    var centre = baseY + amplitude;
+                    var step = period / 8.0;
+
+                    var geometry = new StreamGeometry();
+                    using (var ctx = geometry.Open())
+                    {
+                        ctx.BeginFigure(new Point(x, centre + amplitude * Math.Sin(x / period * Math.PI * 2)), false);
+                        for (var dx = step; dx <= width; dx += step)
+                            ctx.LineTo(new Point(x + dx, centre + amplitude * Math.Sin((x + dx) / period * Math.PI * 2)));
+                        ctx.EndFigure(false);
+                    }
+
+                    context.DrawGeometry(null, new Pen(brush, thickness), geometry);
+                    break;
+                }
+
+                case XT.Common.UnderlineStyle.Dotted:
+                    DrawUnderlineDashes(context, brush, x, baseY, width, thickness, thickness, thickness);
+                    break;
+
+                case XT.Common.UnderlineStyle.Dashed:
+                    DrawUnderlineDashes(context, brush, x, baseY, width, thickness, thickness * 3, thickness * 2);
+                    break;
+
+                default:
+                    context.FillRectangle(brush, new Rect(x, baseY, width, thickness));
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Dotted and dashed, phase-locked to x so a run does not restart the pattern and draw a mark
+        /// at every boundary.
+        /// </summary>
+        private static void DrawUnderlineDashes(DrawingContext context, IBrush brush, double x, double baseY,
+                                                double width, double thickness, double dash, double gap)
+        {
+            var period = dash + gap;
+            var phase = x % period;
+
+            for (var start = -phase; start < width; start += period)
+            {
+                var from = Math.Max(0.0, start);
+                var to = Math.Min(width, start + dash);
+
+                if (to > from)
+                    context.FillRectangle(brush, new Rect(x + from, baseY, to - from, thickness));
+            }
+        }
+
         private void DrawImageRun(DrawingContext context, CachedTextRun run,
                                   double startYPos, double rowHeight, double scale)
         {
