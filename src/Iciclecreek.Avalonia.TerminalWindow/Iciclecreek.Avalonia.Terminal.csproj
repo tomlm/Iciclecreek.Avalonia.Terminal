@@ -39,6 +39,28 @@
     <PackageReference Include="Porta.Pty" Version="2.2.0" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
-    <PackageReference Include="XTerm.NET" Version="2.0.0-rc001" />
+  </ItemGroup>
+
+  <!-- The emulator: a sibling checkout when there is one, the published package otherwise.
+
+       This is the arrangement Iciclecreek.Avalonia.TerminalWindow.Local.slnx describes; its
+       comment says "the reference itself is conditional and lives in the csproj", and until now
+       that was the intent rather than the fact. The condition makes it true: clone XTerm.NET
+       beside this repository and every build picks up emulator changes with no packing step, while
+       machines without the sibling, the build agents first among them, restore the package
+       exactly as before.
+
+       The property indirection is what keeps the condition honest on both legs. Exists() answers
+       once, and both the include and the exclude read the same answer, where two separate Exists()
+       calls could disagree if the sibling appeared mid-evaluation. Far-fetched, but a
+       reference that is both a project and a package is a confusing enough failure to close off
+       for one property. -->
+  <PropertyGroup>
+    <SiblingXTerm>$(MSBuildThisFileDirectory)../../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj</SiblingXTerm>
+    <UseSiblingXTerm Condition="Exists('$(SiblingXTerm)')">true</UseSiblingXTerm>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(SiblingXTerm)" Condition="'$(UseSiblingXTerm)' == 'true'" />
+    <PackageReference Include="XTerm.NET" Version="2.0.0-rc001" Condition="'$(UseSiblingXTerm)' != 'true'" />
   </ItemGroup>
 </Project>
