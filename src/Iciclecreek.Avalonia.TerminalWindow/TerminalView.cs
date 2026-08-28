@@ -1056,7 +1056,11 @@ namespace Iciclecreek.Terminal
             // the edge -- a match on the last row with nothing after it is a match with no context.
             var top = _terminal.Buffer.ViewportY;
             if (hit.BufferRow < top || hit.BufferRow >= top + _terminal.Rows)
-                ViewportY = Math.Max(0, hit.BufferRow - _terminal.Rows / 2);
+            {
+                // Clamped at BOTH ends: a match near the bottom of the buffer, centred naively,
+                // asks for a viewport past MaxScrollback and leaves blank rows under the output.
+                ViewportY = Math.Clamp(hit.BufferRow - _terminal.Rows / 2, 0, Math.Max(0, MaxScrollback));
+            }
 
             InvalidateVisual();
             return true;

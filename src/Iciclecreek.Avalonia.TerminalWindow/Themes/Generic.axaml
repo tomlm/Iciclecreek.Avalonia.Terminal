@@ -64,7 +64,9 @@
                                        GutterWidth="{TemplateBinding GutterWidth}"
                                        GutterPromptBrush="{TemplateBinding GutterPromptBrush}"
                                        GutterSuccessBrush="{TemplateBinding GutterSuccessBrush}"
-                                       GutterFailureBrush="{TemplateBinding GutterFailureBrush}"/>
+                                       GutterFailureBrush="{TemplateBinding GutterFailureBrush}"
+                                       SearchHighlightBrush="{TemplateBinding SearchHighlightBrush}"
+                                       SearchCurrentBrush="{TemplateBinding SearchCurrentBrush}"/>
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"
                               Grid.Column="1"

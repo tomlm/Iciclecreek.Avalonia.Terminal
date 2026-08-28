@@ -104,6 +104,29 @@ public class SearchSurfaceTests
         finally { window.Close(); }
     }
 
+    /// <summary>
+    /// Setting a brush on the CONTROL must change what the view paints with. SurfaceParityTests
+    /// proves the member exists; this proves the wiring — which is exactly the half the review
+    /// found missing.
+    /// </summary>
+    [AvaloniaTest]
+    public void Brushes_set_on_the_control_reach_the_view()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+        try
+        {
+            control.SearchHighlightBrush = Brushes.HotPink;
+            control.SearchCurrentBrush = Brushes.Lime;
+            window.UpdateLayout();
+
+            var view = control.View();
+            Assert.That(view.SearchHighlightBrush, Is.EqualTo(Brushes.HotPink));
+            Assert.That(view.SearchCurrentBrush, Is.EqualTo(Brushes.Lime));
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaTest]
     public void Options_pass_through()
     {
