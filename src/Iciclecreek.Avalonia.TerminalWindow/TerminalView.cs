@@ -1144,9 +1144,17 @@ namespace Iciclecreek.Terminal
                 CursorColorProperty,
                 CursorStyleProperty,
                 CursorBlinkProperty,
-                SuppressCursorProperty);   // toggling it must repaint immediately
+                SuppressCursorProperty,   // toggling it must repaint immediately
+                // The gutter: a brush change must repaint the marks, and a width change moves the
+                // whole grid sideways -- it affects measure below as well, since columns come out
+                // of the width.
+                GutterWidthProperty,
+                GutterPromptBrushProperty,
+                GutterSuccessBrushProperty,
+                GutterFailureBrushProperty);
 
             AffectsMeasure<TerminalView>(
+                GutterWidthProperty,
                 FontFamilyProperty,
                 FontSizeProperty,
                 FontStyleProperty,
@@ -4759,22 +4767,37 @@ namespace Iciclecreek.Terminal
             if (gutter <= 0 || _charHeight <= 0)
                 return;
 
-            foreach (var mark in VisibleMarks)
+            // Straight over the visible lines rather than through VisibleMarks, which builds a list
+            // -- fine for a host asking once, not for a render path asking per frame.
+            var lines = _terminal.Buffer.Lines;
+            var top = _terminal.Buffer.ViewportY;
+
+            for (var row = 0; row < _terminal.Rows; row++)
             {
-                if (mark.Kind != XT.Common.ShellIntegrationMark.PromptStart
-                    && mark.Kind != XT.Common.ShellIntegrationMark.CommandFinished)
+                var bufferRow = top + row;
+                if (bufferRow < 0 || bufferRow >= lines.Length)
                     continue;
 
-                var brush = mark.Kind == XT.Common.ShellIntegrationMark.CommandFinished
-                    ? (mark.ExitCode is 0 ? GutterSuccessBrush
-                       : mark.ExitCode is null ? GutterPromptBrush : GutterFailureBrush)
-                    : GutterPromptBrush;
-
-                if (brush is null)
+                if (lines[bufferRow] is not { } line || !line.HasMarks)
                     continue;
 
-                context.FillRectangle(brush,
-                    new Rect(0, mark.ViewportRow * _charHeight, gutter, _charHeight));
+                foreach (var mark in line.Marks)
+                {
+                    if (mark.Kind != XT.Common.ShellIntegrationMark.PromptStart
+                        && mark.Kind != XT.Common.ShellIntegrationMark.CommandFinished)
+                        continue;
+
+                    var brush = mark.Kind == XT.Common.ShellIntegrationMark.CommandFinished
+                        ? (mark.ExitCode is 0 ? GutterSuccessBrush
+                           : mark.ExitCode is null ? GutterPromptBrush : GutterFailureBrush)
+                        : GutterPromptBrush;
+
+                    if (brush is null)
+                        continue;
+
+                    context.FillRectangle(brush,
+                        new Rect(0, row * _charHeight, gutter, _charHeight));
+                }
             }
         }
 
@@ -4788,7 +4811,11 @@ namespace Iciclecreek.Terminal
         /// it.
         /// </remarks>
         private int PointerColumn(double x)
-            => _charWidth > 0 ? (int)((x - Math.Max(0, GutterWidth)) / _charWidth) : 0;
+            => _charWidth > 0
+                // Clamped at zero: a pointer INSIDE the gutter is over no column, and a negative
+                // one would flow into selection and mouse reporting as an index.
+                ? Math.Max(0, (int)((x - Math.Max(0, GutterWidth)) / _charWidth))
+                : 0;
 
         protected override Size MeasureOverride(Size availableSize)
         {
@@ -4803,8 +4830,9 @@ namespace Iciclecreek.Terminal
             if (_charWidth > 0)
             {
                 // The gutter is taken out of the width before columns are counted, so turning one on
-                // narrows the terminal rather than pushing text off the right-hand edge.
-                int newCols = Math.Max(1, (int)((finalSize.Width - GutterWidth) / _charWidth));
+                // narrows the terminal rather than pushing text off the right-hand edge. Clamped the
+                // same way Render and PointerColumn clamp it -- a negative width must not mint columns.
+                int newCols = Math.Max(1, (int)((finalSize.Width - Math.Max(0, GutterWidth)) / _charWidth));
                 int newRows = Math.Max(1, (int)(finalSize.Height / _charHeight));
 
                 // Only resize if dimensions have changed
