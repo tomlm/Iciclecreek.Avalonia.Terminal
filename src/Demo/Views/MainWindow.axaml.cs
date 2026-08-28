@@ -13,7 +13,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
     }
-    
+
 
     // ---- ManagedTerminalWindow: hosted inside the WindowsPanel ----------------------------------
 
@@ -26,8 +26,8 @@ public partial class MainWindow : Window
         {
             Width = 80 * FontSize,
             Height = 25 * FontSize,
-            Background= Avalonia.Media.Brushes.Black,
-            Foreground= Avalonia.Media.Brushes.LightGray,
+            Background = Avalonia.Media.Brushes.Black,
+            Foreground = Avalonia.Media.Brushes.LightGray,
             CloseOnProcessExit = true,
             WindowStartupLocation = WindowStartupLocation.Manual,
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
@@ -50,8 +50,8 @@ public partial class MainWindow : Window
             Title = command.Value.Process,
             Background = Avalonia.Media.Brushes.Black,
             Foreground = Avalonia.Media.Brushes.LightGray,
-            Width = 80*FontSize,
-            Height = 25*FontSize,
+            Width = 80 * FontSize,
+            Height = 25 * FontSize,
             CloseOnProcessExit = true
         };
         Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
@@ -164,4 +164,23 @@ public partial class MainWindow : Window
         return args;
     }
 
+    private void Window_Loaded(object? sender, RoutedEventArgs e)
+    {
+        var maxWidth = (int)this.Bounds.Width / 2;
+        var maxHeight = (int)this.Bounds.Height / 2;
+
+        var terminalWindow = new ManagedTerminalWindow
+        {
+            Width = 80 * FontSize,
+            Height = 25 * FontSize,
+            Background = Avalonia.Media.Brushes.Black,
+            Foreground = Avalonia.Media.Brushes.LightGray,
+            CloseOnProcessExit = true,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
+                                          Random.Shared.Next(0, (int)this.Bounds.Height - maxHeight))
+        };
+        Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
+        terminalWindow.Show(Windows);
+    }
 }

@@ -6,6 +6,7 @@
 		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
 		xmlns:wm="clr-namespace:Iciclecreek.Avalonia.WindowManager;assembly=Iciclecreek.Avalonia.WindowManager"
 		x:Class="Demo.Views.MainWindow"
+		Loaded="Window_Loaded"
 		RequestedThemeVariant="Dark"
 		Icon="/Assets/avalonia-logo.ico"
 		Title="Avalonia XTerm Terminal">
