@@ -863,6 +863,40 @@ namespace Iciclecreek.Terminal
         public static void RemoveWindowInfoRequestedHandler(Interactive target, EventHandler<WindowInfoRequestedEventArgs> handler) =>
             target.RemoveHandler(WindowInfoRequestedEvent, handler);
 
+        /// <summary>
+        /// A desktop notification requested by the running program (OSC 9 or Kitty OSC 99). The
+        /// terminal cannot post OS notifications itself; the application decides how — or
+        /// whether — to show it. Structured fields are populated for OSC 99; OSC 9 carries only
+        /// <c>Text</c>.
+        /// </summary>
+        public static readonly RoutedEvent<TerminalNotificationEventArgs> NotificationRequestedEvent =
+            RoutedEvent.Register<TerminalView, TerminalNotificationEventArgs>(
+                nameof(NotificationRequested),
+                RoutingStrategies.Bubble);
+
+        public event EventHandler<TerminalNotificationEventArgs> NotificationRequested
+        {
+            add => AddHandler(NotificationRequestedEvent, value);
+            remove => RemoveHandler(NotificationRequestedEvent, value);
+        }
+
+        /// <summary>
+        /// The running program asked for the user's attention (iTerm2 OSC 1337 RequestAttention).
+        /// <see cref="TerminalAttentionEventArgs.Action"/> is the request verbatim: "yes" (bounce
+        /// until focused), "once", "fireworks", or "no" (cancel a pending request) — the
+        /// application owns the dock/taskbar, so the application interprets it.
+        /// </summary>
+        public static readonly RoutedEvent<TerminalAttentionEventArgs> AttentionRequestedEvent =
+            RoutedEvent.Register<TerminalView, TerminalAttentionEventArgs>(
+                nameof(AttentionRequested),
+                RoutingStrategies.Bubble);
+
+        public event EventHandler<TerminalAttentionEventArgs> AttentionRequested
+        {
+            add => AddHandler(AttentionRequestedEvent, value);
+            remove => RemoveHandler(AttentionRequestedEvent, value);
+        }
+
         #endregion
 
         /// <summary>
@@ -1073,6 +1107,11 @@ namespace Iciclecreek.Terminal
             _terminal.BellRang += OnTerminalBellRang;
             _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
             _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
+            _terminal.ClipboardWriteRequested += OnTerminalClipboardWriteRequested;
+            _terminal.ClipboardReadRequested += OnTerminalClipboardReadRequested;
+            _terminal.NotificationReceived += OnTerminalNotificationReceived;
+            _terminal.AttentionRequested += OnTerminalAttentionRequested;
+            _terminal.PointerShapeChanged += OnTerminalPointerShapeChanged;
             // end window events
 
             // Setup cursor blink timer
@@ -1318,6 +1357,20 @@ namespace Iciclecreek.Terminal
             if (clipboard == null)
                 return;
 
+            // Bracketed paste MIME: with mode 5522 set the paste is ANNOUNCED — the emulator
+            // emits the notification triple and the application fetches the formats it wants
+            // with the token, so nothing is typed into the stream and nothing is bracketed
+            // (the spec forbids sending both for one paste). The formats are read here, up
+            // front, because the redemption arrives later on the pty stream where nothing can
+            // await the OS clipboard.
+            if (_terminal.PasteNotificationMode)
+            {
+                var paste = await BuildPasteAsync(clipboard);
+                if (paste is not null)
+                    _terminal.Paste(paste);
+                return;
+            }
+
             var text = await clipboard.TryGetTextAsync();
             if (!string.IsNullOrEmpty(text))
             {
@@ -1332,6 +1385,64 @@ namespace Iciclecreek.Terminal
                 // whatever arrives next — the same reason typing does it that way.
                 await SendToPtyAsync(TakeKeyboardSelectionDeletion() + text);
             }
+        }
+
+        /// <summary>
+        /// Reads every clipboard format the paste can offer, NOW, so the later token redemption
+        /// can be served synchronously. Text is offered as text/plain; files as text/uri-list
+        /// (one file URI per line, the drag-and-drop convention); platform formats that already
+        /// look like MIME types ride along untranslated for applications that know them.
+        /// </summary>
+        private static async Task<XT.TerminalPaste?> BuildPasteAsync(IClipboard clipboard)
+        {
+            var mimes = new List<string>();
+            var data = new Dictionary<string, byte[]>();
+
+            // Platform formats whose identifier already IS a MIME type (the norm on X11 and
+            // Wayland) ride along untranslated for applications that know them.
+            try
+            {
+                foreach (var format in await clipboard.GetDataFormatsAsync())
+                {
+                    if (!format.Identifier.Contains('/'))
+                        continue;
+                    var bytesFormat = DataFormat.CreateBytesPlatformFormat(format.Identifier);
+                    if (await clipboard.TryGetValueAsync(bytesFormat) is { } bytes)
+                    {
+                        mimes.Add(format.Identifier);
+                        data[format.Identifier] = bytes;
+                    }
+                }
+            }
+            catch
+            {
+                // An uncooperative clipboard offers whatever the probes below still find.
+            }
+
+            var text = await clipboard.TryGetTextAsync();
+            if (!string.IsNullOrEmpty(text) && !data.ContainsKey("text/plain"))
+            {
+                mimes.Add("text/plain");
+                data["text/plain"] = System.Text.Encoding.UTF8.GetBytes(text);
+            }
+
+            try
+            {
+                if (await clipboard.TryGetFilesAsync() is { Length: > 0 } files && !data.ContainsKey("text/uri-list"))
+                {
+                    var uriList = string.Join('\n', files.Select(f => f.Path.AbsoluteUri));
+                    mimes.Add("text/uri-list");
+                    data["text/uri-list"] = System.Text.Encoding.UTF8.GetBytes(uriList);
+                }
+            }
+            catch
+            {
+                // No files, then.
+            }
+
+            return mimes.Count == 0
+                ? null
+                : new XT.TerminalPaste(mimes, mime => data.TryGetValue(mime, out var bytes) ? bytes : null);
         }
 
         /// <summary>
@@ -1810,6 +1921,11 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
             _terminal.BellRang -= OnTerminalBellRang;
             _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
+            _terminal.ClipboardWriteRequested -= OnTerminalClipboardWriteRequested;
+            _terminal.ClipboardReadRequested -= OnTerminalClipboardReadRequested;
+            _terminal.NotificationReceived -= OnTerminalNotificationReceived;
+            _terminal.AttentionRequested -= OnTerminalAttentionRequested;
+            _terminal.PointerShapeChanged -= OnTerminalPointerShapeChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
 
             // A view detached mid-update must not keep the gate closed or the timer alive. The
@@ -1854,6 +1970,11 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
             _terminal.BellRang -= OnTerminalBellRang;
             _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
+            _terminal.ClipboardWriteRequested -= OnTerminalClipboardWriteRequested;
+            _terminal.ClipboardReadRequested -= OnTerminalClipboardReadRequested;
+            _terminal.NotificationReceived -= OnTerminalNotificationReceived;
+            _terminal.AttentionRequested -= OnTerminalAttentionRequested;
+            _terminal.PointerShapeChanged -= OnTerminalPointerShapeChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
 
             _terminal.DataReceived += OnTerminalDataReceived;
@@ -1871,6 +1992,11 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
             _terminal.BellRang += OnTerminalBellRang;
             _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
+            _terminal.ClipboardWriteRequested += OnTerminalClipboardWriteRequested;
+            _terminal.ClipboardReadRequested += OnTerminalClipboardReadRequested;
+            _terminal.NotificationReceived += OnTerminalNotificationReceived;
+            _terminal.AttentionRequested += OnTerminalAttentionRequested;
+            _terminal.PointerShapeChanged += OnTerminalPointerShapeChanged;
             _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
         }
 
@@ -3736,6 +3862,101 @@ namespace Iciclecreek.Terminal
             // The underline is an overlay drawn after the text runs, so the cached runs stay valid.
             RequestPaint();
         }
+
+        // ---- Host seams for the emulator's clipboard, notification, attention and pointer ----
+
+        /// <summary>
+        /// OSC 52 / Kitty OSC 5522 write: the program put something on the clipboard. Only text
+        /// is forwarded — the one thing every platform clipboard can hold — and empty text is
+        /// the protocol's clear idiom, honoured with an actual clear.
+        /// </summary>
+        private void OnTerminalClipboardWriteRequested(object? sender, XT.Events.TerminalEvents.ClipboardWriteEventArgs e)
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+                return;
+
+            // Fire and forget on purpose: the pty stream cannot wait for the OS clipboard, and
+            // a failed set has nobody to report to but the debugger.
+            _ = e.Data.Length == 0 ? clipboard.ClearAsync() : clipboard.SetTextAsync(e.Text);
+        }
+
+        /// <summary>
+        /// OSC 52 / Kitty OSC 5522 read: the program asked for the clipboard. Avalonia's
+        /// clipboard is asynchronous, which is exactly what the emulator's Defer/Respond pair
+        /// exists for — the handler returns immediately and the answer is emitted when the
+        /// await completes, on this same UI thread the terminal is driven on. Only reachable
+        /// when the embedding application opted in via <c>Options.ClipboardReadEnabled</c>.
+        /// </summary>
+        private void OnTerminalClipboardReadRequested(object? sender, XT.Events.TerminalEvents.ClipboardReadEventArgs e)
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+                return;   // declined: OSC 52 stays silent, 5522 counts the mime unavailable
+
+            e.Defer();
+            _ = RespondFromClipboardAsync(e, clipboard);
+        }
+
+        private static async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e, IClipboard clipboard)
+        {
+            string? text;
+            try
+            {
+                text = await clipboard.TryGetTextAsync();
+            }
+            catch
+            {
+                text = null;   // a locked or unavailable clipboard declines rather than throws
+            }
+            e.Respond(text);
+        }
+
+        private void OnTerminalNotificationReceived(object? sender, XT.Events.TerminalEvents.NotificationEventArgs e) =>
+            RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e));
+
+        private void OnTerminalAttentionRequested(object? sender, XT.Events.TerminalEvents.AttentionRequestedEventArgs e) =>
+            RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action));
+
+        /// <summary>
+        /// Kitty OSC 22: the program chose a pointer shape. The link-hover hand keeps the last
+        /// word while a link is under the pointer — its save/restore already treats the current
+        /// cursor as "whatever the rest of the world wanted", so the program's shape goes into
+        /// the saved slot during a hover and takes effect the moment the hover ends.
+        /// </summary>
+        private void OnTerminalPointerShapeChanged(object? sender, XT.Events.TerminalEvents.PointerShapeEventArgs e)
+        {
+            var cursor = MapPointerShape(e.Shape);
+            if (_cursorOverridden)
+            {
+                _savedCursor = cursor;
+                return;
+            }
+            SetCurrentValue(CursorProperty, cursor);
+        }
+
+        /// <summary>
+        /// Kitty's CSS pointer names onto Avalonia's cursors. Null (protocol reset) and any name
+        /// without an Avalonia counterpart both fall back to null — the control's default
+        /// pointer — because a wrong cursor misleads where a default merely underwhelms.
+        /// </summary>
+        private static Cursor? MapPointerShape(string? shape) => shape switch
+        {
+            "default" => Cursor.Default,
+            "text" or "vertical-text" => new Cursor(StandardCursorType.Ibeam),
+            "pointer" => new Cursor(StandardCursorType.Hand),
+            "help" => new Cursor(StandardCursorType.Help),
+            "wait" or "progress" => new Cursor(StandardCursorType.Wait),
+            "crosshair" or "cell" => new Cursor(StandardCursorType.Cross),
+            "not-allowed" or "no-drop" => new Cursor(StandardCursorType.No),
+            "grab" or "grabbing" or "move" or "all-scroll" => new Cursor(StandardCursorType.SizeAll),
+            "n-resize" or "s-resize" or "ns-resize" or "row-resize" => new Cursor(StandardCursorType.SizeNorthSouth),
+            "e-resize" or "w-resize" or "ew-resize" or "col-resize" => new Cursor(StandardCursorType.SizeWestEast),
+            "ne-resize" or "sw-resize" or "nesw-resize" => new Cursor(StandardCursorType.TopRightCorner),
+            "nw-resize" or "se-resize" or "nwse-resize" => new Cursor(StandardCursorType.TopLeftCorner),
+            "e" or "ne" or "n" or "nw" or "w" or "sw" or "s" or "se" => new Cursor(StandardCursorType.Arrow),
+            _ => null,
+        };
 
         private bool TryGetPrintableChar(KeyEventArgs e, out char character)
         {

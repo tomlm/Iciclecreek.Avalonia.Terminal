@@ -131,6 +131,21 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
+        /// <inheritdoc cref="TerminalView.NotificationRequested"/>
+        public event EventHandler<TerminalNotificationEventArgs> NotificationRequested
+        {
+            add => AddHandler(TerminalView.NotificationRequestedEvent, value);
+            remove => RemoveHandler(TerminalView.NotificationRequestedEvent, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.AttentionRequested"/>
+        public event EventHandler<TerminalAttentionEventArgs> AttentionRequested
+        {
+            add => AddHandler(TerminalView.AttentionRequestedEvent, value);
+            remove => RemoveHandler(TerminalView.AttentionRequestedEvent, value);
+        }
+
+
 
         /// <summary>
         /// Gets or sets the selection brush for the terminal.
