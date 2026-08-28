@@ -324,7 +324,10 @@ namespace Demo.Views
             switch (e.Key)
             {
                 case Key.Enter:
-                    Step(next: !e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+                    // Enter walks UP through history, Shift+Enter back down -- the terminal
+                    // direction, not the browser one, because stepping starts from the most
+                    // recent match and older is the only way a search usually goes from there.
+                    Step(next: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
                     e.Handled = true;
                     break;
 
@@ -340,7 +343,24 @@ namespace Demo.Views
             if (_terminalControl is null || _findBox is null)
                 return;
 
-            var count = _terminalControl.FindInBuffer(_findBox.Text ?? string.Empty);
+            var needle = _findBox.Text ?? string.Empty;
+            if (needle.Length == 0)
+            {
+                _terminalControl.ClearSearch();
+                if (_findCount is not null)
+                    _findCount.Text = string.Empty;
+                return;
+            }
+
+            var count = _terminalControl.FindInBuffer(needle);
+
+            // Land on the MOST RECENT match as the user types. A terminal is read from the bottom --
+            // whatever is being looked for almost certainly just scrolled past -- so "the first
+            // result" is the one nearest the prompt, not the oldest line in the scrollback.
+            // FindPrevious from a fresh search wraps to exactly that.
+            if (count > 0)
+                _terminalControl.FindPrevious();
+
             UpdateFindCount(count);
         }
 
