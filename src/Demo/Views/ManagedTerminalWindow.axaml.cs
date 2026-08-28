@@ -54,7 +54,9 @@ namespace Demo.Views
         public static readonly StyledProperty<int> BufferSizeProperty =
             AvaloniaProperty.Register<ManagedTerminalWindow, int>(
                 nameof(BufferSize),
-                defaultValue: 1000);
+                // Deep enough that Ctrl+F has something real to search -- 1,000 lines of scrollback
+                // makes every search demo trivially fast and proves nothing.
+                defaultValue: 50_000);
 
         public static readonly StyledProperty<bool> CloseOnProcessExitProperty =
             AvaloniaProperty.Register<ManagedTerminalWindow, bool>(
@@ -207,7 +209,19 @@ namespace Demo.Views
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
-            Content = _terminalControl;
+
+            // The find bar, hidden until Ctrl+F. It drives nothing but the public search API on
+            // TerminalControl -- which is the point of having it in the demo: if the bar needs to
+            // reach past that API, the API is wrong.
+            _findBar = BuildFindBar();
+            var layout = new DockPanel();
+            DockPanel.SetDock(_findBar, Dock.Top);
+            layout.Children.Add(_findBar);
+            layout.Children.Add(_terminalControl);
+            Content = layout;
+
+            // Tunnel, so the shortcut wins over the terminal, which otherwise eats every key.
+            AddHandler(KeyDownEvent, OnFindKeyDown, RoutingStrategies.Tunnel);
         }
 
         /// <summary>
@@ -234,6 +248,132 @@ namespace Demo.Views
         {
             // Focus contract: for ManagedTerminalWindow we always want terminal focused.
             // We don't need to "remember" any other element.
+        }
+
+        // ---- the find bar -----------------------------------------------------------------
+
+        private Border? _findBar;
+        private TextBox? _findBox;
+        private TextBlock? _findCount;
+
+        private Border BuildFindBar()
+        {
+            _findBox = new TextBox
+            {
+                Watermark = "Find",
+                MinWidth = 220,
+                VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center,
+            };
+            _findBox.TextChanged += (_, _) => RunFind();
+            _findBox.KeyDown += OnFindBoxKeyDown;
+
+            _findCount = new TextBlock
+            {
+                VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center,
+                Opacity = 0.7,
+                MinWidth = 90,
+            };
+
+            var previous = new Button { Content = "\u25B2" };
+            previous.Click += (_, _) => Step(next: false);
+            var next = new Button { Content = "\u25BC" };
+            next.Click += (_, _) => Step(next: true);
+            var close = new Button { Content = "\u2715" };
+            close.Click += (_, _) => CloseFindBar();
+
+            var row = new StackPanel
+            {
+                Orientation = global::Avalonia.Layout.Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(8, 6),
+            };
+            row.Children.Add(_findBox);
+            row.Children.Add(_findCount);
+            row.Children.Add(previous);
+            row.Children.Add(next);
+            row.Children.Add(close);
+
+            return new Border
+            {
+                Child = row,
+                IsVisible = false,
+                Background = new SolidColorBrush(Color.FromArgb(240, 30, 30, 30)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(255, 70, 70, 70)),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+            };
+        }
+
+        private void OnFindKeyDown(object? sender, KeyEventArgs e)
+        {
+            // Ctrl+F, or Cmd+F where Cmd is the convention.
+            var accel = e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+            if (e.Key == Key.F && accel)
+            {
+                if (_findBar is { } bar)
+                {
+                    bar.IsVisible = true;
+                    _findBox?.Focus();
+                    _findBox?.SelectAll();
+                }
+                e.Handled = true;
+            }
+        }
+
+        private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
+        {
+            switch (e.Key)
+            {
+                case Key.Enter:
+                    Step(next: !e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+                    e.Handled = true;
+                    break;
+
+                case Key.Escape:
+                    CloseFindBar();
+                    e.Handled = true;
+                    break;
+            }
+        }
+
+        private void RunFind()
+        {
+            if (_terminalControl is null || _findBox is null)
+                return;
+
+            var count = _terminalControl.FindInBuffer(_findBox.Text ?? string.Empty);
+            UpdateFindCount(count);
+        }
+
+        private void Step(bool next)
+        {
+            if (_terminalControl is null)
+                return;
+
+            _ = next ? _terminalControl.FindNext() : _terminalControl.FindPrevious();
+            UpdateFindCount(_terminalControl.SearchHitCount);
+        }
+
+        private void UpdateFindCount(int count)
+        {
+            if (_findCount is null || _terminalControl is null)
+                return;
+
+            // Truncated says the cap bit, so the label admits it rather than stating a number that
+            // has quietly stopped being true.
+            var total = _terminalControl.SearchTruncated ? $"{count:N0}+" : count.ToString("N0");
+            var index = _terminalControl.SearchCurrentIndex;
+            _findCount.Text = count == 0 ? "no matches"
+                : index >= 0 ? $"{index + 1:N0} of {total}"
+                : $"{total} matches";
+        }
+
+        private void CloseFindBar()
+        {
+            if (_findBar is { } bar)
+                bar.IsVisible = false;
+
+            _terminalControl?.ClearSearch();
+            RestoreTerminalFocus();
         }
 
         private void RestoreTerminalFocus()
