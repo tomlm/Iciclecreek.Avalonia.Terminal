@@ -6,6 +6,7 @@ using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Rendering;
@@ -231,10 +232,25 @@ namespace Iciclecreek.Terminal
             int CellCount,
             IBrush? Background,
             XT.Graphics.LinePlacement? Placement = null,
-            XT.Graphics.TerminalImage? Image = null)
+            XT.Graphics.TerminalImage? Image = null,
+            XT.Common.UnderlineStyle UnderlineStyle = XT.Common.UnderlineStyle.None,
+            IBrush? UnderlineBrush = null)
         {
             /// <summary>Whether this run draws a picture rather than text.</summary>
             public bool IsImage => Placement is not null && Image is not null;
+
+            /// <summary>
+            /// The curly underline's geometry, built on first draw and replayed with the run.
+            /// Relative to the run's own origin, so the same geometry is valid at any row --
+            /// which is what lets it live in the cache while the line scrolls.
+            /// </summary>
+            public Geometry? UnderlineGeometry { get; set; }
+
+            /// <summary>
+            /// The underline's pen, immutable, with the dash pattern's phase-lock baked into its
+            /// offset. Built once for the same reason as the geometry.
+            /// </summary>
+            public IPen? UnderlinePen { get; set; }
         }
 
         // One bitmap per image, built on first sight and reused for the life of the picture.
@@ -4941,6 +4957,9 @@ namespace Iciclecreek.Terminal
                         DrawImageRun(context, run, startYPos, rowHeight, scale);
                     else if (run.Text is not null)
                         context.DrawText(run.Text, position);
+
+                    if (run.UnderlineStyle != XT.Common.UnderlineStyle.None)
+                        DrawUnderline(context, run, position, rect.Width, rowHeight);
                 }
                 return;
             }
@@ -5081,16 +5100,37 @@ namespace Iciclecreek.Terminal
                 if (td != null)
                     formattedText.SetTextDecorations(td);
 
+                // Underlines are drawn by hand below rather than through TextDecorations, because
+                // Avalonia has no curly decoration and SGR 58 gives the underline a colour of its own.
+                var underlineStyle = cell.Attributes.GetUnderlineStyle();
+                IBrush? underlineBrush = null;
+                if (underlineStyle != XT.Common.UnderlineStyle.None)
+                {
+                    underlineBrush = cell.GetUnderlineColor(_palette) is { } uc
+                        ? new ImmutableSolidColorBrush(uc)
+                        : foreground;
+                }
+
                 var position = new Point(startX, startYPos);
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
                 var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
                 // Cache only content-dependent data, not screen position
-                textRuns.Add(new CachedTextRun(formattedText, runStartX, cellCount, fill));
+                // Named rather than positional: the record gained Placement and Image ahead of these
+                // when pictures moved onto lines, so position no longer says which is which.
+                var run = new CachedTextRun(formattedText, runStartX, cellCount, fill,
+                                            UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush);
+                textRuns.Add(run);
 
                 if (fill is not null)
                     context.FillRectangle(fill, rect);
                 context.DrawText(formattedText, position);
+
+                // Drawn on the BUILD path as well as the cached replay below. A line is painted here
+                // on the frame it changes and replayed afterwards, so wiring only the replay leaves
+                // every newly written underline missing until something else invalidates the line.
+                if (underlineStyle != XT.Common.UnderlineStyle.None)
+                    DrawUnderline(context, run, position, rect.Width, rowHeight);
             }
 
             // And the pictures that cover the text, still back to front, now that it is down.
@@ -5207,6 +5247,139 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Draws a run's underline in whatever style it asked for.
+        /// </summary>
+        /// <remarks>
+        /// <para>By hand rather than through Avalonia's TextDecorations, which have no curly form
+        /// and no way to give the line SGR 58's colour of its own.</para>
+        /// <para>Width and height arrive ALREADY SNAPPED, from the same rect every other draw in
+        /// this file paints with -- so an underline's edges land exactly where its neighbours' do.
+        /// Re-deriving the width from a raw cell width here put an antialiased seam at every
+        /// attribute change inside an underlined span.</para>
+        /// <para>The curly geometry and the pens are built once per cached run and replayed with
+        /// it; only the rectangles are re-issued per frame, and those allocate nothing. The
+        /// geometry is kept relative to the run's origin and translated into place, because the
+        /// run's row changes as the screen scrolls while the shape does not.</para>
+        /// </remarks>
+        private static void DrawUnderline(DrawingContext context, CachedTextRun run, Point position,
+                                          double width, double cellHeight)
+        {
+            var brush = run.UnderlineBrush;
+            if (brush is null || width <= 0)
+                return;
+
+            var thickness = Math.Max(1.0, cellHeight / 14.0);
+            var x = position.X;
+            var baseY = position.Y + cellHeight - thickness * 2;
+
+            switch (run.UnderlineStyle)
+            {
+                case XT.Common.UnderlineStyle.Double:
+                    // The pair straddles where a single line would sit; a second line below would
+                    // fall out of the cell.
+                    context.FillRectangle(brush, new Rect(x, baseY - thickness, width, thickness));
+                    context.FillRectangle(brush, new Rect(x, baseY + thickness, width, thickness));
+                    break;
+
+                case XT.Common.UnderlineStyle.Curly:
+                {
+                    // Centred ON baseY, amplitude chosen so a lobe plus half the pen's width ends
+                    // exactly at the cell's bottom edge. The first version centred the wave lower
+                    // and its lobes fell ~1.5 thicknesses out of the row -- chopped flat when the
+                    // row below had its own background fill, bleeding into its glyphs when it did
+                    // not: the same escape sequence rendered differently depending on the line
+                    // under it.
+                    var amplitude = thickness * 1.5;
+                    var cellWidth = run.CellCount > 0 ? width / run.CellCount : width;
+                    var period = Math.Max(4.0, cellWidth / 2.0);
+
+                    var geometry = run.UnderlineGeometry;
+                    if (geometry is null)
+                    {
+                        // One quadratic bezier per half-period lobe instead of eight line segments
+                        // per period: smoother, and a quarter of the verbs. The sine's phase keeps
+                        // ABSOLUTE x in its argument so two adjacent runs continue one wave
+                        // instead of each restarting their own.
+                        double Wave(double dx) => amplitude * Math.Sin((x + dx) / period * Math.PI * 2.0);
+
+                        var half = period / 2.0;
+                        var g = new StreamGeometry();
+                        using (var ctx = g.Open())
+                        {
+                            ctx.BeginFigure(new Point(0, Wave(0)), false);
+
+                            // First boundary of a whole lobe at or after the run's left edge.
+                            var firstEdge = (Math.Floor(x / half) + 1) * half - x;
+                            if (firstEdge > 0 && firstEdge < width)
+                                ctx.QuadraticBezierTo(
+                                    new Point(firstEdge / 2.0, Wave(0) + (Wave(firstEdge) - Wave(0)) / 2.0
+                                              + LobeSign(x, half) * amplitude / 2.0),
+                                    new Point(firstEdge, Wave(firstEdge)));
+
+                            var dx = Math.Max(0.0, firstEdge);
+                            while (dx + half <= width)
+                            {
+                                // A full lobe: endpoints on the axis, control at twice the peak.
+                                ctx.QuadraticBezierTo(
+                                    new Point(dx + half / 2.0, LobeSign(x + dx, half) * amplitude * 2.0),
+                                    new Point(dx + half, 0));
+                                dx += half;
+                            }
+
+                            if (dx < width)
+                                ctx.QuadraticBezierTo(
+                                    new Point(dx + (width - dx) / 2.0,
+                                              LobeSign(x + dx, half) * amplitude / 2.0 + Wave(width) / 2.0),
+                                    new Point(width, Wave(width)));
+
+                            ctx.EndFigure(false);
+                        }
+                        geometry = g;
+                        run.UnderlineGeometry = geometry;
+                    }
+
+                    var pen = run.UnderlinePen ??= new ImmutablePen(brush.ToImmutable(), thickness);
+                    using (context.PushTransform(Matrix.CreateTranslation(x, baseY)))
+                        context.DrawGeometry(null, pen, geometry);
+                    break;
+                }
+
+                case XT.Common.UnderlineStyle.Dotted:
+                case XT.Common.UnderlineStyle.Dashed:
+                {
+                    // What Pen.DashStyle is for: one line and the renderer draws the marks, in
+                    // place of a FillRectangle per dot. Dash lengths are in pen-thickness units;
+                    // the offset carries the phase-lock, so a run does not restart the pattern
+                    // and stamp a mark at every attribute boundary.
+                    if (run.UnderlinePen is not { } dashPen)
+                    {
+                        var pattern = run.UnderlineStyle == XT.Common.UnderlineStyle.Dotted
+                            ? new[] { 1.0, 1.0 }
+                            : new[] { 3.0, 2.0 };
+                        var periodPx = (pattern[0] + pattern[1]) * thickness;
+                        var offset = (x % periodPx) / thickness;
+                        dashPen = new ImmutablePen(
+                            brush.ToImmutable(), thickness,
+                            new ImmutableDashStyle(pattern, offset));
+                        run.UnderlinePen = dashPen;
+                    }
+
+                    var midY = baseY + thickness / 2.0;
+                    context.DrawLine(dashPen, new Point(x, midY), new Point(x + width, midY));
+                    break;
+                }
+
+                default:
+                    context.FillRectangle(brush, new Rect(x, baseY, width, thickness));
+                    break;
+            }
+        }
+
+        /// <summary>Which way the sine lobe starting at this absolute position points.</summary>
+        private static double LobeSign(double absoluteX, double halfPeriod)
+            => Math.Floor(absoluteX / halfPeriod) % 2 == 0 ? 1.0 : -1.0;
+
+        /// <summary>
         /// Blits one strip of a picture into the cells it belongs to.
         /// </summary>
         /// <remarks>
@@ -5219,6 +5392,7 @@ namespace Iciclecreek.Terminal
         private void DrawImageRun(DrawingContext context, CachedTextRun run,
                                   double startYPos, double rowHeight, double scale)
         {
+
             if (_imageRenderingUnavailable)
                 return;
 
@@ -5727,6 +5901,23 @@ namespace Iciclecreek.Terminal
                         if (swapped || cell.GetBackgroundColor(_palette).HasValue)
                             context.FillRectangle(background, rect);
                         context.DrawText(formattedText, position);
+
+                        // Underlines are drawn by hand everywhere a cell is painted, and this loop
+                        // is one of those places: leaving it out silently un-underlined every
+                        // DECDWL/DECDHL line, plain SGR 4 included. Untransformed geometry on
+                        // purpose -- the matrix pushed above doubles it along with the glyphs. The
+                        // run is per-frame because double-width lines are never cached, so the
+                        // geometry cache dies with it; these lines are rare enough not to matter.
+                        var dwUnderline = cell.Attributes.GetUnderlineStyle();
+                        if (dwUnderline != XT.Common.UnderlineStyle.None)
+                        {
+                            var dwBrush = cell.GetUnderlineColor(_palette) is { } uc
+                                ? new ImmutableSolidColorBrush(uc)
+                                : foreground;
+                            var dwRun = new CachedTextRun(null, runStartX, cellCount, null,
+                                                          UnderlineStyle: dwUnderline, UnderlineBrush: dwBrush);
+                            DrawUnderline(context, dwRun, position, Math.Max(0, endX - startX), rowHeight);
+                        }
                     }
                 }
             }

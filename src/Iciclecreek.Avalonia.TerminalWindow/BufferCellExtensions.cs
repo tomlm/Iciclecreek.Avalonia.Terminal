@@ -24,11 +24,16 @@ namespace Iciclecreek.Avalonia.Terminal
             return FontStyle.Normal;
         }
 
+        /// <summary>
+        /// Strikethrough and overline, which Avalonia draws well enough.
+        /// </summary>
+        /// <remarks>
+        /// Underline is deliberately not here. Avalonia has no curly decoration, and SGR 58 gives the
+        /// underline a colour independent of the text — neither is expressible this way, so it is
+        /// drawn by hand in <c>TerminalView.DrawUnderline</c>.
+        /// </remarks>
         public static TextDecorationCollection? GetTextDecorations(this BufferCell cell)
         {
-            var decorations = new TextDecorationCollection();
-            if (cell.Attributes.IsUnderline())
-                return TextDecorations.Underline;
             if (cell.Attributes.IsStrikethrough())
                 return TextDecorations.Strikethrough;
             if (cell.Attributes.IsOverline())
@@ -127,6 +132,21 @@ namespace Iciclecreek.Avalonia.Terminal
                 return new SolidColorBrush(FromRgb(palette.Foreground));
 
             return defaultBrush;
+        }
+
+        /// <summary>
+        /// The colour an underline is drawn in, or null when it follows the text.
+        /// </summary>
+        /// <remarks>
+        /// SGR 58 sets this independently of the foreground, which is the whole point: an LSP marks
+        /// an error with a red squiggle under text that stays its normal colour.
+        /// </remarks>
+        public static Color? GetUnderlineColor(this BufferCell cell, ColorSnapshot palette)
+        {
+            if (!cell.Attributes.TryGetUnderlineColor(out var color, out var mode))
+                return null;
+
+            return cell.ExtractColor(color, mode, palette);
         }
 
         private static Color? ExtractColor(this BufferCell cell, int color, int mode, ColorSnapshot palette)
