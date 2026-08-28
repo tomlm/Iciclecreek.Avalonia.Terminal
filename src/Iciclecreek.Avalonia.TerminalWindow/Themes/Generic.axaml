@@ -60,7 +60,11 @@
                                        CursorBlinkRate="{TemplateBinding CursorBlinkRate}"
                                        VerbatimCommandLine="{TemplateBinding VerbatimCommandLine}"
                                        EnvironmentVariables="{TemplateBinding EnvironmentVariables}"
-                                       Options="{TemplateBinding Options}"/>
+                                       Options="{TemplateBinding Options}"
+                                       GutterWidth="{TemplateBinding GutterWidth}"
+                                       GutterPromptBrush="{TemplateBinding GutterPromptBrush}"
+                                       GutterSuccessBrush="{TemplateBinding GutterSuccessBrush}"
+                                       GutterFailureBrush="{TemplateBinding GutterFailureBrush}"/>
                     <!-- Scrollbar -->
                     <ScrollBar Name="PART_ScrollBar"
                               Grid.Column="1"
