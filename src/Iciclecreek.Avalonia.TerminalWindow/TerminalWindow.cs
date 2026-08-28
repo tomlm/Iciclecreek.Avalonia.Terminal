@@ -604,6 +604,10 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TemplatedControl.ForegroundProperty, this.GetObservable(ForegroundProperty));
             _terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
             _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
+            _terminalControl.Bind(TerminalControl.GutterWidthProperty, this.GetObservable(GutterWidthProperty));
+            _terminalControl.Bind(TerminalControl.GutterPromptBrushProperty, this.GetObservable(GutterPromptBrushProperty));
+            _terminalControl.Bind(TerminalControl.GutterSuccessBrushProperty, this.GetObservable(GutterSuccessBrushProperty));
+            _terminalControl.Bind(TerminalControl.GutterFailureBrushProperty, this.GetObservable(GutterFailureBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.StartingDirectoryProperty, this.GetObservable(StartingDirectoryProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));

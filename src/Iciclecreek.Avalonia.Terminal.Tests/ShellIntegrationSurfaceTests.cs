@@ -237,6 +237,29 @@ public class ShellIntegrationSurfaceTests
         finally { window.Close(); }
     }
 
+    /// <summary>
+    /// Setting gutter properties on the CONTROL must reach the view. SurfaceParityTests proves the
+    /// members exist; this proves the wiring — the half that a review on the search work found
+    /// missing there, and that was missing here too at the window layer.
+    /// </summary>
+    [AvaloniaTest]
+    public void Gutter_settings_on_the_control_reach_the_view()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+        try
+        {
+            control.GutterWidth = 9;
+            control.GutterFailureBrush = Brushes.Crimson;
+            window.UpdateLayout();
+
+            var view = control.View();
+            Assert.That(view.GutterWidth, Is.EqualTo(9));
+            Assert.That(view.GutterFailureBrush, Is.EqualTo(Brushes.Crimson));
+        }
+        finally { window.Close(); }
+    }
+
     /// <summary>A host can style it; nothing here decides what red means.</summary>
     [AvaloniaTest]
     public void The_host_supplies_the_brushes()
