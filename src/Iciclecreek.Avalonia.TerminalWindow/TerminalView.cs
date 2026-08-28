@@ -4797,8 +4797,20 @@ namespace Iciclecreek.Terminal
         }
 
 
+        /// <summary>
+        /// One OSC 66 block waiting for the deferred pass: which line, which cells, and where the
+        /// anchor row landed on screen. Deferred because a block taller than one row must paint
+        /// AFTER every row's background — rows render top to bottom, and the row below an anchor
+        /// would otherwise fill straight over the glyph's lower half.
+        /// </summary>
+        private readonly record struct SizedBlockDraw(
+            XT.Buffer.BufferLine Line, XT.Buffer.LineSizedRun Run, double StartYPos, double RowHeight);
+
+        private readonly List<SizedBlockDraw> _sizedBlockDraws = new();
+
         public override void Render(DrawingContext context)
         {
+            _sizedBlockDraws.Clear();
             // The terminal's own background, painted once for the whole surface.
             //
             // Nothing else paints it. TerminalView is a plain Control, so Avalonia has no Background of its
@@ -4882,6 +4894,10 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // OSC 66 blocks, after every row's background and text and before the overlays:
+                // selection and the cursor still draw over scaled text, as they do over plain text.
+                RenderSizedBlocks(context, scale);
+
                 // Render URL underline when hovering
                 RenderHoveredUrl(context, viewportY, scale);
 
@@ -4950,10 +4966,28 @@ namespace Iciclecreek.Terminal
                 painted.Add(placements[nextPlacement]);
             }
 
+            // A line holding OSC 66 blocks is drawn in two stages: everything OUTSIDE the
+            // blocks now, the blocks themselves in the deferred pass after every row — a block
+            // taller than one row must not be painted over by the next row's background. The
+            // anchor cell's Width spans the whole block, so drawing it as a normal run would put
+            // the text at base size in a corner of the box. Sized lines are not cached: the
+            // cache stores finished draw calls, and the blocks are deliberately NOT drawn here.
+            var hasSizedRuns = line.HasSizedRuns;
+            if (hasSizedRuns)
+                line.Cache = null;
+
             for (int x = 0; x < _terminal.Cols;)
             {
                 if (x >= line.Length)
                     break;
+
+                if (hasSizedRuns && line.TryGetSizedRunAt(x, out var sizedRun) && sizedRun.Covers(x))
+                {
+                    _sizedBlockDraws.Add(new SizedBlockDraw(line, sizedRun, startYPos, rowHeight));
+                    x = sizedRun.EndColumn;
+                    continue;
+                }
+
                 var cell = line[x];
                 string text = String.Empty;
                 int cellCount = 0;
@@ -5069,7 +5103,8 @@ namespace Iciclecreek.Terminal
 
             // Cache the text runs (but not when ReverseVideo mode is active)
             if (!_terminal.ReverseVideo)
-                line.Cache = textRuns;
+                if (!hasSizedRuns)
+                    line.Cache = textRuns;
         }
 
         /// <summary>
@@ -5502,6 +5537,95 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Renders a double-width or double-height line using transforms and clipping.
         /// </summary>
+        /// <summary>
+        /// Draws every OSC 66 block the row pass recorded. Each cell with content inside a run is
+        /// its own block (w=0 gives every grapheme one; a single w&gt;0 block is one wide anchor
+        /// cell), drawn at <c>scale * n/d</c> times the base size inside a box of the cell's
+        /// columns by the run's rows, aligned per the sizing's v and h — the parts of the
+        /// protocol the emulator stores but only a renderer can honour.
+        /// </summary>
+        private void RenderSizedBlocks(DrawingContext context, double scale)
+        {
+            foreach (var draw in _sizedBlockDraws)
+            {
+                var line = draw.Line;
+                var run = draw.Run;
+                var sizing = run.Sizing;
+
+                var fraction = sizing.Numerator > 0 && sizing.Denominator > 0
+                    ? sizing.Numerator / (double)sizing.Denominator
+                    : 1.0;
+                var magnify = sizing.Scale * fraction;
+                if (magnify <= 0)
+                    continue;
+
+                for (int x = run.Column; x < run.EndColumn && x < line.Length;)
+                {
+                    var cell = line[x];
+                    if (cell.Width <= 0 || string.IsNullOrEmpty(cell.Content) || cell.Content == " ")
+                    {
+                        x++;
+                        continue;
+                    }
+
+                    var boxX = Snap(x * _charWidth, scale);
+                    var boxRight = Snap((x + cell.Width) * _charWidth, scale);
+                    var box = new Rect(boxX, draw.StartYPos,
+                        Math.Max(0, boxRight - boxX), draw.RowHeight * run.Rows);
+
+                    var background = cell.GetBackgroundBrush(_palette, this.Background);
+                    var foreground = cell.GetForegroundBrush(_palette, this.Foreground);
+                    // The same swap ladder the normal run path applies: inverse, DECSCNM, blink.
+                    bool swapped = false;
+                    if (cell.Attributes.IsInverse())
+                        (foreground, background, swapped) = (background, foreground, !swapped);
+                    if (_terminal.ReverseVideo)
+                        (foreground, background, swapped) = (background, foreground, !swapped);
+                    if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
+                        (foreground, background, swapped) = (background, foreground, !swapped);
+                    if (swapped || cell.GetBackgroundColor(_palette).HasValue)
+                        context.FillRectangle(background, box);
+
+                    var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
+                    var formatted = new FormattedText(
+                        cell.Content, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                        typeface, FontSize, foreground);
+
+                    // The glyph is drawn at base size under a scale transform, exactly as
+                    // DECDWL/DECDHL lines are — the transform is what makes it big, so hinting,
+                    // fallback and shaping all behave as they do everywhere else.
+                    var drawnWidth = formatted.Width * magnify;
+                    var drawnHeight = draw.RowHeight * magnify;
+
+                    var alignX = sizing.HorizontalAlignment switch
+                    {
+                        XT.Common.TextSizeHorizontalAlignment.Right => box.Right - drawnWidth,
+                        XT.Common.TextSizeHorizontalAlignment.Center => box.X + (box.Width - drawnWidth) / 2,
+                        _ => box.X,
+                    };
+                    var alignY = sizing.VerticalAlignment switch
+                    {
+                        XT.Common.TextSizeVerticalAlignment.Bottom => box.Bottom - drawnHeight,
+                        XT.Common.TextSizeVerticalAlignment.Center => box.Y + (box.Height - drawnHeight) / 2,
+                        _ => box.Y,
+                    };
+
+                    using (context.PushClip(box))
+                    {
+                        var toOrigin = Matrix.CreateTranslation(-alignX, -alignY);
+                        var grow = Matrix.CreateScale(magnify, magnify);
+                        var back = Matrix.CreateTranslation(alignX, alignY);
+                        using (context.PushTransform(toOrigin * grow * back))
+                        {
+                            context.DrawText(formatted, new Point(alignX, alignY));
+                        }
+                    }
+
+                    x += cell.Width;
+                }
+            }
+        }
+
         private void RenderDoubleWidthLine(DrawingContext context, BufferLine line, int screenY, double startYPos, double rowHeight, LineAttribute lineAttr, double scale)
         {
             // Don't cache double-width lines (transform makes caching complex)
