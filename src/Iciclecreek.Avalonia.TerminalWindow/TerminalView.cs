@@ -1372,7 +1372,11 @@ namespace Iciclecreek.Terminal
                 GutterWidthProperty,
                 GutterPromptBrushProperty,
                 GutterSuccessBrushProperty,
-                GutterFailureBrushProperty);
+                GutterFailureBrushProperty,
+                // A brush change must repaint live highlights -- the same missing-invalidation
+                // class Copilot found on the gutter properties in the OSC work.
+                SearchHighlightBrushProperty,
+                SearchCurrentBrushProperty);
 
             AffectsMeasure<TerminalView>(
                 GutterWidthProperty,
