@@ -1062,7 +1062,6 @@ namespace Iciclecreek.Terminal
             _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
             // window events
             _terminal.TitleChanged += OnTerminalTitleChanged;
-            _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
             _terminal.WindowMoved += OnTerminalWindowMoved;
             _terminal.WindowResized += OnTerminalWindowResized;
             _terminal.WindowMinimized += OnTerminalWindowMinimized;
@@ -1800,6 +1799,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
             _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
             _terminal.WindowResized -= OnTerminalWindowResized;
             _terminal.WindowMinimized -= OnTerminalWindowMinimized;
@@ -1811,6 +1811,13 @@ namespace Iciclecreek.Terminal
             _terminal.BellRang -= OnTerminalBellRang;
             _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
+
+            // A view detached mid-update must not keep the gate closed or the timer alive. The
+            // timeout would self-heal in 150 ms, but the timer holds the view for that window, and
+            // a view re-attached inside it would start out refusing to paint for no reason.
+            _atomicUpdateTimeout?.Dispose();
+            _atomicUpdateTimeout = null;
+            _atomicUpdate = false;
 
             if (!_suppressCleanupOnDetach)
                 CleanupProcess();
@@ -1836,6 +1843,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
             _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
             _terminal.WindowResized -= OnTerminalWindowResized;
             _terminal.WindowMinimized -= OnTerminalWindowMinimized;
