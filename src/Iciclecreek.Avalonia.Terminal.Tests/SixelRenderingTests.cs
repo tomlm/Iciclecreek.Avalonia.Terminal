@@ -72,6 +72,40 @@ public class SixelRenderingTests
 
     // ---- what a frame decides to draw -------------------------------------------------------------
 
+    /// <summary>
+    /// Narrowing the window draws less of a picture; widening it draws more of the same picture back.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is what the placement model buys, and it could not be written against the old one.
+    /// A picture used to be scattered across cells, so narrowing the window destroyed the cells past
+    /// the edge and there was nothing left to widen back into — the picture came back with a piece
+    /// missing, and that was considered inherent.</para>
+    /// <para>A run instead keeps its NATURAL width and the renderer clips to what the window can
+    /// show, so nothing is lost in the first place. The assertion is the second half: the picture is
+    /// two columns wide, one column survives a narrow window, and both come back.</para>
+    /// </remarks>
+    [AvaloniaTest]
+    public void Narrowing_shows_less_of_a_picture_and_widening_shows_it_again()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            PlaceImage(view);
+            Assert.That(ImageRuns(view, 0)[0].CellCount, Is.EqualTo(2), "the picture starts two columns wide");
+
+            view.Terminal.Resize(1, view.Terminal.Rows);
+            var narrowed = ImageRuns(view, 0);
+            Assert.That(narrowed.Count, Is.EqualTo(1), "the picture should still be there, just narrower");
+            Assert.That(narrowed[0].CellCount, Is.EqualTo(1), "only one column can be shown");
+
+            view.Terminal.Resize(20, view.Terminal.Rows);
+            var widened = ImageRuns(view, 0);
+            Assert.That(widened.Count, Is.EqualTo(1));
+            Assert.That(widened[0].CellCount, Is.EqualTo(2), "the second column should come back");
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaTest]
     public void An_image_in_the_buffer_produces_an_image_run()
     {
@@ -89,11 +123,15 @@ public class SixelRenderingTests
     }
 
     /// <summary>
-    /// Adjacent tiles of one strip are a single draw, not one per cell. There is no dirty-rect culling here,
-    /// so every visible row is redrawn on every frame and the difference is per-frame cost.
+    /// A strip is a single draw, not one per cell.
     /// </summary>
+    /// <remarks>
+    /// It used to be coalesced -- walked cell by cell, joining tiles that continued each other. There is
+    /// nothing to coalesce now: a placement IS the strip, so the run comes out whole and the walking is
+    /// gone rather than fixed.
+    /// </remarks>
     [AvaloniaTest]
-    public void Adjacent_tiles_are_coalesced_into_one_run()
+    public void A_strip_is_one_run_rather_than_one_per_cell()
     {
         var (view, window) = Realised();
         try
@@ -104,8 +142,8 @@ public class SixelRenderingTests
 
             Assert.That(runs.Count, Is.EqualTo(1), "two adjacent tiles should be one draw, not two");
             Assert.That(runs[0].CellCount, Is.EqualTo(2));
-            Assert.That(runs[0].TileCol, Is.Zero);
-            Assert.That(runs[0].TileRow, Is.Zero);
+            Assert.That(runs[0].SrcX, Is.Zero);
+            Assert.That(runs[0].SrcY, Is.Zero);
         }
         finally { window.Close(); }
     }
@@ -122,7 +160,7 @@ public class SixelRenderingTests
             {
                 var runs = ImageRuns(view, row);
                 Assert.That(runs.Count, Is.EqualTo(1), $"row {row}");
-                Assert.That(runs[0].TileRow, Is.EqualTo(row), $"row {row} drew the wrong strip");
+                Assert.That(runs[0].SrcY, Is.EqualTo(row * CellPixelHeight), $"row {row} drew the wrong strip");
             }
         }
         finally { window.Close(); }
@@ -189,7 +227,8 @@ public class SixelRenderingTests
             var runs = ImageRuns(view, 0);
             Assert.That(runs.Count, Is.EqualTo(1));
             Assert.That(runs[0].CellCount, Is.EqualTo(1), "only the untouched tile should be left");
-            Assert.That(runs[0].TileCol, Is.EqualTo(1));
+            Assert.That(runs[0].SrcX, Is.EqualTo(CellPixelWidth),
+                "the surviving run should start one cell into the picture");
         }
         finally { window.Close(); }
     }
@@ -258,8 +297,21 @@ public class SixelRenderingTests
 
     // ---- the blit arithmetic ----------------------------------------------------------------------
 
+    /// <summary>
+    /// A run over the given tile, stated the way a caller used to state it.
+    /// </summary>
+    /// <remarks>
+    /// A run now carries a source RECTANGLE rather than tile indices, because a placement can describe
+    /// any crop and not only a cell-aligned one. This helper keeps the tile-shaped signature and does
+    /// the translation, which leaves every arithmetic assertion below it untouched: what changed is
+    /// what the run carries, not what the blit should produce from it.
+    /// </remarks>
     private static TerminalView.CachedTextRun Run(TerminalImage image, int startX, int cellCount, int tileCol, int tileRow)
-        => new(null, startX, cellCount, null, image, tileCol, tileRow);
+        => new(null, startX, cellCount, null, image,
+               SrcX: tileCol * CellPixelWidth,
+               SrcY: tileRow * CellPixelHeight,
+               SrcWidth: cellCount * CellPixelWidth,
+               SrcHeight: Math.Min(CellPixelHeight, image.PixelHeight - tileRow * CellPixelHeight));
 
     /// <summary>Pixels that divide evenly into cells: 8x6 over 2x3 cells is four by two tiles.</summary>
     private static TerminalImage EvenImage()

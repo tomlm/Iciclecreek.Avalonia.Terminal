@@ -207,8 +207,10 @@ namespace Iciclecreek.Terminal
             int CellCount,
             IBrush? Background,
             XT.Graphics.TerminalImage? Image = null,
-            int TileCol = 0,
-            int TileRow = 0);
+            int SrcX = 0,
+            int SrcY = 0,
+            int SrcWidth = 0,
+            int SrcHeight = 0);
 
         // One bitmap per image, built on first sight and reused for the life of the picture.
         //
@@ -4487,9 +4489,9 @@ namespace Iciclecreek.Terminal
                 // A cell showing part of a picture is a space as far as its content goes, so it would otherwise
                 // be swept into the text run beside it and never drawn. Take it first, and take as many adjacent
                 // tiles as belong to the same strip: one DrawImage per row of a picture rather than one per cell.
-                if (cell.Image is not null)
+                if (line.HasImages && line.TryGetPlacementAt(x, out var placement) && placement.Column == x)
                 {
-                    x = AppendImageRun(context, line, x, screenY, startYPos, rowHeight, scale, textRuns);
+                    x = AppendImageRun(context, line, placement, x, screenY, startYPos, rowHeight, scale, textRuns);
                     continue;
                 }
 
@@ -4529,7 +4531,7 @@ namespace Iciclecreek.Terminal
                         // start on text, which is what makes it look like an intermittent fault rather than a
                         // missing case.
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes ||
-                            currentCell.Image is not null)
+                            (line.HasImages && line.TryGetPlacementAt(x, out _)))
                             break;
                         textBuilder.Append(currentCell.Content);
                         cellCount += currentCell.Width;
@@ -4604,51 +4606,50 @@ namespace Iciclecreek.Terminal
         /// coordinates is what stops a run being drawn across a gap where something was typed over the middle of
         /// one.
         /// </remarks>
-        private int AppendImageRun(DrawingContext context, BufferLine line, int x, int screenY,
-                                   double startYPos, double rowHeight, double scale, List<CachedTextRun> textRuns)
+        private int AppendImageRun(DrawingContext context, BufferLine line, XT.Graphics.LinePlacement placement,
+                                   int x, int screenY, double startYPos, double rowHeight, double scale,
+                                   List<CachedTextRun> textRuns)
         {
-            var first = line[x];
-            var image = first.Image!;
-            var tileRow = first.ImageRow;
-            var tileCol = first.ImageCol;
-            var runStartX = x;
+            if (!line.TryGetImageAt(placement.Column, out var image))
+                return x + Math.Max(1, placement.Cols);
 
-            int cellCount = 0;
-            while (x < line.Length && x < _terminal.Cols)
-            {
-                var current = line[x];
-                if (!ReferenceEquals(current.Image, image) ||
-                    current.ImageRow != tileRow ||
-                    current.ImageCol != tileCol + cellCount)
-                    break;
+            // Clipped to what the WINDOW can show, not to what the picture is. A run keeps its natural
+            // width, so a narrowed window draws less of the picture and a widened one draws more --
+            // which is the whole reason a resize no longer destroys anything.
+            var visibleCols = Math.Min(placement.Cols, _terminal.Cols - placement.Column);
+            if (visibleCols <= 0)
+                return x + Math.Max(1, placement.Cols);
 
-                cellCount++;
-                x++;
-            }
+            var srcWidth = placement.Cols > 0
+                ? (int)Math.Round(placement.SrcWidth * (visibleCols / (double)placement.Cols))
+                : 0;
 
-            // Cannot happen -- the cell this was entered on matches by construction -- but a run of no cells
-            // would return x unadvanced and hang the caller's loop, which is too grim a failure to leave to
-            // reasoning about an invariant three call sites away.
-            if (cellCount == 0)
-                return x + 1;
+            srcWidth = Math.Min(srcWidth, image.PixelWidth - placement.SrcX);
+            var srcHeight = Math.Min(placement.SrcHeight, image.PixelHeight - placement.SrcY);
 
-            // Image cells carry the pen that was active when the picture was placed, so a cell with a background
-            // of its own still paints it — underneath, where a transparent Sixel lets it through.
-            var background = first.GetBackgroundBrush(_palette, this.Background);
-            var fill = first.GetBackgroundColor(_palette).HasValue ? background : null;
+            if (srcWidth <= 0 || srcHeight <= 0)
+                return x + Math.Max(1, placement.Cols);
 
-            var run = new CachedTextRun(null, runStartX, cellCount, fill, image, tileCol, tileRow);
+            // The cell under the run still carries the pen that was active when the picture was placed,
+            // so a background of its own is still painted -- underneath, where a transparent Sixel lets
+            // it through. The cells are ordinary spaces now, but they kept their attributes.
+            var under = line[placement.Column];
+            var background = under.GetBackgroundBrush(_palette, this.Background);
+            var fill = under.GetBackgroundColor(_palette).HasValue ? background : null;
+
+            var run = new CachedTextRun(null, placement.Column, visibleCols, fill, image,
+                                        placement.SrcX, placement.SrcY, srcWidth, srcHeight);
             textRuns.Add(run);
 
             if (fill is not null)
             {
-                var startX = Snap(runStartX * _charWidth, scale);
-                var endX = Snap((runStartX + cellCount) * _charWidth, scale);
+                var startX = Snap(placement.Column * _charWidth, scale);
+                var endX = Snap((placement.Column + visibleCols) * _charWidth, scale);
                 context.FillRectangle(fill, new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight));
             }
 
             DrawImageRun(context, run, screenY, startYPos, scale);
-            return x;
+            return x + Math.Max(1, placement.Cols);
         }
 
         /// <summary>
@@ -4739,11 +4740,13 @@ namespace Iciclecreek.Terminal
             if (image is null || run.CellCount <= 0 || charWidth <= 0 || charHeight <= 0)
                 return false;
 
-            if (!image.TryGetTileSource(run.TileCol, run.TileRow, out var sourceX, out var sourceY, out _, out var sourceHeight))
-                return false;
-
-            // The run's width in source pixels, clipped at the right edge of the picture.
-            var sourceWidth = Math.Min(run.CellCount * image.CellWidth, image.PixelWidth - sourceX);
+            // The run carries its source rectangle outright. No tile arithmetic, because a placement can
+            // describe any crop -- a Kitty picture may be cropped or scaled to a box that is not cell
+            // aligned at all, and tile indices cannot express that.
+            var sourceX = run.SrcX;
+            var sourceY = run.SrcY;
+            var sourceHeight = run.SrcHeight;
+            var sourceWidth = Math.Min(run.SrcWidth, image.PixelWidth - sourceX);
             if (sourceWidth <= 0 || sourceHeight <= 0)
                 return false;
 
