@@ -66,6 +66,30 @@ namespace Iciclecreek.Terminal
 
         // Process management
         private IPtyConnection? _ptyConnection;
+
+        /// <summary>
+        /// True while an application has declared an atomic update — DEC private mode 2026.
+        /// </summary>
+        /// <remarks>
+        /// A full-screen program redraws in many writes. Painting between them shows a frame half old
+        /// and half new, which is the tearing you see when a TUI repaints under load. While this is
+        /// set the view stops asking for frames, so the last complete one stays on screen, and the end
+        /// of the update asks for exactly one.
+        /// </remarks>
+        private bool _atomicUpdate;
+
+        private IDisposable? _atomicUpdateTimeout;
+
+        /// <summary>
+        /// How long a hold may last before the view paints anyway.
+        /// </summary>
+        /// <remarks>
+        /// Not optional. An application that begins an update and then crashes, or is stopped at a
+        /// breakpoint, would otherwise freeze the display for as long as it stays that way — the one
+        /// failure mode of this feature, and worse than the tearing it prevents. A tear is a bad
+        /// frame; a permanently frozen terminal looks like the application hung.
+        /// </remarks>
+        private static readonly TimeSpan AtomicUpdateTimeout = TimeSpan.FromMilliseconds(150);
         private CancellationTokenSource? _processCts;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         private int _processExitHandled;    // 0=false, 1=true — claimed via TryClaimExit
@@ -620,7 +644,7 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            this.RequestInvalidate();
+            RequestPaint();
         }
 
         /// <summary>
@@ -1130,8 +1154,12 @@ namespace Iciclecreek.Terminal
             var elapsed = _animationClock.Elapsed;
             _animationClock.Restart();
 
+            // Through RequestPaint, so an atomic update holds an animation frame too. A picture
+            // advancing mid-update would present the half-written screen underneath it, which is the
+            // exact tearing this exists to stop -- and it arrives on a timer, so it is the one paint
+            // path that can fire while an application is between BSU and ESU without being asked to.
             if (_terminal.AdvanceAnimations(elapsed))
-                this.RequestInvalidate();
+                RequestPaint();
 
             // An animation that ran out of loops stops on its own, so the clock has to notice.
             SyncAnimationClock();
@@ -1167,7 +1195,7 @@ namespace Iciclecreek.Terminal
                     _terminal.Options.Scrollback = value;
 
                 SetAndRaise(BufferSizeProperty, ref _bufferSize, value);
-                this.RequestInvalidate();
+                RequestPaint();
             }
         }
 
@@ -1186,7 +1214,7 @@ namespace Iciclecreek.Terminal
                 if (oldValue != _terminal.Buffer.ViewportY)
                 {
                     RaisePropertyChanged(ViewportYProperty, oldValue, _terminal.Buffer.ViewportY);
-                    this.RequestInvalidate();
+                    RequestPaint();
                 }
             }
         }
@@ -1233,7 +1261,7 @@ namespace Iciclecreek.Terminal
                 _terminal.Write("\u001b[H\u001b[2J\u001b[3J");   // home · erase screen · erase scrollback
                 _terminal.Buffer.ScrollToBottom();
             }
-            this.RequestInvalidate();
+            RequestPaint();
         }
 
         /// <summary>
@@ -1389,6 +1417,54 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Gets the operating system process identifier of the launched PTY process.
         /// </summary>
+        /// <summary>
+        /// Ask for a frame, unless an application is mid-update.
+        /// </summary>
+        private void RequestPaint()
+        {
+            if (_atomicUpdate)
+                return;
+
+            TerminalRenderThrottle.RequestInvalidate(this);
+        }
+
+        private void OnSynchronizedOutputChanged(object? sender, XT.Events.TerminalEvents.SynchronizedOutputEventArgs e)
+        {
+            if (e.Active)
+                BeginAtomicUpdate();
+            else
+                EndAtomicUpdate();
+        }
+
+        private void BeginAtomicUpdate()
+        {
+            _atomicUpdate = true;
+
+            _atomicUpdateTimeout?.Dispose();
+            _atomicUpdateTimeout = DispatcherTimer.RunOnce(
+                () =>
+                {
+                    // The application never finished. Paint what there is rather than stay frozen.
+                    if (_atomicUpdate)
+                        EndAtomicUpdate();
+                },
+                AtomicUpdateTimeout);
+        }
+
+        private void EndAtomicUpdate()
+        {
+            _atomicUpdateTimeout?.Dispose();
+            _atomicUpdateTimeout = null;
+
+            if (!_atomicUpdate)
+                return;
+
+            _atomicUpdate = false;
+
+            // One frame for the whole update, which is the point.
+            RequestPaint();
+        }
+
         public int Pid => _ptyConnection!.Pid;
 
         /// <summary>
@@ -1726,6 +1802,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
             _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
             _terminal.WindowResized -= OnTerminalWindowResized;
             _terminal.WindowMinimized -= OnTerminalWindowMinimized;
@@ -1737,6 +1814,13 @@ namespace Iciclecreek.Terminal
             _terminal.BellRang -= OnTerminalBellRang;
             _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
+
+            // A view detached mid-update must not keep the gate closed or the timer alive. The
+            // timeout would self-heal in 150 ms, but the timer holds the view for that window, and
+            // a view re-attached inside it would start out refusing to paint for no reason.
+            _atomicUpdateTimeout?.Dispose();
+            _atomicUpdateTimeout = null;
+            _atomicUpdate = false;
 
             if (!_suppressCleanupOnDetach)
                 CleanupProcess();
@@ -1762,6 +1846,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
             _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
             _terminal.WindowResized -= OnTerminalWindowResized;
             _terminal.WindowMinimized -= OnTerminalWindowMinimized;
@@ -1778,6 +1863,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged += OnTerminalBufferChanged;
             _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
             _terminal.TitleChanged += OnTerminalTitleChanged;
+            _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
             _terminal.WindowMoved += OnTerminalWindowMoved;
             _terminal.WindowResized += OnTerminalWindowResized;
             _terminal.WindowMinimized += OnTerminalWindowMinimized;
@@ -1805,7 +1891,7 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
-                this.RequestInvalidate();
+                RequestPaint();
             }
         }
 
@@ -1872,7 +1958,7 @@ namespace Iciclecreek.Terminal
                     // copying is not a destructive act, and a selection you can no longer see is one
                     // you cannot copy again, extend, or replace.
                     await CopyAsync();
-                    this.RequestInvalidate();
+                    RequestPaint();
                 }
                 else
                 {
@@ -1899,7 +1985,7 @@ namespace Iciclecreek.Terminal
                             // copying is not a destructive act, and a selection you can no longer see is one
                             // you cannot copy again, extend, or replace.
                             await CopyAsync();
-                            this.RequestInvalidate();
+                            RequestPaint();
                         }
                         return;
                     }
@@ -2002,7 +2088,7 @@ namespace Iciclecreek.Terminal
                         // copying is not a destructive act, and a selection you can no longer see is one
                         // you cannot copy again, extend, or replace.
                         await CopyAsync();
-                        this.RequestInvalidate();
+                        RequestPaint();
                         return;
                     }
                     // No selection - fall through to send Ctrl+C (SIGINT) to the process
@@ -2018,7 +2104,7 @@ namespace Iciclecreek.Terminal
                         // copying is not a destructive act, and a selection you can no longer see is one
                         // you cannot copy again, extend, or replace.
                         await CopyAsync();
-                        this.RequestInvalidate();
+                        RequestPaint();
                         return;
                     }
                 }
@@ -2068,7 +2154,7 @@ namespace Iciclecreek.Terminal
                         if (_terminal.Selection.HasSelection)
                         {
                             _terminal.Selection.ClearSelection();
-                            this.RequestInvalidate();
+                            RequestPaint();
                         }
                     }
                 }
@@ -2282,7 +2368,7 @@ namespace Iciclecreek.Terminal
 
             _kbSelWholeInput = false;
             _terminal.Selection.ClearSelection();
-            this.RequestInvalidate();
+            RequestPaint();
 
             return keys;
         }
@@ -2399,7 +2485,7 @@ namespace Iciclecreek.Terminal
                 _terminal.Selection.EndSelection();
             }
 
-            this.RequestInvalidate();
+            RequestPaint();
             return true;
         }
 
@@ -2433,7 +2519,7 @@ namespace Iciclecreek.Terminal
                 _terminal.Selection.ClearSelection();
                 _kbSelAnchor = null;
                 _kbSelWholeInput = false;
-                this.RequestInvalidate();
+                RequestPaint();
                 return false;
             }
 
@@ -2448,7 +2534,7 @@ namespace Iciclecreek.Terminal
             _terminal.Selection.StartSelection(start % cols, start / cols, XT.Selection.SelectionMode.Normal);
             _terminal.Selection.UpdateSelection((end - 1) % cols, (end - 1) / cols);
             _terminal.Selection.EndSelection();
-            this.RequestInvalidate();
+            RequestPaint();
             return true;
         }
 
@@ -2681,7 +2767,7 @@ namespace Iciclecreek.Terminal
                 if (_terminal.Selection.HasSelection)
                 {
                     _terminal.Selection.ClearSelection();
-                    this.RequestInvalidate();
+                    RequestPaint();
                 }
             }
 
@@ -2746,7 +2832,7 @@ namespace Iciclecreek.Terminal
                         {
                             await CopyAsync();
                             _terminal.Selection.ClearSelection();
-                            this.RequestInvalidate();
+                            RequestPaint();
                         }
                         else
                         {
@@ -2760,7 +2846,7 @@ namespace Iciclecreek.Terminal
                     if (props.IsLeftButtonPressed && _terminal.Selection.HasSelection)
                     {
                         _terminal.Selection.ClearSelection();
-                        this.RequestInvalidate();
+                        RequestPaint();
                     }
 
                     // Determine selection mode based on click count
@@ -2786,7 +2872,7 @@ namespace Iciclecreek.Terminal
                         _terminal.Selection.StartSelection(col, viewportRow, mode);
                         _isSelecting = true;
                         _pendingSelectionStart = null;
-                        this.RequestInvalidate();
+                        RequestPaint();
                     }
                     e.Handled = true;
                     return;
@@ -2902,7 +2988,7 @@ namespace Iciclecreek.Terminal
                         _pendingSelectionStart = null;
                     }
                     _terminal.Selection.UpdateSelection(col, viewportRow);
-                    this.RequestInvalidate();
+                    RequestPaint();
                     e.Handled = true;
                     return;
                 }
@@ -3050,7 +3136,7 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            this.RequestInvalidate();
+            RequestPaint();
         }
 
         protected override async void OnLostFocus(FocusChangedEventArgs e)
@@ -3075,7 +3161,7 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            this.RequestInvalidate();
+            RequestPaint();
         }
 
         private void OnTextInputMethodClientRequested(object? sender, TextInputMethodClientRequestedEventArgs e)
@@ -3098,7 +3184,7 @@ namespace Iciclecreek.Terminal
                 RaisePropertyChanged(MaxScrollbackProperty, default(int), MaxScrollback);
                 RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
                 RaisePropertyChanged(ViewportYProperty, default(int), ViewportY);
-                this.RequestInvalidate();
+                RequestPaint();
             });
         }
 
@@ -3116,7 +3202,7 @@ namespace Iciclecreek.Terminal
                     SetValue(CursorBlinkProperty, e.Blink);
                 }
 
-                this.RequestInvalidate();
+                RequestPaint();
             });
         }
 
@@ -3630,7 +3716,7 @@ namespace Iciclecreek.Terminal
                 _cursorOverridden = true;
             }
             SetCurrentValue(CursorProperty, HandCursor);
-            this.RequestInvalidate();
+            RequestPaint();
         }
 
         private void ClearHoveredUrl()
@@ -3651,7 +3737,7 @@ namespace Iciclecreek.Terminal
 
             _hoveredLink = null;
             // The underline is an overlay drawn after the text runs, so the cached runs stay valid.
-            this.RequestInvalidate();
+            RequestPaint();
         }
 
         private bool TryGetPrintableChar(KeyEventArgs e, out char character)
@@ -4214,7 +4300,7 @@ namespace Iciclecreek.Terminal
                     // behind it is a walk of a list that is empty for a terminal showing text.
                     Dispatcher.UIThread.Post(SyncAnimationClock);
 
-                    this.RequestInvalidate();
+                    RequestPaint();
                 }
             }
             catch (OperationCanceledException)
