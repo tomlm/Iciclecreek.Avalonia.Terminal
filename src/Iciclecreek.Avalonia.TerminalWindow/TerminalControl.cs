@@ -489,6 +489,56 @@ namespace Iciclecreek.Terminal
         public IReadOnlyList<TerminalView.VisibleMark> VisibleMarks
             => _terminalView?.VisibleMarks ?? Array.Empty<TerminalView.VisibleMark>();
 
+        // ---- scrollback search, forwarded so a host never reaches for the inner view -----------
+
+        /// <inheritdoc cref="TerminalView.SearchHighlightBrushProperty"/>
+        public static readonly StyledProperty<IBrush> SearchHighlightBrushProperty =
+            AvaloniaProperty.Register<TerminalControl, IBrush>(
+                nameof(SearchHighlightBrush),
+                defaultValue: new SolidColorBrush(Color.FromArgb(90, 240, 180, 41)));
+
+        /// <inheritdoc cref="TerminalView.SearchHighlightBrush"/>
+        public IBrush SearchHighlightBrush
+        {
+            get => GetValue(SearchHighlightBrushProperty);
+            set => SetValue(SearchHighlightBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.SearchCurrentBrushProperty"/>
+        public static readonly StyledProperty<IBrush> SearchCurrentBrushProperty =
+            AvaloniaProperty.Register<TerminalControl, IBrush>(
+                nameof(SearchCurrentBrush),
+                defaultValue: new SolidColorBrush(Color.FromArgb(160, 240, 180, 41)));
+
+        /// <inheritdoc cref="TerminalView.SearchCurrentBrush"/>
+        public IBrush SearchCurrentBrush
+        {
+            get => GetValue(SearchCurrentBrushProperty);
+            set => SetValue(SearchCurrentBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.FindInBuffer"/>
+        public int FindInBuffer(string needle, XTerm.Search.SearchOptions options = default)
+            => _terminalView?.FindInBuffer(needle, options) ?? 0;
+
+        /// <inheritdoc cref="TerminalView.FindNext"/>
+        public bool FindNext() => _terminalView?.FindNext() ?? false;
+
+        /// <inheritdoc cref="TerminalView.FindPrevious"/>
+        public bool FindPrevious() => _terminalView?.FindPrevious() ?? false;
+
+        /// <inheritdoc cref="TerminalView.ClearSearch"/>
+        public void ClearSearch() => _terminalView?.ClearSearch();
+
+        /// <inheritdoc cref="TerminalView.SearchHitCount"/>
+        public int SearchHitCount => _terminalView?.SearchHitCount ?? 0;
+
+        /// <inheritdoc cref="TerminalView.SearchCurrentIndex"/>
+        public int SearchCurrentIndex => _terminalView?.SearchCurrentIndex ?? -1;
+
+        /// <inheritdoc cref="TerminalView.SearchTruncated"/>
+        public bool SearchTruncated => _terminalView?.SearchTruncated ?? false;
+
 
         /// <inheritdoc cref="TerminalView.Refresh"/>
         public void Refresh() => _terminalView?.Refresh();
