@@ -729,6 +729,13 @@ namespace Iciclecreek.Terminal
                 _terminalView.OutputReceived += OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
+
+                // Adopt whatever the view is pointing at NOW, having subscribed above. The assignment
+                // two lines up may already have been answered -- the view replaces a foreign object
+                // with its emulator's own once that exists -- and that answer came before there was
+                // anything listening for it. Seeding here catches the case where the view was already
+                // initialised; the bridge keeps the two in step from this point on.
+                SetValue(OptionsProperty, _terminalView.Options);
                 // (no window event hooking needed)
             }
         }
@@ -772,6 +779,19 @@ namespace Iciclecreek.Terminal
             else if (e.Property == TerminalView.CurrentDirectoryProperty)
             {
                 SetCurrentDirectory(_terminalView?.CurrentDirectory);
+            }
+            else if (e.Property == TerminalView.OptionsProperty)
+            {
+                // The view swaps its own Options to the emulator's snapshot once that exists, because
+                // XTerm.NET no longer reads the object it was constructed with. Following it here means a
+                // caller holding the CONTROL reaches the same live object rather than the one it handed
+                // down at template time -- otherwise `control.Options.CursorBlink = true` after startup
+                // writes into a copy nothing consults.
+                //
+                // Mirrored through the property-changed bridge rather than assigned after the template is
+                // applied, because the order of OnApplyTemplate against the view's OnInitialized is not
+                // this class's to assume. Whenever the view's value moves, this follows it.
+                SetValue(OptionsProperty, e.NewValue as XTerm.Options.TerminalOptions);
             }
         }
 

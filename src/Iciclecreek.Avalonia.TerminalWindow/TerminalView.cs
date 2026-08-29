@@ -1440,6 +1440,23 @@ namespace Iciclecreek.Terminal
 
             _terminal = new XT.Terminal(options);
 
+            // Point the property at the emulator's OWN options from here on. XTerm.NET snapshots what it
+            // is constructed with, so `options` above is no longer the object the emulator reads -- and a
+            // host that went on setting properties on it, which is the ordinary shape of XAML and of any
+            // `terminal.Options.CursorBlink = true` after startup, would be writing into a copy nothing
+            // consults. No exception, no warning: the setting simply stops working, which is worse than a
+            // break that throws because the integration keeps compiling and keeps running.
+            //
+            // Assigning the live instance rather than special-casing the getter keeps this a real styled
+            // property -- bindings, styles and the property system all go on working, and every reader
+            // gets the object the emulator actually reads.
+            //
+            // Not everything on it is live even so, and that is XTerm.NET's contract rather than this
+            // one's: Cols, Rows, and the initial theme are consumed while the emulator is built. Use
+            // Resize for the dimensions. Scrollback, Theme and TabStopWidth ARE live as of XTerm.NET's
+            // options audit, and BufferSize here forwards to Scrollback.
+            SetValue(OptionsProperty, _terminal.Options);
+
             // Seeded here so it is never unset. Render replaces it every frame; this is only what the very
             // first one starts from, and what anything drawing before that frame would otherwise trip over.
             _palette = _terminal.Colors.Take();
@@ -2177,6 +2194,23 @@ namespace Iciclecreek.Terminal
             // default forever.
             if (change.Property == AutoScrollToBottomProperty)
                 _autoScroll = change.GetNewValue<bool>();
+
+            // Once the emulator exists, this property IS its options, and assigning any other object
+            // cannot reconfigure it -- XTerm.NET took its snapshot at construction and reads nothing
+            // else. Rather than accept a write that would quietly go nowhere, the live instance is put
+            // back, so every read gives the object the emulator actually consults.
+            //
+            // This is what keeps the invariant independent of ORDER. TerminalControl hands its own
+            // Options down when the template is applied, which can happen after the view has already
+            // built its emulator; without this the control's assignment would point the property back
+            // at an object nothing reads. The recursion stops on the next pass, where the new value is
+            // the instance being restored.
+            if (change.Property == OptionsProperty && _terminal != null &&
+                !ReferenceEquals(change.NewValue, _terminal.Options))
+            {
+                SetValue(OptionsProperty, _terminal.Options);
+                return;
+            }
 
             base.OnPropertyChanged(change);
 
