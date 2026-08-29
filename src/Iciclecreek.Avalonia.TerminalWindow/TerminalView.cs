@@ -1078,6 +1078,11 @@ namespace Iciclecreek.Terminal
             // is how a program "restoring the defaults" ends up with white on black.
             SeedThemeFromBrushes(options.Theme);
 
+            // OSC 22 is opt-in in the emulator, and the opt-in is the host saying it has somewhere to put
+            // the shape: an emulator that answered the support query on its own would leave programs using
+            // shapes that never appear. PointerShapeChanged is wired below, so the yes is true when given.
+            options.PointerShapesEnabled = true;
+
             _terminal = new XT.Terminal(options);
 
             // Seeded here so it is never unset. Render replaces it every frame; this is only what the very
