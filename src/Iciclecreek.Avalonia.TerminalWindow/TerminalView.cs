@@ -2872,6 +2872,14 @@ namespace Iciclecreek.Terminal
                     // This can happen for keys that don't have a virtual key mapping
                 }
 
+                // The Kitty keyboard protocol, when an application has negotiated it. Ahead of every
+                // legacy generator below, because once the flags are set those encodings are not what
+                // the application is reading any more -- it asked for CSI-u and the terminal accepted
+                // on this host's behalf. Behind the Win32 path above, which is a different protocol
+                // for a different transport and keeps its precedence.
+                if (await TrySendKittyKeyAsync(e, XT.Input.KittyKeyboardEventType.Press).ConfigureAwait(false))
+                    return;
+
                 // Convert Avalonia key to XTerm key
                 var xtermKey = ConvertAvaloniaKeyToXTermKey(e.Key);
 
@@ -3358,7 +3366,15 @@ namespace Iciclecreek.Terminal
                         await SendToPtyAsync(sequence).ConfigureAwait(false);
                         e.Handled = true;
                     }
+
+                    return;
                 }
+
+                // Releases exist as events at all only under the Kitty protocol -- the legacy
+                // encodings describe presses and repeats, which is why key-up reached nothing but
+                // the Win32 path before this. Whether a release is reported is the negotiated flags'
+                // decision, and the generator answers null when they say not to.
+                await TrySendKittyKeyAsync(e, XT.Input.KittyKeyboardEventType.Release).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -3782,6 +3798,10 @@ namespace Iciclecreek.Terminal
         {
             base.OnLostFocus(e);
 
+            // A key held while focus moves away never sends its release here, and would otherwise
+            // stay in the set for ever -- so the next real press of it would report as a repeat.
+            _keysHeld.Clear();
+
             Debug.WriteLine($"[TerminalView] OnLostFocus");
 
             // Stop blinking when not focused, but keep cursor visible (hollow block)
@@ -4095,6 +4115,153 @@ namespace Iciclecreek.Terminal
                 result |= XT.Input.KeyModifiers.Alt;
 
             return result;
+        }
+
+        /// <summary>
+        /// The key's name as the Kitty keyboard protocol expects it — browser <c>ev.key</c> naming.
+        /// </summary>
+        /// <remarks>
+        /// Empty for a key the protocol has no name for, which the caller treats as "not ours".
+        /// The layout's own symbol is the fallback, so a character key reports what the user
+        /// actually typed rather than what the physical key is engraved with.
+        /// </remarks>
+        private static string KittyKeyName(KeyEventArgs e) => e.Key switch
+        {
+            Key.Up => "ArrowUp",
+            Key.Down => "ArrowDown",
+            Key.Left => "ArrowLeft",
+            Key.Right => "ArrowRight",
+            Key.Home => "Home",
+            Key.End => "End",
+            Key.PageUp => "PageUp",
+            Key.PageDown => "PageDown",
+            Key.Insert => "Insert",
+            Key.Delete => "Delete",
+            Key.Escape => "Escape",
+            Key.Return or Key.Enter => "Enter",
+            Key.Tab => "Tab",
+            Key.Back => "Backspace",
+            Key.CapsLock => "CapsLock",
+            Key.Scroll => "ScrollLock",
+            Key.NumLock => "NumLock",
+            Key.PrintScreen or Key.Snapshot => "PrintScreen",
+            Key.Pause => "Pause",
+            Key.Apps => "ContextMenu",
+
+            // The four the protocol reports as keys in their own right. Named without a side here
+            // -- which one it was travels in Code, because to this protocol left and right Shift
+            // are different keys.
+            Key.LeftShift or Key.RightShift => "Shift",
+            Key.LeftCtrl or Key.RightCtrl => "Control",
+            Key.LeftAlt or Key.RightAlt => "Alt",
+            Key.LWin or Key.RWin => "Meta",
+
+            >= Key.F1 and <= Key.F24 => "F" + (e.Key - Key.F1 + 1).ToString(CultureInfo.InvariantCulture),
+
+            _ => e.KeySymbol is { Length: 1 } symbol ? symbol : string.Empty,
+        };
+
+        /// <summary>
+        /// The PHYSICAL key, named as the protocol expects — browser <c>ev.code</c> naming.
+        /// </summary>
+        /// <remarks>
+        /// Avalonia's <see cref="PhysicalKey"/> follows the same specification, with two spellings
+        /// that differ: a letter is <c>A</c> where the protocol wants <c>KeyA</c>, and the numpad is
+        /// <c>NumPad7</c> where the protocol wants <c>Numpad7</c>. Both matter — the protocol reads
+        /// this to find the base-layout key under a shifted character, and to tell the numpad keys
+        /// apart from the digits above the letters, whose key NAME is identically "7".
+        /// </remarks>
+        private static string KittyPhysicalCode(KeyEventArgs e)
+        {
+            var physical = e.PhysicalKey;
+            if (physical == PhysicalKey.None)
+                return string.Empty;
+
+            var name = physical.ToString();
+
+            if (name.Length == 1 && name[0] >= 'A' && name[0] <= 'Z')
+                return "Key" + name;
+
+            if (name.StartsWith("NumPad", StringComparison.Ordinal))
+                return "Numpad" + name.Substring("NumPad".Length);
+
+            return name;
+        }
+
+        /// <summary>
+        /// The keys currently held down, so a second key-down for one of them can be reported as a
+        /// REPEAT rather than a second press.
+        /// </summary>
+        /// <remarks>
+        /// Avalonia's KeyEventArgs carries no repeat flag, and the protocol distinguishes the two --
+        /// an application that negotiated event types asked to be able to tell them apart, and
+        /// giving it a press for every auto-repeat answers a question it did not ask. Keyed on the
+        /// physical key AND the logical one, because an unrecognised key reports PhysicalKey.None
+        /// and several different keys would otherwise share the one entry.
+        /// </remarks>
+        private readonly HashSet<(PhysicalKey Physical, Key Logical)> _keysHeld = new();
+
+        /// <summary>Builds the event the Kitty generator reads, or false when the key has no name it knows.</summary>
+        private static bool TryBuildKittyKeyEvent(KeyEventArgs e, out XT.Options.KeyEvent ev)
+        {
+            var name = KittyKeyName(e);
+            if (name.Length == 0)
+            {
+                ev = null!;
+                return false;
+            }
+
+            ev = new XT.Options.KeyEvent
+            {
+                Key = name,
+                Code = KittyPhysicalCode(e),
+                CtrlKey = e.KeyModifiers.HasFlag(KeyModifiers.Control),
+                AltKey = e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+                ShiftKey = e.KeyModifiers.HasFlag(KeyModifiers.Shift),
+                MetaKey = e.KeyModifiers.HasFlag(KeyModifiers.Meta),
+            };
+            return true;
+        }
+
+        /// <summary>
+        /// Sends a key through the Kitty keyboard protocol, if an application has negotiated it.
+        /// </summary>
+        /// <returns>
+        /// True when this key belonged to the protocol and has been dealt with — INCLUDING when the
+        /// answer was to send nothing.
+        /// </returns>
+        /// <remarks>
+        /// A null from the generator means this event sends nothing: a bare modifier press, or a
+        /// release the negotiated flags say not to report. It does NOT mean fall through to the
+        /// legacy generators, and treating it that way would put the original bug back for exactly
+        /// those keys -- an application would receive a legacy encoding it had told the terminal it
+        /// was no longer reading. So the event is consumed either way, which also stops a TextInput
+        /// from arriving afterwards and sending the character down the legacy path behind our back.
+        /// </remarks>
+        private async Task<bool> TrySendKittyKeyAsync(KeyEventArgs e, XT.Input.KittyKeyboardEventType eventType)
+        {
+            if (!_terminal.KittyKeyboardActive)
+                return false;
+
+            if (!TryBuildKittyKeyEvent(e, out var ev))
+                return false;
+
+            // A key-down for a key already held is the OS repeating it. Add returns false when the
+            // entry was already there, which is exactly that question.
+            if (eventType == XT.Input.KittyKeyboardEventType.Press
+                && !_keysHeld.Add((e.PhysicalKey, e.Key)))
+                eventType = XT.Input.KittyKeyboardEventType.Repeat;
+            else if (eventType == XT.Input.KittyKeyboardEventType.Release)
+                _keysHeld.Remove((e.PhysicalKey, e.Key));
+
+            var sequence = _terminal.GenerateKittyKeyInput(ev, eventType);
+
+            e.Handled = true;
+
+            if (!string.IsNullOrEmpty(sequence))
+                await SendToPtyAsync(sequence).ConfigureAwait(false);
+
+            return true;
         }
 
         private XT.Input.MouseButton ConvertPointerButton(PointerPointProperties props, MouseButton? releasedButton = null)
