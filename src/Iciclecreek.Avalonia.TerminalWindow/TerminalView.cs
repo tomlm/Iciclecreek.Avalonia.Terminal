@@ -64,6 +64,14 @@ namespace Iciclecreek.Terminal
         private (int Line, int Col)? _lastHoverProbe;
         private string? _pendingUrlClick;
 
+        // Pointer-shape (OSC 22) override state, kept apart from the hover pair above because the two
+        // nest: a shape can arrive during a hover and a hover can start over a shape. This is what the
+        // CONTROL's cursor was before the program's first shape took effect, so a reset can put it back
+        // — SetCurrentValue overwrites the local value, so without the snapshot an embedder who wrote
+        // <TerminalView Cursor="IBeam"/> lost it the first time a program reset the shape.
+        private Cursor? _preShapeCursor;
+        private bool _shapeOverridden;
+
         // Process management
         private IPtyConnection? _ptyConnection;
 
@@ -3885,6 +3893,14 @@ namespace Iciclecreek.Terminal
         }
 
         // ---- Host seams for the emulator's clipboard, notification, attention and pointer ----
+        //
+        // Every handler below is raised from Terminal.Write, and the read loop calls that from the pty
+        // READER thread (see StartReading), never the UI thread. So they all marshal, exactly like
+        // OnTerminalBellRang and the window handlers above: SetCurrentValue verifies dispatcher access
+        // and throws off-thread, RaiseEvent does not verify and instead runs an application's handlers
+        // on the reader thread, and Avalonia's Win32 clipboard is thread-affine on the set path. An
+        // exception here unwinds through Terminal.Write into the read loop's catch-all, which ends the
+        // loop - the terminal shows no further output for the rest of its life.
 
         /// <summary>
         /// OSC 52 / Kitty OSC 5522 write: the program put something on the clipboard. Only text
@@ -3893,51 +3909,85 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void OnTerminalClipboardWriteRequested(object? sender, XT.Events.TerminalEvents.ClipboardWriteEventArgs e)
         {
-            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-            if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal))
                 return;
 
-            // Fire and forget on purpose: the pty stream cannot wait for the OS clipboard, and
-            // a failed set has nobody to report to but the debugger.
-            _ = e.Data.Length == 0 ? clipboard.ClearAsync() : clipboard.SetTextAsync(e.Text);
+            // Empty text is the protocol's clear idiom; both halves are read here, before the hop,
+            // because the args belong to the write that raised them.
+            var text = e.Data.Length == 0 ? string.Empty : e.Text;
+            Dispatcher.UIThread.Post(() => _ = WriteToClipboardAsync(text));
+        }
+
+        private async Task WriteToClipboardAsync(string text)
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null)
+                return;
+
+            try
+            {
+                if (text.Length == 0)
+                    await clipboard.ClearAsync();
+                else
+                    await clipboard.SetTextAsync(text);
+            }
+            catch
+            {
+                // Awaited rather than discarded so a failure cannot escape as an unobserved task
+                // exception. There is nobody to report it to: the pty stream cannot wait on the OS
+                // clipboard, and the program that asked has no way to be told.
+            }
         }
 
         /// <summary>
         /// OSC 52 / Kitty OSC 5522 read: the program asked for the clipboard. Avalonia's
         /// clipboard is asynchronous, which is exactly what the emulator's Defer/Respond pair
         /// exists for — the handler returns immediately and the answer is emitted when the
-        /// await completes, on this same UI thread the terminal is driven on. Only reachable
-        /// when the embedding application opted in via <c>Options.ClipboardReadEnabled</c>.
+        /// await completes. Only reachable when the embedding application opted in via
+        /// <c>Options.ClipboardReadEnabled</c>.
         /// </summary>
+        /// <remarks>
+        /// Defer() has to happen INLINE, on the reader thread: the emulator reads <c>e.Deferred</c>
+        /// the moment this handler returns, so posting the whole body would read as a decline.
+        /// Everything after it goes to the UI thread, which is both where Avalonia's clipboard is
+        /// thread-affine and the single thread <c>Respond</c> asks to be called from — Kitty 5522
+        /// closes its reply with a plain <c>--outstanding</c>, so two answers landing on two
+        /// thread-pool continuations could interleave the decrement and leave the program waiting
+        /// forever for a DONE that never comes.
+        /// </remarks>
         private void OnTerminalClipboardReadRequested(object? sender, XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
-            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-            if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal))
                 return;   // declined: OSC 52 stays silent, 5522 counts the mime unavailable
 
             e.Defer();
-            _ = RespondFromClipboardAsync(e, clipboard);
+            _ = Dispatcher.UIThread.InvokeAsync(() => RespondFromClipboardAsync(e));
         }
 
-        private static async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e, IClipboard clipboard)
+        private async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
             string? text;
             try
             {
-                text = await clipboard.TryGetTextAsync();
+                // Read here rather than on the reader thread: the visual-tree walk is UI state too.
+                var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                text = clipboard is null ? null : await clipboard.TryGetTextAsync();
             }
             catch
             {
                 text = null;   // a locked or unavailable clipboard declines rather than throws
             }
+
+            // Always answered, even with null: a deferred request the host never completes leaves a
+            // 5522 read hanging, which is what the args' contract warns about.
             e.Respond(text);
         }
 
         private void OnTerminalNotificationReceived(object? sender, XT.Events.TerminalEvents.NotificationEventArgs e) =>
-            RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e));
+            Dispatcher.UIThread.Post(() => RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e)));
 
         private void OnTerminalAttentionRequested(object? sender, XT.Events.TerminalEvents.AttentionRequestedEventArgs e) =>
-            RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action));
+            Dispatcher.UIThread.Post(() => RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action)));
 
         /// <summary>
         /// Kitty OSC 22: the program chose a pointer shape. The link-hover hand keeps the last
@@ -3947,13 +3997,37 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void OnTerminalPointerShapeChanged(object? sender, XT.Events.TerminalEvents.PointerShapeEventArgs e)
         {
-            var cursor = MapPointerShape(e.Shape);
-            if (_cursorOverridden)
+            Dispatcher.UIThread.Post(() =>
             {
-                _savedCursor = cursor;
-                return;
-            }
-            SetCurrentValue(CursorProperty, cursor);
+                var cursor = MapPointerShape(e.Shape);
+
+                // A reset restores what the CONTROL had, not null. MapPointerShape(null) is null, and so
+                // is any name Avalonia has no cursor for, so restoring the mapped value would have made
+                // "the program stopped asking for a shape" mean "the embedder never set a cursor" — a
+                // <c>TerminalView Cursor="IBeam"</c> lost its cursor to the first program that used OSC 22.
+                if (cursor is null)
+                {
+                    if (!_shapeOverridden)
+                        return;
+                    cursor = _preShapeCursor;
+                    _preShapeCursor = null;
+                    _shapeOverridden = false;
+                }
+                else if (!_shapeOverridden)
+                {
+                    // During a hover the control's own cursor is the one the hover saved, not Cursor,
+                    // which is currently the hand.
+                    _preShapeCursor = _cursorOverridden ? _savedCursor : Cursor;
+                    _shapeOverridden = true;
+                }
+
+                if (_cursorOverridden)
+                {
+                    _savedCursor = cursor;
+                    return;
+                }
+                SetCurrentValue(CursorProperty, cursor);
+            });
         }
 
         /// <summary>
