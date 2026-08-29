@@ -46,7 +46,10 @@ public partial class MainWindow : Window
         });
 
         terminalWindow.AddHandler(TerminalView.AttentionRequestedEvent, (_, e) =>
-            Console.WriteLine($"[demo] ATTENTION  action={e.Action}"));
+        {
+            Console.WriteLine($"[demo] ATTENTION  action={e.Action}");
+            MacDock.RequestAttention(e.Action);
+        });
     }
 
 
