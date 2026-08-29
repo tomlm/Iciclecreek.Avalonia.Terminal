@@ -205,7 +205,14 @@ public class HostSeamTests
         var (view, window) = Realised();
         try
         {
+            // A MAPPED shape first, asserted. Without it both sides of the fallback assertion are
+            // null and the test passes with the whole pointer seam deleted — which is exactly how
+            // it read before, since the view's cursor starts out null too.
             var before = view.Cursor;
+            view.Terminal.Write($"{Esc}]22;wait{Bel}");
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(view.Cursor, Is.Not.EqualTo(before), "sanity: a mapped shape does change the cursor");
+
             view.Terminal.Write($"{Esc}]22;zoom-in{Bel}");
             Dispatcher.UIThread.RunJobs();
             Assert.That(view.Cursor, Is.EqualTo(before));
