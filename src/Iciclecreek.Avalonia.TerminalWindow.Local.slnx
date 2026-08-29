@@ -1,20 +1,3 @@
-<!--
-  The same projects as Iciclecreek.Avalonia.TerminalWindow.slnx, plus the XTerm.NET emulator from
-  the sibling checkout, so the terminal and the emulator can be edited and debugged together with
-  no packing step in between.
-
-  Open THIS one for that work. The other solution is what CI restores, builds, packs and tests, and
-  it deliberately holds nothing outside this repository. A project path pointing at a sibling
-  checkout would fail on any machine that does not have one, starting with the build agents.
-
-  The reference itself is conditional and lives in Iciclecreek.Avalonia.Terminal.csproj, and THIS
-  FILE is what selects it: the csproj reads the name of the solution driving the build, so opening
-  this one swaps the XTerm.NET package reference for the sibling project. Opening the other
-  solution, or building the project directly as the agents do, gets the package. Having a
-  checkout on disk no longer changes anyone's build on its own.
-
-  Loading the emulator's SOURCE here is the other half, and what makes stepping into it work.
--->
 <Solution>
   <Folder Name="/XTerm.NET/">
     <Project Path="../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj" />

@@ -41,25 +41,6 @@
     <PackageReference Include="Wcwidth" Version="4.0.1" />
   </ItemGroup>
 
-  <!-- The emulator: the sibling checkout when the Local solution opened us, the published
-       package every other time.
-
-       WHICH SOLUTION asks, rather than whether a sibling happens to be on disk. Exists() cannot
-       tell the two apart: anyone who clones XTerm.NET beside this repository to work on it gets
-       the sibling in EVERY build afterwards, including the plain solution they opened precisely
-       to build against the package. That is a surprising way to find out what you were testing,
-       and it is not something you can turn off without deleting the checkout.
-
-       MSBuild hands every project the name of the solution driving it, so the two .slnx files
-       already say which arrangement is wanted and neither needs a flag of its own, and there is no
-       syntax for one in .slnx regardless. Open Iciclecreek.Avalonia.TerminalWindow.Local.slnx to
-       edit and step through the emulator with no packing step; open the other one, or build the
-       project directly as the agents do, to get the package.
-
-       The empty-check on the first condition is what keeps -p:UseSiblingXTerm= working from the
-       command line: a global property set there is not empty, so neither default fires and the
-       explicit answer stands. That is how CI pins the package leg, and how you can force either
-       leg without opening anything. -->
   <PropertyGroup>
     <SiblingXTerm>$(MSBuildThisFileDirectory)../../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj</SiblingXTerm>
     <LocalSolutionName>Iciclecreek.Avalonia.TerminalWindow.Local</LocalSolutionName>
@@ -71,9 +52,6 @@
     <PackageReference Include="XTerm.NET" Version="2.0.0-rc003" Condition="'$(UseSiblingXTerm)' != 'true'" />
   </ItemGroup>
 
-  <!-- The sibling leg used to fall back to the package on its own, because presence WAS the
-       condition. Now that asking for it is a choice, a missing checkout is a mistake worth saying
-       out loud rather than quietly building something other than what was asked for. -->
   <Target Name="VerifySiblingXTerm" BeforeTargets="CollectPackageReferences;ResolveProjectReferences"
           Condition="'$(UseSiblingXTerm)' == 'true' and !Exists('$(SiblingXTerm)')">
     <Error Text="UseSiblingXTerm is true but no XTerm.NET checkout is at $(SiblingXTerm). Clone XTerm.NET beside this repository, or build with -p:UseSiblingXTerm=false to use the published package." />
