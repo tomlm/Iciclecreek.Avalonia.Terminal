@@ -41,19 +41,8 @@
     <PackageReference Include="Wcwidth" Version="4.0.1" />
   </ItemGroup>
 
-  <PropertyGroup>
-    <SiblingXTerm>$(MSBuildThisFileDirectory)../../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj</SiblingXTerm>
-    <LocalSolutionName>Iciclecreek.Avalonia.TerminalWindow.Local</LocalSolutionName>
-    <UseSiblingXTerm Condition="'$(UseSiblingXTerm)' == '' and '$(SolutionName)' == '$(LocalSolutionName)'">true</UseSiblingXTerm>
-    <UseSiblingXTerm Condition="'$(UseSiblingXTerm)' == ''">false</UseSiblingXTerm>
-  </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(SiblingXTerm)" Condition="'$(UseSiblingXTerm)' == 'true'" />
-    <PackageReference Include="XTerm.NET" Version="2.0.0-rc003" Condition="'$(UseSiblingXTerm)' != 'true'" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj" Condition="'$(SolutionName)' == 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
+    <PackageReference Include="XTerm.NET" Version="2.0.0-rc003" Condition="'$(SolutionName)' != 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
   </ItemGroup>
-
-  <Target Name="VerifySiblingXTerm" BeforeTargets="CollectPackageReferences;ResolveProjectReferences"
-          Condition="'$(UseSiblingXTerm)' == 'true' and !Exists('$(SiblingXTerm)')">
-    <Error Text="UseSiblingXTerm is true but no XTerm.NET checkout is at $(SiblingXTerm). Clone XTerm.NET beside this repository, or build with -p:UseSiblingXTerm=false to use the published package." />
-  </Target>
 </Project>
