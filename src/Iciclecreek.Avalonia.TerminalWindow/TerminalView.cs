@@ -5226,23 +5226,50 @@ namespace Iciclecreek.Terminal
                 if (lines[bufferRow] is not { } line || !line.HasMarks)
                     continue;
 
+                // ONE bar for the row, decided by all of its marks together, rather than one fill
+                // per mark into the same rectangle. A shell's prompt string carries OSC 133;D;<code>
+                // for the command that just finished immediately before the OSC 133;A that opens the
+                // next prompt, so both land on the same line -- and filling per mark painted the exit
+                // status and then covered it with the prompt colour, which made success and failure
+                // unreachable for any host that set GutterPromptBrush.
+                //
+                // The status wins the lane, because how a command ended is the one thing here the user
+                // cannot read off the screen; where a prompt began is visible in the prompt itself.
+                int? exitCode = null;
+                bool anyMark = false;
+
                 foreach (var mark in line.Marks)
                 {
                     if (mark.Kind != XT.Common.ShellIntegrationMark.PromptStart
                         && mark.Kind != XT.Common.ShellIntegrationMark.CommandFinished)
                         continue;
 
-                    var brush = mark.Kind == XT.Common.ShellIntegrationMark.CommandFinished
-                        ? (mark.ExitCode is 0 ? GutterSuccessBrush
-                           : mark.ExitCode is null ? GutterPromptBrush : GutterFailureBrush)
-                        : GutterPromptBrush;
-
-                    if (brush is null)
-                        continue;
-
-                    context.FillRectangle(brush,
-                        new Rect(0, row * _charHeight, gutter, _charHeight));
+                    anyMark = true;
+                    if (mark.Kind == XT.Common.ShellIntegrationMark.CommandFinished
+                        && mark.ExitCode is int code)
+                        exitCode ??= code;
                 }
+
+                if (!anyMark)
+                    continue;
+
+                var brush = exitCode switch
+                {
+                    0 => GutterSuccessBrush,
+                    int => GutterFailureBrush,
+                    _ => null,
+                };
+
+                // A finish with no status to report is a prompt bar, as it was before; so is a finish
+                // whose case the host left unstyled, which keeps a host that styled only the prompt
+                // showing its bar on every prompt row rather than losing the ones a command ended on.
+                brush ??= GutterPromptBrush;
+
+                if (brush is null)
+                    continue;
+
+                context.FillRectangle(brush,
+                    new Rect(0, row * _charHeight, gutter, _charHeight));
             }
         }
 
@@ -5364,6 +5391,42 @@ namespace Iciclecreek.Terminal
             int endLine = Math.Min(_terminal.Buffer.Length, startLine + viewportLines);
             try
             {
+                // A block anchored ABOVE the viewport still hangs into it. The row pass below starts
+                // at viewportY, so it never visits such a block's own line and _sizedBlockDraws would
+                // never hear about it -- and the rows it covers are deliberately blank in the buffer,
+                // SkipCellsCoveredFromAbove having steered text around them, so nothing else paints
+                // there either. Scrolling one line through any output holding an s=2 heading would
+                // blank the heading rather than clip it.
+                //
+                // At most MaxScale - 1 rows to walk, and only when the buffer has ever held a tall
+                // block. The draw's StartYPos goes NEGATIVE, which is what puts the box back where it
+                // belongs, and the PushClip in RenderSizedBlocks trims what falls above the top.
+                if (_terminal.Buffer.HasMultiRowSizedRuns)
+                {
+                    for (int above = 1; above < XT.Common.TextSizing.MaxScale; above++)
+                    {
+                        int anchorRow = viewportY - above;
+                        if (anchorRow < 0)
+                            break;
+
+                        var anchorLine = anchorRow < _terminal.Buffer.Length
+                            ? _terminal.Buffer.GetLine(anchorRow) : null;
+                        if (anchorLine is null || !anchorLine.HasSizedRuns)
+                            continue;
+
+                        var hangStart = Snap(-above * _charHeight, scale);
+                        var hangEnd = Snap((-above + 1) * _charHeight, scale);
+
+                        foreach (var run in anchorLine.SizedRuns)
+                        {
+                            // Rows > above is the test TryGetSizedRunCovering applies: a run reaches
+                            // this row only if it is taller than the distance up to its anchor.
+                            if (run.Rows > above)
+                                _sizedBlockDraws.Add(new SizedBlockDraw(
+                                    anchorLine, run, hangStart, Math.Max(0, hangEnd - hangStart)));
+                        }
+                    }
+                }
 
                 for (int y = startLine; y < endLine; y++)
                 {
@@ -5549,8 +5612,16 @@ namespace Iciclecreek.Terminal
                         // A KITTY picture is no reason to stop: it is an overlay, the cell under it
                         // still carries whatever was printed there, and the z-index decides which of
                         // them a viewer sees. A SIXEL is not -- see CoveredBySixel.
+                        //
+                        // An OSC 66 block is a boundary too, and nothing here would otherwise notice
+                        // one. A fractional block is always s=1, so its cells are a single column wide
+                        // and carry the SGR that was in force when it was printed; without this,
+                        // preceding text with the same attributes swallows the whole run and draws it
+                        // at base size, because the outer loop only looks for a run on the column it
+                        // starts an iteration on.
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes
-                            || CoveredBySixel(line, x))
+                            || CoveredBySixel(line, x)
+                            || (hasSizedRuns && line.TryGetSizedRunAt(x, out _)))
                             break;
                         textBuilder.Append(currentCell.Content);
                         cellCount += currentCell.Width;
@@ -6206,9 +6277,6 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Renders a double-width or double-height line using transforms and clipping.
-        /// </summary>
-        /// <summary>
         /// Draws every OSC 66 block the row pass recorded. Each cell with content inside a run is
         /// its own block (w=0 gives every grapheme one; a single w&gt;0 block is one wide anchor
         /// cell), drawn at <c>scale * n/d</c> times the base size inside a box of the cell's
@@ -6233,7 +6301,8 @@ namespace Iciclecreek.Terminal
                 for (int x = run.Column; x < run.EndColumn && x < line.Length;)
                 {
                     var cell = line[x];
-                    if (cell.Width <= 0 || string.IsNullOrEmpty(cell.Content) || cell.Content == " ")
+                    // Only a continuation cell is skipped outright -- it has no box of its own.
+                    if (cell.Width <= 0)
                     {
                         x++;
                         continue;
@@ -6256,6 +6325,16 @@ namespace Iciclecreek.Terminal
                         (foreground, background, swapped) = (background, foreground, !swapped);
                     if (swapped || cell.GetBackgroundColor(_palette).HasValue)
                         context.FillRectangle(background, box);
+
+                    // A blank cell has nothing to shape, but its background belongs to the block and is
+                    // already down. This pass is the ONLY thing that paints inside the run -- the row
+                    // pass skipped every column of it -- so skipping a space before the fill punched an
+                    // unpainted notch between the words of a coloured heading.
+                    if (string.IsNullOrEmpty(cell.Content) || cell.Content == " ")
+                    {
+                        x += cell.Width;
+                        continue;
+                    }
 
                     var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                     var formatted = new FormattedText(
@@ -6297,6 +6376,9 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// Renders a double-width or double-height line using transforms and clipping.
+        /// </summary>
         private void RenderDoubleWidthLine(DrawingContext context, BufferLine line, int screenY, double startYPos, double rowHeight, LineAttribute lineAttr, double scale)
         {
             // Don't cache double-width lines (transform makes caching complex)
@@ -7025,7 +7107,12 @@ namespace Iciclecreek.Terminal
                         int viewportY = buffer.ViewportY;
                         int screenY = absoluteCursorY - viewportY;
 
-                        double posX = cursorX * _view._charWidth;
+                        // The gutter, the third place the offset is needed. This rectangle is in the
+                        // control's space, which is the space the render translates the grid within --
+                        // without it the composition window sits GutterWidth px to the left of the
+                        // caret it is meant to be under, for the whole session. Clamped the way
+                        // PointerColumn and ArrangeOverride clamp it.
+                        double posX = cursorX * _view._charWidth + Math.Max(0, _view.GutterWidth);
                         double posY = screenY * _view._charHeight;
 
                         return new Rect(posX, posY, _view._charWidth, _view._charHeight);

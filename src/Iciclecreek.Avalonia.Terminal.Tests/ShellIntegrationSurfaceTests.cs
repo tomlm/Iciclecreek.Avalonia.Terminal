@@ -1,5 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
+using Avalonia.Input;
+using Avalonia.Input.TextInput;
 using Avalonia.Media;
 using NUnit.Framework;
 
@@ -27,6 +30,51 @@ public class ShellIntegrationSurfaceTests
         var window = TerminalHost.Show(control);
         window.UpdateLayout();
         return (control.View(), window);
+    }
+
+    /// <summary>Every drawing in a captured frame, flattened out of its groups, in PAINT order.</summary>
+    private static IEnumerable<Drawing> Flatten(DrawingGroup group)
+    {
+        foreach (var child in group.Children)
+        {
+            if (child is DrawingGroup inner)
+            {
+                foreach (var d in Flatten(inner))
+                    yield return d;
+            }
+            else
+            {
+                yield return child;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The fills a render put in the gutter lane, in paint order — everything as wide as the gutter
+    /// starting at x 0. The terminal's own surface fill starts there too and is excluded by width.
+    /// </summary>
+    private static List<GeometryDrawing> GutterFills(TerminalView view)
+    {
+        var group = new DrawingGroup();
+        using (var context = group.Open())
+            view.Render(context);
+
+        return Flatten(group)
+            .OfType<GeometryDrawing>()
+            .Where(d => d.Geometry is { } g && g.Bounds.X == 0
+                        && Math.Abs(g.Bounds.Width - view.GutterWidth) < 0.01)
+            .ToList();
+    }
+
+    /// <summary>The IME client the view hands out, asked for the way a text input service asks.</summary>
+    private static TextInputMethodClient ImeClient(TerminalView view)
+    {
+        var args = new TextInputMethodClientRequestedEventArgs
+        {
+            RoutedEvent = InputElement.TextInputMethodClientRequestedEvent,
+        };
+        view.RaiseEvent(args);
+        return args.Client!;
     }
 
     // ---- OSC 8 -----------------------------------------------------------------------------
@@ -261,6 +309,15 @@ public class ShellIntegrationSurfaceTests
     }
 
     /// <summary>A host can style it; nothing here decides what red means.</summary>
+    /// <remarks>
+    /// Asserted against the recorded draw calls, not by reading the properties back. This used to
+    /// render into a DrawingGroup, throw the group away, and assert that GutterFailureBrush still
+    /// held the brush assigned four lines earlier — green with the whole of DrawGutter deleted.
+    ///
+    /// The second row carries BOTH the finish and the next prompt's start, which is exactly what a
+    /// shell emits: its prompt string reports the last command's status and then opens the prompt.
+    /// One bar per row, and the status is the one that shows.
+    /// </remarks>
     [AvaloniaTest]
     public void The_host_supplies_the_brushes()
     {
@@ -268,16 +325,47 @@ public class ShellIntegrationSurfaceTests
         try
         {
             view.GutterWidth = 6;
+            view.GutterPromptBrush = Brushes.Blue;
             view.GutterSuccessBrush = Brushes.Green;
             view.GutterFailureBrush = Brushes.Red;
 
-            view.Terminal.Write(Mark("A") + "$ x" + Mark("C") + Mark("D;1"));
+            view.Terminal.Write(Mark("A") + "$ x" + Mark("B") + Mark("C") + "\r\n"
+                                + Mark("D;1") + Mark("A") + "$ ");
 
-            var group = new DrawingGroup();
-            using (var context = group.Open())
-                view.Render(context);
+            var fills = GutterFills(view);
 
-            Assert.That(view.GutterFailureBrush, Is.EqualTo(Brushes.Red));
+            Assert.That(fills.Count, Is.EqualTo(2),
+                        "one bar per row: the lane was filled once per mark");
+            Assert.That(fills[0].Brush, Is.EqualTo(Brushes.Blue),
+                        "the first prompt's row is not the prompt colour");
+            // Paint order is list order, so the LAST fill on the row is what a user sees.
+            Assert.That(fills[1].Brush, Is.EqualTo(Brushes.Red),
+                        "the failure bar was painted over by the prompt sharing its row");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// The third place the gutter offset is needed, after the pointer maths and the column count:
+    /// the IME candidate window is positioned in the same space the render shifts the grid within.
+    /// </summary>
+    [AvaloniaTest]
+    public void The_ime_cursor_rectangle_clears_the_gutter()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var client = ImeClient(view);
+            Assert.That(client, Is.Not.Null, "the view handed out no IME client");
+
+            view.GutterWidth = 0;
+            var bare = client.CursorRectangle.X;
+
+            view.GutterWidth = 12;
+            var shifted = client.CursorRectangle.X;
+
+            Assert.That(shifted - bare, Is.EqualTo(12).Within(0.01),
+                        "the composition window sits GutterWidth px left of the caret");
         }
         finally { window.Close(); }
     }

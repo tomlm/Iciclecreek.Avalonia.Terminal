@@ -80,16 +80,43 @@ public class SizedTextRenderingTests
         finally { window.Close(); }
     }
 
+    /// <summary>
+    /// A fractional block is always s=1, so every cell it claims is one column wide and carries the
+    /// SGR in force when it was printed. Text in FRONT of it, in the same SGR, is therefore the case
+    /// that discriminates: the row pass collects width-1 cells by attribute, and a collector that
+    /// does not stop at the run boundary walks straight through it and draws the whole line at base
+    /// size. Written at column 0 this passes either way, which is why it used to be.
+    /// </summary>
     [AvaloniaTest]
     public void A_fractional_scale_draws_small()
     {
         var (view, window) = Realised();
         try
         {
-            view.Terminal.Write($"{Esc}]66;n=1:d=2;h{St}");
+            view.Terminal.Write($"small: {Esc}]66;n=1:d=2;h{St}");
             var scaled = ScaledGlyphs(view).Where(g => g.ScaleX is > 0.4 and < 0.6).ToList();
 
             Assert.That(scaled, Is.Not.Empty, "no glyph drew at 1/2x");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// The same boundary, the other way round: the text in front of the block must still be drawn,
+    /// and at base size. Stopping the run collector must SPLIT the line, not swallow the label.
+    /// </summary>
+    [AvaloniaTest]
+    public void The_text_in_front_of_a_block_still_draws_at_base_size()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write($"small: {Esc}]66;n=1:d=2;h{St}");
+            var label = ScaledGlyphs(view)
+                .Where(g => g.ScaleX > 0.9 && g.Glyphs.GlyphRun is { } run
+                            && run.Characters.ToString()!.Contains("small"));
+
+            Assert.That(label, Is.Not.Empty, "the label in front of the block was lost");
         }
         finally { window.Close(); }
     }
@@ -157,6 +184,57 @@ public class SizedTextRenderingTests
             Assert.That(zDraws.Count(g => g.ScaleX > 1.5), Is.EqualTo(1), "the block glyph drew more or less than once");
             Assert.That(zDraws.Count(g => g.ScaleX < 1.5), Is.EqualTo(0),
                 "the Z also drew at base scale — the normal pass did not skip the block");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A block whose anchor has scrolled above the top of the viewport must be CLIPPED, not lost.
+    /// The rows it covers are blank in the buffer — SkipCellsCoveredFromAbove steered text around
+    /// them — so if the deferred pass is fed only from rows inside the viewport, scrolling one line
+    /// through any output holding a tall heading blanks the heading.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_tall_block_anchored_above_the_viewport_still_draws()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write($"{Esc}]66;s=2;H{St}");
+
+            // Park on the last row and feed a newline: the screen scrolls by one, so the block's
+            // anchor is now the row immediately ABOVE the viewport and only its lower half is on
+            // screen.
+            view.Terminal.Write($"{Esc}[{view.Terminal.Rows};1H\n");
+
+            Assert.That(view.Terminal.Buffer.ViewportY, Is.EqualTo(1), "the buffer did not scroll");
+            Assert.That(ScaledGlyphs(view).Count(g => g.ScaleX > 1.5), Is.EqualTo(1),
+                "the block vanished rather than being clipped to the top of the viewport");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// The deferred pass is the only thing that paints inside a run — the row pass skipped every
+    /// column of it — so a space's background is this pass's to draw. Skipping the cell outright
+    /// left an unpainted notch between the words of a coloured heading.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_space_inside_a_block_keeps_its_background()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            // w=0, so each grapheme is its own block: 'A', ' ', 'B', three of them in red.
+            view.Terminal.Write($"{Esc}[41m{Esc}]66;s=2;A B{St}{Esc}[0m");
+
+            var reds = Flatten(Capture(view))
+                .Where(d => d.Drawing is GeometryDrawing { Brush: ISolidColorBrush b }
+                            && b.Color.R > 100 && b.Color.G < 50)
+                .ToList();
+
+            Assert.That(reds.Count, Is.EqualTo(3),
+                "the space's own block went unfilled — the heading renders with a notch in it");
         }
         finally { window.Close(); }
     }
