@@ -13,7 +13,7 @@ using System.Threading.Tasks;
 
 namespace Iciclecreek.Terminal
 {
-    public class TerminalControl : TemplatedControl
+    public class TerminalControl : TemplatedControl, IDisposable
     {
         private TerminalView? _terminalView;
         private ScrollBar? _scrollBar;
@@ -234,6 +234,24 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
         /// </summary>
+        /// <summary>
+        /// Releases the terminal behind this control, and the process with it.
+        /// </summary>
+        /// <remarks>
+        /// Forwards to the inner view, which owns everything. Safe before the template has been
+        /// applied, when there is no view yet, and safe to call twice.
+        ///
+        /// Explicit rather than driven by a lifecycle hook, for the reason
+        /// <see cref="TerminalView.Dispose"/> gives: detaching from the logical tree is how this
+        /// control is MOVED, not how it ends, so tearing down there would kill a terminal being
+        /// re-parented between panels.
+        /// </remarks>
+        public void Dispose()
+        {
+            _terminalView?.Dispose();
+            GC.SuppressFinalize(this);
+        }
+
         public XTerm.Terminal Terminal => _terminalView!.Terminal;
 
         /// <inheritdoc cref="TerminalView.InputSent"/>

@@ -20,7 +20,7 @@ namespace Iciclecreek.Terminal
     /// A "native" Window that contains a TerminalControl and automatically handles window events
     /// from the terminal (title changes, window manipulation commands, etc.).
     /// </summary>
-    public class TerminalWindow : Window
+    public class TerminalWindow : Window, IDisposable
     {
         private TerminalControl? _terminalControl;
         private bool _restoringFocus;
@@ -781,6 +781,35 @@ namespace Iciclecreek.Terminal
             {
                 _restoringFocus = false;
             }
+        }
+
+        /// <summary>
+        /// Releases the terminal behind this window, and the process with it.
+        /// </summary>
+        /// <remarks>
+        /// Forwards to the control, which forwards to the view. Present because the wrappers owe the
+        /// view's surface -- a host holding a TerminalWindow should not have to reach through two
+        /// layers to release what it created -- and because closing is not the only way a window's
+        /// life can end.
+        ///
+        /// Idempotent, so calling it and then closing, or closing twice, costs nothing.
+        /// </remarks>
+        public void Dispose()
+        {
+            _terminalControl?.Dispose();
+            GC.SuppressFinalize(this);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            base.OnClosed(e);
+
+            // A closed window is finished, and that is the one lifecycle event in this repository
+            // which unambiguously means teardown. Detaching from the logical tree does not: it is
+            // how a view gets MOVED between panels, which is why disposal is explicit everywhere
+            // else. A window owns the control it built, so this is where the emulator behind it is
+            // released rather than left holding its parser subscriptions.
+            Dispose();
         }
 
         protected override void OnUnloaded(RoutedEventArgs e)

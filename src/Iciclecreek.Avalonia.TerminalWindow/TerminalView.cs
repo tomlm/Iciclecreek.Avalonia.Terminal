@@ -30,7 +30,7 @@ using XT = global::XTerm;
 namespace Iciclecreek.Terminal
 {
 
-    public class TerminalView : Control, ICustomHitTest
+    public class TerminalView : Control, ICustomHitTest, IDisposable
     {
         /// <summary>
         /// Avalonia hit-tests what a control actually DREW, not the rectangle it occupies — the same
@@ -2275,26 +2275,69 @@ namespace Iciclecreek.Terminal
         /// </summary>
         public void EndReparent() => _suppressCleanupOnDetach = false;
 
-        protected override void OnDetachedFromLogicalTree(LogicalTreeAttachmentEventArgs e)
+        /// <summary>
+        /// Whether <see cref="Dispose"/> has run. A disposed view stops taking part in the logical
+        /// tree rather than throwing from it — see <see cref="Dispose"/> for why.
+        /// </summary>
+        private bool _disposed;
+
+        /// <summary>
+        /// Releases the emulator, the process behind this view, and everything held with them.
+        /// </summary>
+        /// <remarks>
+        /// <para>Explicit, and deliberately not wired to <see cref="OnDetachedFromLogicalTree"/>.
+        /// Detach is not the end of a view's life here: this control supports being moved between
+        /// panels, which is what <see cref="BeginReparent"/> exists for, and a view is also detached
+        /// and re-attached during ordinary initialisation. Disposing on detach would kill a terminal
+        /// that was only being moved. So whoever owns the view's lifetime calls this.</para>
+        /// <para><c>XTerm.Terminal</c> holds parser subscriptions and event handlers that outlive
+        /// every view that made one, which is what this is for. The pty, the cancellation source,
+        /// the atomic-update timer and the cached bitmaps were already being released on detach;
+        /// the emulator never was.</para>
+        /// <para>Re-attaching a disposed view is a NO-OP rather than an exception. Avalonia raises
+        /// logical-tree notifications during teardown in an order the application does not fully
+        /// control, and throwing from a lifecycle hook takes down the app for what is at worst a
+        /// view that will not paint. The guards below match the ones already there for a view whose
+        /// emulator does not exist yet, which is the same shape of problem from the other end.</para>
+        /// </remarks>
+        public void Dispose()
         {
-            base.OnDetachedFromLogicalTree(e);
-
-            // Mirror of the guard in OnAttachedToLogicalTree, which already notes that _terminal is null
-            // during initial attachment because OnInitialized has not fired yet. Attachment is NOTIFIED in
-            // that window, so a handler that re-parents the view on attach detaches it while the emulator
-            // still does not exist — and every unsubscribe below then throws.
-            //
-            // CleanupProcess still runs: a view can have been handed a connection through AttachConnection
-            // without ever having been initialised, and that connection still has to be let go.
-            if (_terminal == null)
-            {
-                if (!_suppressCleanupOnDetach)
-                    CleanupProcess();
+            if (_disposed)
                 return;
-            }
 
-            // Against the remembered instance, not _terminal.Buffer: detaching while a full-screen app has
-            // the alternate buffer active would otherwise unsubscribe from the wrong object.
+            _disposed = true;
+
+            UnsubscribeTerminalEvents();
+
+            _atomicUpdateTimeout?.Dispose();
+            _atomicUpdateTimeout = null;
+            _atomicUpdate = false;
+
+            // Takes the pty, the cancellation source and the cached bitmaps with it. An ATTACHED
+            // connection is still left alone, for the reason CleanupProcess gives: it belongs to
+            // whoever attached it, and disposing it would stop a process this view does not own.
+            CleanupProcess();
+
+            _terminal?.Dispose();
+
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Drops every handler this view put on the emulator.
+        /// </summary>
+        /// <remarks>
+        /// Shared by detach and by <see cref="Dispose"/>, because they need exactly the same list and
+        /// a second copy of it is a list that goes stale. Detach unsubscribes so a re-attached view
+        /// can subscribe again; Dispose unsubscribes because there will be no re-attach.
+        /// </remarks>
+        private void UnsubscribeTerminalEvents()
+        {
+            if (_terminal == null)
+                return;
+
+            // Against the remembered instance, not _terminal.Buffer: unsubscribing while a full-screen
+            // app has the alternate buffer active would otherwise let go of the wrong object.
             if (_scrollbackBuffer != null)
                 _scrollbackBuffer.Trimmed -= OnBufferTrimmed;
 
@@ -2319,6 +2362,31 @@ namespace Iciclecreek.Terminal
             _terminal.AttentionRequested -= OnTerminalAttentionRequested;
             _terminal.PointerShapeChanged -= OnTerminalPointerShapeChanged;
             _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
+        }
+
+        protected override void OnDetachedFromLogicalTree(LogicalTreeAttachmentEventArgs e)
+        {
+            base.OnDetachedFromLogicalTree(e);
+
+            // Nothing left to unwind, and nothing that wants unwinding twice.
+            if (_disposed)
+                return;
+
+            // Mirror of the guard in OnAttachedToLogicalTree, which already notes that _terminal is null
+            // during initial attachment because OnInitialized has not fired yet. Attachment is NOTIFIED in
+            // that window, so a handler that re-parents the view on attach detaches it while the emulator
+            // still does not exist — and every unsubscribe below then throws.
+            //
+            // CleanupProcess still runs: a view can have been handed a connection through AttachConnection
+            // without ever having been initialised, and that connection still has to be let go.
+            if (_terminal == null)
+            {
+                if (!_suppressCleanupOnDetach)
+                    CleanupProcess();
+                return;
+            }
+
+            UnsubscribeTerminalEvents();
 
             // A view detached mid-update must not keep the gate closed or the timer alive. The
             // timeout would self-heal in 150 ms, but the timer holds the view for that window, and
@@ -2334,6 +2402,11 @@ namespace Iciclecreek.Terminal
         protected override void OnAttachedToLogicalTree(LogicalTreeAttachmentEventArgs e)
         {
             base.OnAttachedToLogicalTree(e);
+
+            // Re-attaching a disposed view does nothing rather than resurrecting handlers onto an
+            // emulator that has already let go of its own. See Dispose for why this is not a throw.
+            if (_disposed)
+                return;
 
             // _terminal is null during initial attachment (OnInitialized hasn't fired yet).
             // Only re-subscribe when re-parenting after a prior detach.
