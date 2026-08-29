@@ -1395,8 +1395,19 @@ namespace Iciclecreek.Terminal
             if (_terminal.PasteNotificationMode)
             {
                 var paste = await BuildPasteAsync(clipboard);
-                if (paste is not null)
-                    _terminal.Paste(paste);
+                if (paste is null)
+                    return;
+
+                // An announced paste REPLACES a selection too, exactly as the classic path below does:
+                // the user pressed Ctrl+V over selected text and expects it gone. Taken and sent before
+                // the announce triple, so the deletion reaches the shell ahead of whatever the
+                // application inserts when it redeems the token. Taking it is also what clears
+                // _terminal.Selection - skipping it left the replaced text still highlighted.
+                var deletion = TakeKeyboardSelectionDeletion();
+                if (deletion.Length > 0)
+                    await SendToPtyAsync(deletion);
+
+                _terminal.Paste(paste);
                 return;
             }
 

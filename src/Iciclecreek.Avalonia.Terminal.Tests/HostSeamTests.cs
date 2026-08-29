@@ -34,6 +34,22 @@ public class HostSeamTests
         return (control.View(), window);
     }
 
+    /// <summary>A realised view with a live connection, for the seams that write to the process.</summary>
+    private static (TerminalView view, RecordingConnection pty, Window window) LivePty()
+    {
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        var pty = new RecordingConnection();
+        view.AttachConnection(pty);
+        view.Focus();
+        return (view, pty, window);
+    }
+
+    private static void Press(TerminalView v, Key k, KeyModifiers m)
+        => v.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = k, KeyModifiers = m });
+
     private static string B64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
 
     /// <summary>
@@ -333,6 +349,45 @@ public class HostSeamTests
             Dispatcher.UIThread.RunJobs();
 
             Assert.That(responses, Is.Empty);
+        }
+        finally { window.Close(); }
+    }
+
+    // ---- paste ------------------------------------------------------------------------------
+
+    /// <summary>
+    /// An announced (mode 5522) paste still REPLACES a keyboard selection. The branch used to
+    /// return straight after <c>Terminal.Paste</c>, so the selected text was neither deleted nor
+    /// deselected: the line read "echo hello world&lt;pasted&gt;" with "world" still highlighted.
+    /// </summary>
+    [AvaloniaTest]
+    public async Task An_announced_paste_still_replaces_the_selection()
+    {
+        var (view, pty, window) = LivePty();
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            await clipboard.SetTextAsync("PASTED");
+
+            view.Terminal.Write("echo hello world");
+            view.Terminal.Write($"{Esc}[?5522h");
+            Assert.That(view.Terminal.PasteNotificationMode, Is.True, "sanity: the application announced");
+
+            for (var i = 0; i < 5; i++)
+                Press(view, Key.Left, KeyModifiers.Shift);
+            await Task.Delay(120);
+            Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("world"), "sanity");
+
+            var backspace = view.Terminal.GenerateKeyInput(XT.Input.Key.Backspace, XT.Input.KeyModifiers.None);
+            await view.PasteAsync();
+            await Task.Delay(200);
+
+            Assert.That(view.Terminal.Selection.HasSelection, Is.False,
+                "the selection has to go, or the replaced text stays highlighted over the new one");
+            Assert.That(pty.Written, Does.StartWith(string.Concat(Enumerable.Repeat(backspace, 5))),
+                "the deletion reaches the shell BEFORE the announce, so the insertion lands where the selection was");
+            Assert.That(pty.Written, Does.Contain("5522;type=read:status=OK"),
+                "and the paste is still announced rather than typed");
         }
         finally { window.Close(); }
     }
