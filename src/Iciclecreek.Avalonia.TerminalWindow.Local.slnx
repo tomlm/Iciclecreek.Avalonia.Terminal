@@ -7,10 +7,13 @@
   it deliberately holds nothing outside this repository. A project path pointing at a sibling
   checkout would fail on any machine that does not have one, starting with the build agents.
 
-  The reference itself is conditional and lives in Iciclecreek.Avalonia.Terminal.csproj: a sibling
-  XTerm.NET is used when present, and the published package otherwise. So a local build already
-  picks up emulator changes without this file. It exists so the emulator's SOURCE is loaded in the
-  same IDE session, which is what makes stepping into it work.
+  The reference itself is conditional and lives in Iciclecreek.Avalonia.Terminal.csproj, and THIS
+  FILE is what selects it: the csproj reads the name of the solution driving the build, so opening
+  this one swaps the XTerm.NET package reference for the sibling project. Opening the other
+  solution, or building the project directly as the agents do, gets the package. Having a
+  checkout on disk no longer changes anyone's build on its own.
+
+  Loading the emulator's SOURCE here is the other half, and what makes stepping into it work.
 -->
 <Solution>
   <Folder Name="/XTerm.NET/">
