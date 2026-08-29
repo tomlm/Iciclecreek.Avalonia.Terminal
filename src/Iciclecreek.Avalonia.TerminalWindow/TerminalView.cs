@@ -4514,6 +4514,9 @@ namespace Iciclecreek.Terminal
 
             var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
             _terminal.Options.CellWidthPixels = Math.Max(1, (int)Math.Round(_charWidth * scale));
+            // The scale rides beside the pixel metrics it produced: iTerm2's ReportCellSize
+            // speaks points, and the emulator divides by this to answer it.
+            _terminal.Options.DisplayScale = scale;
             _terminal.Options.CellHeightPixels = Math.Max(1, (int)Math.Round(_charHeight * scale));
         }
 
