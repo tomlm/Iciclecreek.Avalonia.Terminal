@@ -3903,18 +3903,47 @@ namespace Iciclecreek.Terminal
         // loop - the terminal shows no further output for the rest of its life.
 
         /// <summary>
+        /// Whether an OSC 52 / Kitty 5522 selection target names the one clipboard a host has.
+        /// </summary>
+        /// <remarks>
+        /// <c>c</c> is the clipboard, and <c>s</c> ("select") is what xterm defaults an empty Pc to
+        /// (<c>s0</c>) — both mean the system clipboard here. The primary and secondary selections
+        /// (<c>p</c>, <c>q</c>) and the cut buffers (<c>0</c>-<c>7</c>) are DECLINED rather than
+        /// aliased onto it: Avalonia has no primary-selection API, and an X11-era program that writes
+        /// primary on every selection change would otherwise replace the user's real clipboard every
+        /// time they dragged over some text.
+        /// </remarks>
+        private static bool IsClipboardTarget(string target)
+            => target.Contains('c') || target.Contains('s');
+
+        /// <summary>
         /// OSC 52 / Kitty OSC 5522 write: the program put something on the clipboard. Only text
         /// is forwarded — the one thing every platform clipboard can hold — and empty text is
         /// the protocol's clear idiom, honoured with an actual clear.
         /// </summary>
         private void OnTerminalClipboardWriteRequested(object? sender, XT.Events.TerminalEvents.ClipboardWriteEventArgs e)
         {
-            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+            if (!IsClipboardTarget(e.Target))
                 return;
 
-            // Empty text is the protocol's clear idiom; both halves are read here, before the hop,
-            // because the args belong to the write that raised them.
-            var text = e.Data.Length == 0 ? string.Empty : e.Text;
+            // The WHOLE transfer is searched for the text, not just Formats[0] (which is all
+            // e.MimeType and e.Data are). A Kitty 5522 write carries its formats in transmission
+            // order, so an image/png that led used to make this return and drop the text/plain
+            // behind it. text/plain is preferred over any other text/* for the same reason e.Text
+            // is not used here: e.Text answers with the FIRST text/*, so a transfer leading with an
+            // empty text/html read as the clear idiom and wiped the clipboard the text/plain behind
+            // it was about to fill.
+            var chosen = -1;
+            for (var i = 0; i < e.Formats.Count; i++)
+            {
+                if (e.Formats[i].MimeType == "text/plain") { chosen = i; break; }
+                if (chosen < 0 && e.Formats[i].MimeType.StartsWith("text/", StringComparison.Ordinal))
+                    chosen = i;
+            }
+            if (chosen < 0)
+                return;   // nothing a platform clipboard can hold as text; the transfer is declined whole
+
+            var text = Encoding.UTF8.GetString(e.Formats[chosen].Data);
             Dispatcher.UIThread.Post(() => _ = WriteToClipboardAsync(text));
         }
 
@@ -3957,7 +3986,7 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void OnTerminalClipboardReadRequested(object? sender, XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
-            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal) || !IsClipboardTarget(e.Target))
                 return;   // declined: OSC 52 stays silent, 5522 counts the mime unavailable
 
             e.Defer();

@@ -36,6 +36,21 @@ public class HostSeamTests
 
     private static string B64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
 
+    /// <summary>
+    /// A complete Kitty OSC 5522 write transfer: the opener, one wdata packet per format in the
+    /// order given, and the empty wdata that commits it. The order is the point — the emulator
+    /// hands the formats to the host in transmission order.
+    /// </summary>
+    private static string KittyWrite(params (string Mime, string Payload)[] formats)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"{Esc}]5522;type=write{St}");
+        foreach (var (mime, payload) in formats)
+            sb.Append($"{Esc}]5522;type=wdata:mime={B64(mime)};{B64(payload)}{St}");
+        sb.Append($"{Esc}]5522;type=wdata{St}");
+        return sb.ToString();
+    }
+
     // ---- notifications --------------------------------------------------------------------
 
     [AvaloniaTest]
@@ -196,6 +211,90 @@ public class HostSeamTests
             var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
             var text = clipboard.TryGetTextAsync().GetAwaiter().GetResult();
             Assert.That(text, Is.EqualTo("from the program"));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// Invalid base64 is the protocol's clear idiom, and it has to stay one — but only for a
+    /// transfer whose text really is empty.
+    /// </summary>
+    [AvaloniaTest]
+    public void An_OSC52_write_of_nothing_clears_the_clipboard()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            clipboard.SetTextAsync("something").GetAwaiter().GetResult();
+
+            view.Terminal.Write($"{Esc}]52;c;!!not base64!!{Bel}");
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(clipboard.TryGetTextAsync().GetAwaiter().GetResult(), Is.Null.Or.Empty);
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A multi-format 5522 write is searched for its text rather than judged by Formats[0]. A
+    /// transfer that leads with image/png used to be dropped whole, taking the text/plain behind
+    /// it with it.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_transfer_leading_with_an_image_still_yields_its_text()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write(KittyWrite(("image/png", "PNGBYTES"), ("text/plain", "the text")));
+            Dispatcher.UIThread.RunJobs();
+
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            Assert.That(clipboard.TryGetTextAsync().GetAwaiter().GetResult(), Is.EqualTo("the text"));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// An empty format ahead of a full one is not the clear idiom. This transfer used to test the
+    /// empty text/html and CLEAR the user's clipboard, dropping the text/plain that followed.
+    /// </summary>
+    [AvaloniaTest]
+    public void An_empty_leading_format_does_not_clear_the_clipboard()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            clipboard.SetTextAsync("previous").GetAwaiter().GetResult();
+
+            view.Terminal.Write(KittyWrite(("text/html", ""), ("text/plain", "hello")));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(clipboard.TryGetTextAsync().GetAwaiter().GetResult(), Is.EqualTo("hello"));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A primary-selection write is DECLINED, not aliased onto the system clipboard. X11-era
+    /// programs emit one on every selection change, so aliasing meant dragging over text in one
+    /// program replaced whatever the user had copied in another.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_primary_selection_write_leaves_the_clipboard_alone()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            clipboard.SetTextAsync("the user's copy").GetAwaiter().GetResult();
+
+            view.Terminal.Write($"{Esc}]52;p;{B64("a drag-selection")}{Bel}");
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(clipboard.TryGetTextAsync().GetAwaiter().GetResult(), Is.EqualTo("the user's copy"));
         }
         finally { window.Close(); }
     }
