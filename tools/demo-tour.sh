@@ -8,7 +8,15 @@ ESC=$(printf '\033')
 BEL=$(printf '\007')
 ST="$ESC"'\'
 
-say() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+FIRST_STEP=1
+say() {
+    if [ "$FIRST_STEP" = 1 ]; then FIRST_STEP=0; else
+        printf '\n\033[2m-- press any key for the next step --\033[0m'
+        IFS= read -rs -n 1 < /dev/tty
+        printf '\r\033[K'
+    fi
+    printf '\n\033[1m== %s ==\033[0m\n' "$1"
+}
 pause() { sleep "${1:-1.5}"; }
 
 # Send a probe and print whatever the terminal answers, made visible.
