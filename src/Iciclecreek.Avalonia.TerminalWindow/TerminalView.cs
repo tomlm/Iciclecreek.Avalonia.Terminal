@@ -5312,11 +5312,37 @@ namespace Iciclecreek.Terminal
                 return;
 
             var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
-            _terminal.Options.CellWidthPixels = Math.Max(1, (int)Math.Round(_charWidth * scale));
+            var cellWidth = Math.Max(1, (int)Math.Round(_charWidth * scale));
+            var cellHeight = Math.Max(1, (int)Math.Round(_charHeight * scale));
+
             // The scale rides beside the pixel metrics it produced: iTerm2's ReportCellSize
-            // speaks points, and the emulator divides by this to answer it.
+            // speaks points, and the emulator divides by this to answer it. Set unconditionally,
+            // because it is an answer to a query rather than a notification -- there is nobody to
+            // over-notify by keeping it current.
             _terminal.Options.DisplayScale = scale;
-            _terminal.Options.CellHeightPixels = Math.Max(1, (int)Math.Round(_charHeight * scale));
+
+            // Nothing moved, so nothing to say. This runs from UpdateTextMetrics, which
+            // MeasureOverride calls on EVERY layout pass -- reporting unconditionally below would
+            // send an application an in-band resize report every time the view was measured, which
+            // is a flood rather than a notification.
+            if (cellWidth == _terminal.Options.CellWidthPixels &&
+                cellHeight == _terminal.Options.CellHeightPixels)
+                return;
+
+            _terminal.Options.CellWidthPixels = cellWidth;
+            _terminal.Options.CellHeightPixels = cellHeight;
+
+            // The metrics and the report are two halves of one event, and only the first half was
+            // happening. Resize covers a grid that changed shape; this covers the case it cannot
+            // see -- the pixel size of the text area changing while the grid does not. A DPI
+            // switch from dragging the window to another monitor, or a font change that alters the
+            // cell box, leaves the terminal 80x24 while every pixel dimension the application was
+            // told about becomes wrong, and anything sizing images or Sixel output from the
+            // reported geometry goes on drawing at the old scale.
+            //
+            // Unconditional by design: the emulator drops it unless an application asked for mode
+            // 2048, which is what its own documentation says to rely on rather than guessing here.
+            _terminal.NotifyTextAreaPixelsChanged();
         }
 
         /// <summary>
