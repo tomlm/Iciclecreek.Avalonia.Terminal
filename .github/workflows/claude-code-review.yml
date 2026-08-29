@@ -48,6 +48,12 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Temporary, for diagnosis. Every run of this workflow has failed since it was added,
+          # with `Claude execution failed: result is_error:true` and nothing else -- the SDK
+          # reports 512ms, one turn and $0, so the model is never reached, and the action redacts
+          # the reason from both the job log and the check annotations. This is the switch that
+          # prints it. Remove once the cause is known and fixed.
+          show_full_output: true
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'

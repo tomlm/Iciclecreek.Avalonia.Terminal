@@ -14,6 +14,41 @@ public partial class MainWindow : Window
         InitializeComponent();
     }
 
+    /// <summary>
+    /// The options that opt a demo terminal into every host-serviced feature. Reads are off by
+    /// default for good reason; the demo turns them on so the tour can show the round trip.
+    /// </summary>
+    private static XTerm.Options.TerminalOptions DemoOptions() => new()
+    {
+        KittyNotificationsEnabled = true,
+        PointerShapesEnabled = true,
+        ClipboardReadEnabled = true,
+        WindowOptions =
+        {
+            GetCellSizePixels = true,
+            RaiseWin = true,
+            RequestAttention = true,
+        },
+    };
+
+    /// <summary>
+    /// Makes the invisible features audible: notifications and attention requests have no
+    /// on-screen form of their own, so they print to the console the demo was launched from.
+    /// Run tools/demo-tour.sh inside any terminal window to exercise the lot.
+    /// </summary>
+    private static void WireHostSeams(global::Avalonia.Interactivity.Interactive terminalWindow)
+    {
+        terminalWindow.AddHandler(TerminalView.NotificationRequestedEvent, (_, e) =>
+        {
+            var n = e.Notification;
+            Console.WriteLine($"[demo] NOTIFICATION  title={n.Title ?? "-"}  body={n.Body ?? "-"}  " +
+                              $"text={n.Text}  id={n.Identifier ?? "-"}  urgency={n.Urgency?.ToString() ?? "-"}");
+        });
+
+        terminalWindow.AddHandler(TerminalView.AttentionRequestedEvent, (_, e) =>
+            Console.WriteLine($"[demo] ATTENTION  action={e.Action}"));
+    }
+
 
     // ---- ManagedTerminalWindow: hosted inside the WindowsPanel ----------------------------------
 
@@ -33,6 +68,8 @@ public partial class MainWindow : Window
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
                                           Random.Shared.Next(0, (int)this.Bounds.Height - maxHeight))
         };
+        terminalWindow.Options = DemoOptions();
+        WireHostSeams(terminalWindow);
         Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
         terminalWindow.Show(Windows);
     }
@@ -54,6 +91,8 @@ public partial class MainWindow : Window
             Height = 25 * FontSize,
             CloseOnProcessExit = true
         };
+        terminalWindow.Options = DemoOptions();
+        WireHostSeams(terminalWindow);
         Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
         terminalWindow.Show(Windows);
     }
@@ -76,6 +115,8 @@ public partial class MainWindow : Window
             Foreground = Avalonia.Media.Brushes.LightGray,
             CloseOnProcessExit = true
         };
+        terminalWindow.Options = DemoOptions();
+        WireHostSeams(terminalWindow);
         Demo.PtyTrace.Attach(terminalWindow, terminalWindow.Title ?? "terminal");
         terminalWindow.Show();
     }
@@ -99,6 +140,8 @@ public partial class MainWindow : Window
         };
 
         // Recording what the process writes is on by default here; set PTY_TRACE=0 to turn it off.
+        terminalWindow.Options = DemoOptions();
+        WireHostSeams(terminalWindow);
         var traceDir = Demo.PtyTrace.Attach(terminalWindow, command.Value.Process);
         if (traceDir != null)
             terminalWindow.Title += $"  [tracing → {traceDir}]";
@@ -180,6 +223,8 @@ public partial class MainWindow : Window
             Position = new PixelPoint(Random.Shared.Next(0, (int)this.Bounds.Width - maxWidth),
                                           Random.Shared.Next(0, (int)this.Bounds.Height - maxHeight))
         };
+        terminalWindow.Options = DemoOptions();
+        WireHostSeams(terminalWindow);
         Demo.PtyTrace.Attach(terminalWindow.Terminal, terminalWindow.Title ?? "managed");
         terminalWindow.Show(Windows);
     }
