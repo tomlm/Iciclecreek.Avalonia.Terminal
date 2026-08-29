@@ -113,6 +113,7 @@ public class HostSeamTests
         var (view, window) = Realised();
         try
         {
+            view.Terminal.Options.PointerShapesEnabled = true;
             var before = view.Cursor;
 
             view.Terminal.Write($"{Esc}]22;wait{Bel}");
@@ -132,6 +133,7 @@ public class HostSeamTests
         var (view, window) = Realised();
         try
         {
+            view.Terminal.Options.PointerShapesEnabled = true;
             var before = view.Cursor;
             view.Terminal.Write($"{Esc}]22;zoom-in{Bel}");
             Assert.That(view.Cursor, Is.EqualTo(before));

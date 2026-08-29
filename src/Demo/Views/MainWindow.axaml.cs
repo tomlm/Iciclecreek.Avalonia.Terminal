@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private static XTerm.Options.TerminalOptions DemoOptions() => new()
     {
         KittyNotificationsEnabled = true,
+        PointerShapesEnabled = true,
         ClipboardReadEnabled = true,
         WindowOptions =
         {
