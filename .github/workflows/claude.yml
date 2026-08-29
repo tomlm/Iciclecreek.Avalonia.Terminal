@@ -50,6 +50,10 @@ jobs:
           #
           # Without this, every dotnet invocation is refused and the run is useless on a .NET
           # repository: no build, no tests, so nothing it reports can have been verified.
+          #
+          # This workflow runs in TAG mode, which already grants Glob, Grep, LS, Read, the
+          # comment-update tool and the git add/commit/push/rm set before it reads claude_args
+          # (src/modes/tag/index.ts). So only the gh verbs and Task are added here.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowedTools "Bash(dotnet:*),Bash(gh pr edit:*),Bash(gh pr ready:*),Bash(gh pr view:*)"'
+          claude_args: '--allowedTools "Bash(dotnet:*),Bash(gh pr edit:*),Bash(gh pr ready:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Task"'

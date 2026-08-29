@@ -60,6 +60,22 @@ jobs:
           # Same gating as claude.yml: .claude/settings.json does not reach the Action, so a
           # reviewer without this cannot build or run the suite, and every finding it reports
           # is unverified reasoning about code it never executed.
+          #
+          # Unlike claude.yml, this workflow runs in AGENT mode -- it passes `prompt:` -- and
+          # agent mode adds NOTHING of its own (src/modes/agent/index.ts). Whatever is not named
+          # here does not exist for this run, down to Read.
+          #
+          # The seven gh rules are the /code-review:code-review command's own `allowed-tools:`
+          # frontmatter, restated because agent mode does not read it as a grant. Read/Glob/Grep
+          # are the base tools tag mode would have supplied for free. Task is not optional: every
+          # step of that command begins "Launch a ... agent", six in total, so without it the
+          # review cannot start.
+          #
+          # The MCP entry is the one that fails silently rather than loudly. The action only
+          # starts the inline-comment server when a tool matching mcp__github_inline_comment
+          # appears in allowedTools (src/mcp/install-mcp-server.ts:150) -- omitting it does not
+          # deny a call, it removes the server, so the review posts nothing inline however much
+          # it found.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowedTools "Bash(dotnet:*),Bash(gh pr edit:*),Bash(gh pr ready:*),Bash(gh pr view:*)"'
+          claude_args: '--allowedTools "Bash(dotnet:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Read,Glob,Grep,Task,mcp__github_inline_comment__create_inline_comment"'
