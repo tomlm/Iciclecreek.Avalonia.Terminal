@@ -38,6 +38,7 @@ public class HostSeamTests
             view.NotificationRequested += (_, e) => seen = e;
 
             view.Terminal.Write($"{Esc}]9;Build finished{Bel}");
+            Dispatcher.UIThread.RunJobs();
 
             Assert.That(seen, Is.Not.Null);
             Assert.That(seen!.Notification.Text, Is.EqualTo("Build finished"));
@@ -59,6 +60,7 @@ public class HostSeamTests
             control.NotificationRequested += (_, _) => seen++;
 
             control.View().Terminal.Write($"{Esc}]9;hi{Bel}");
+            Dispatcher.UIThread.RunJobs();
             Assert.That(seen, Is.EqualTo(1));
         }
         finally { window.Close(); }
@@ -75,6 +77,7 @@ public class HostSeamTests
             view.NotificationRequested += (_, e) => seen = e;
 
             view.Terminal.Write($"{Esc}]99;i=b1:p=title;Deploy done{Esc}\\");
+            Dispatcher.UIThread.RunJobs();
 
             Assert.That(seen, Is.Not.Null);
             Assert.That(seen!.Notification.Title, Is.EqualTo("Deploy done"));
@@ -97,6 +100,7 @@ public class HostSeamTests
 
             view.Terminal.Write($"{Esc}]1337;RequestAttention=yes{Bel}");
             view.Terminal.Write($"{Esc}]1337;RequestAttention=no{Bel}");
+            Dispatcher.UIThread.RunJobs();
 
             // "no" reaches the application too: cancelling a pending request is ITS decision,
             // because it owns the dock or taskbar.
@@ -117,9 +121,11 @@ public class HostSeamTests
             var before = view.Cursor;
 
             view.Terminal.Write($"{Esc}]22;wait{Bel}");
+            Dispatcher.UIThread.RunJobs();
             Assert.That(view.Cursor, Is.Not.EqualTo(before), "the shape did not take");
 
             view.Terminal.Write($"{Esc}]22;{Bel}");
+            Dispatcher.UIThread.RunJobs();
             Assert.That(view.Cursor, Is.EqualTo(before), "the reset did not restore the default");
         }
         finally { window.Close(); }
@@ -136,6 +142,7 @@ public class HostSeamTests
             view.Terminal.Options.PointerShapesEnabled = true;
             var before = view.Cursor;
             view.Terminal.Write($"{Esc}]22;zoom-in{Bel}");
+            Dispatcher.UIThread.RunJobs();
             Assert.That(view.Cursor, Is.EqualTo(before));
         }
         finally { window.Close(); }
@@ -195,6 +202,36 @@ public class HostSeamTests
             Dispatcher.UIThread.RunJobs();
 
             Assert.That(responses, Is.Empty);
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// The regression that shipped and hung the demo: the REAL host drives Write on the pty
+    /// reader thread, and a seam handler touching the UI from there throws inside Write, killing
+    /// the read loop. Every handler must marshal; this drives Write exactly as the pty does.
+    /// </summary>
+    [AvaloniaTest]
+    public void Seam_handlers_survive_writes_from_a_background_thread()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Options.PointerShapesEnabled = true;
+            var notified = false;
+            view.NotificationRequested += (_, _) => notified = true;
+            var before = view.Cursor;
+
+            var writer = System.Threading.Tasks.Task.Run(() =>
+            {
+                view.Terminal.Write($"{Esc}]22;wait{Bel}");
+                view.Terminal.Write($"{Esc}]9;from the pty thread{Bel}");
+            });
+            Assert.That(writer.Wait(5000), Is.True, "Write hung or threw on the background thread");
+
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(notified, Is.True, "the notification never crossed to the UI thread");
+            Assert.That(view.Cursor, Is.Not.EqualTo(before), "the pointer shape never crossed to the UI thread");
         }
         finally { window.Close(); }
     }

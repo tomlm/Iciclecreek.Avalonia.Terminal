@@ -3888,13 +3888,16 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void OnTerminalClipboardWriteRequested(object? sender, XT.Events.TerminalEvents.ClipboardWriteEventArgs e)
         {
-            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-            if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
-                return;
-
-            // Fire and forget on purpose: the pty stream cannot wait for the OS clipboard, and
-            // a failed set has nobody to report to but the debugger.
-            _ = e.Data.Length == 0 ? clipboard.ClearAsync() : clipboard.SetTextAsync(e.Text);
+            // The args are captured; the visual tree and the clipboard are touched on the UI
+            // thread only. Fire and forget on purpose: the pty stream cannot wait for the OS
+            // clipboard, and a failed set has nobody to report to but the debugger.
+            Dispatcher.UIThread.Post(() =>
+            {
+                var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+                    return;
+                _ = e.Data.Length == 0 ? clipboard.ClearAsync() : clipboard.SetTextAsync(e.Text);
+            });
         }
 
         /// <summary>
@@ -3906,12 +3909,23 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void OnTerminalClipboardReadRequested(object? sender, XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
-            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
-            if (clipboard is null || !e.MimeType.StartsWith("text/", StringComparison.Ordinal))
+            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal))
                 return;   // declined: OSC 52 stays silent, 5522 counts the mime unavailable
 
+            // Defer() must happen NOW, on the terminal's thread, before this handler returns;
+            // the visual tree and the clipboard are then touched on the UI thread, and Respond
+            // is safe from there — it goes out the same way keyboard input does.
             e.Defer();
-            _ = RespondFromClipboardAsync(e, clipboard);
+            Dispatcher.UIThread.Post(() =>
+            {
+                var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+                if (clipboard is null)
+                {
+                    e.Respond((string?)null);
+                    return;
+                }
+                _ = RespondFromClipboardAsync(e, clipboard);
+            });
         }
 
         private static async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e, IClipboard clipboard)
@@ -3928,11 +3942,17 @@ namespace Iciclecreek.Terminal
             e.Respond(text);
         }
 
+        // Emulator events fire on whatever thread drives Write — the pty read loop here — and
+        // routed events, cursor changes and the visual tree are UI-thread-only, so every handler
+        // below marshals, exactly as the window-event handlers above always have. An exception
+        // escaping one of these kills the read loop, which presents as a hung terminal.
         private void OnTerminalNotificationReceived(object? sender, XT.Events.TerminalEvents.NotificationEventArgs e) =>
-            RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e));
+            Dispatcher.UIThread.Post(() =>
+                RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e)));
 
         private void OnTerminalAttentionRequested(object? sender, XT.Events.TerminalEvents.AttentionRequestedEventArgs e) =>
-            RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action));
+            Dispatcher.UIThread.Post(() =>
+                RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action)));
 
         /// <summary>
         /// Kitty OSC 22: the program chose a pointer shape. The link-hover hand keeps the last
@@ -3943,12 +3963,15 @@ namespace Iciclecreek.Terminal
         private void OnTerminalPointerShapeChanged(object? sender, XT.Events.TerminalEvents.PointerShapeEventArgs e)
         {
             var cursor = MapPointerShape(e.Shape);
-            if (_cursorOverridden)
+            Dispatcher.UIThread.Post(() =>
             {
-                _savedCursor = cursor;
-                return;
-            }
-            SetCurrentValue(CursorProperty, cursor);
+                if (_cursorOverridden)
+                {
+                    _savedCursor = cursor;
+                    return;
+                }
+                SetCurrentValue(CursorProperty, cursor);
+            });
         }
 
         /// <summary>
