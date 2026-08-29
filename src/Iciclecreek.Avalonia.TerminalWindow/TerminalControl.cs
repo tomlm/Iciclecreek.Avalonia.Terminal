@@ -430,6 +430,66 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.ClearScreen"/>
         public void ClearScreen() => _terminalView?.ClearScreen();
 
+        // ---- shell integration, forwarded so a host never has to reach for the inner view ------
+
+        /// <inheritdoc cref="TerminalView.GutterWidthProperty"/>
+        public static readonly StyledProperty<double> GutterWidthProperty =
+            AvaloniaProperty.Register<TerminalControl, double>(nameof(GutterWidth), 0.0);
+
+        /// <inheritdoc cref="TerminalView.GutterWidth"/>
+        public double GutterWidth
+        {
+            get => GetValue(GutterWidthProperty);
+            set => SetValue(GutterWidthProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.GutterPromptBrushProperty"/>
+        public static readonly StyledProperty<IBrush?> GutterPromptBrushProperty =
+            AvaloniaProperty.Register<TerminalControl, IBrush?>(nameof(GutterPromptBrush));
+
+        /// <inheritdoc cref="TerminalView.GutterPromptBrush"/>
+        public IBrush? GutterPromptBrush
+        {
+            get => GetValue(GutterPromptBrushProperty);
+            set => SetValue(GutterPromptBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.GutterSuccessBrushProperty"/>
+        public static readonly StyledProperty<IBrush?> GutterSuccessBrushProperty =
+            AvaloniaProperty.Register<TerminalControl, IBrush?>(nameof(GutterSuccessBrush));
+
+        /// <inheritdoc cref="TerminalView.GutterSuccessBrush"/>
+        public IBrush? GutterSuccessBrush
+        {
+            get => GetValue(GutterSuccessBrushProperty);
+            set => SetValue(GutterSuccessBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.GutterFailureBrushProperty"/>
+        public static readonly StyledProperty<IBrush?> GutterFailureBrushProperty =
+            AvaloniaProperty.Register<TerminalControl, IBrush?>(nameof(GutterFailureBrush));
+
+        /// <inheritdoc cref="TerminalView.GutterFailureBrush"/>
+        public IBrush? GutterFailureBrush
+        {
+            get => GetValue(GutterFailureBrushProperty);
+            set => SetValue(GutterFailureBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.ScrollToPreviousPrompt"/>
+        public bool ScrollToPreviousPrompt() => _terminalView?.ScrollToPreviousPrompt() ?? false;
+
+        /// <inheritdoc cref="TerminalView.ScrollToNextPrompt"/>
+        public bool ScrollToNextPrompt() => _terminalView?.ScrollToNextPrompt() ?? false;
+
+        /// <inheritdoc cref="TerminalView.SelectCommandOutput"/>
+        public bool SelectCommandOutput(int bufferRow) => _terminalView?.SelectCommandOutput(bufferRow) ?? false;
+
+        /// <inheritdoc cref="TerminalView.VisibleMarks"/>
+        public IReadOnlyList<TerminalView.VisibleMark> VisibleMarks
+            => _terminalView?.VisibleMarks ?? Array.Empty<TerminalView.VisibleMark>();
+
+
         /// <inheritdoc cref="TerminalView.Refresh"/>
         public void Refresh() => _terminalView?.Refresh();
 

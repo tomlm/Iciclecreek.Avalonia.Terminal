@@ -250,6 +250,66 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.ClearScreen"/>
         public void ClearScreen() => _terminalControl?.ClearScreen();
 
+        // ---- shell integration, forwarded so a host never has to reach for the inner view ------
+
+        /// <inheritdoc cref="TerminalView.GutterWidthProperty"/>
+        public static readonly StyledProperty<double> GutterWidthProperty =
+            AvaloniaProperty.Register<TerminalWindow, double>(nameof(GutterWidth), 0.0);
+
+        /// <inheritdoc cref="TerminalView.GutterWidth"/>
+        public double GutterWidth
+        {
+            get => GetValue(GutterWidthProperty);
+            set => SetValue(GutterWidthProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.GutterPromptBrushProperty"/>
+        public static readonly StyledProperty<IBrush?> GutterPromptBrushProperty =
+            AvaloniaProperty.Register<TerminalWindow, IBrush?>(nameof(GutterPromptBrush));
+
+        /// <inheritdoc cref="TerminalView.GutterPromptBrush"/>
+        public IBrush? GutterPromptBrush
+        {
+            get => GetValue(GutterPromptBrushProperty);
+            set => SetValue(GutterPromptBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.GutterSuccessBrushProperty"/>
+        public static readonly StyledProperty<IBrush?> GutterSuccessBrushProperty =
+            AvaloniaProperty.Register<TerminalWindow, IBrush?>(nameof(GutterSuccessBrush));
+
+        /// <inheritdoc cref="TerminalView.GutterSuccessBrush"/>
+        public IBrush? GutterSuccessBrush
+        {
+            get => GetValue(GutterSuccessBrushProperty);
+            set => SetValue(GutterSuccessBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.GutterFailureBrushProperty"/>
+        public static readonly StyledProperty<IBrush?> GutterFailureBrushProperty =
+            AvaloniaProperty.Register<TerminalWindow, IBrush?>(nameof(GutterFailureBrush));
+
+        /// <inheritdoc cref="TerminalView.GutterFailureBrush"/>
+        public IBrush? GutterFailureBrush
+        {
+            get => GetValue(GutterFailureBrushProperty);
+            set => SetValue(GutterFailureBrushProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.ScrollToPreviousPrompt"/>
+        public bool ScrollToPreviousPrompt() => _terminalControl?.ScrollToPreviousPrompt() ?? false;
+
+        /// <inheritdoc cref="TerminalView.ScrollToNextPrompt"/>
+        public bool ScrollToNextPrompt() => _terminalControl?.ScrollToNextPrompt() ?? false;
+
+        /// <inheritdoc cref="TerminalView.SelectCommandOutput"/>
+        public bool SelectCommandOutput(int bufferRow) => _terminalControl?.SelectCommandOutput(bufferRow) ?? false;
+
+        /// <inheritdoc cref="TerminalView.VisibleMarks"/>
+        public IReadOnlyList<TerminalView.VisibleMark> VisibleMarks
+            => _terminalControl?.VisibleMarks ?? Array.Empty<TerminalView.VisibleMark>();
+
+
         /// <inheritdoc cref="TerminalView.Refresh"/>
         public void Refresh() => _terminalControl?.Refresh();
 
@@ -559,6 +619,10 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TemplatedControl.ForegroundProperty, this.GetObservable(ForegroundProperty));
             _terminalControl.Bind(TemplatedControl.BackgroundProperty, this.GetObservable(BackgroundProperty));
             _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
+            _terminalControl.Bind(TerminalControl.GutterWidthProperty, this.GetObservable(GutterWidthProperty));
+            _terminalControl.Bind(TerminalControl.GutterPromptBrushProperty, this.GetObservable(GutterPromptBrushProperty));
+            _terminalControl.Bind(TerminalControl.GutterSuccessBrushProperty, this.GetObservable(GutterSuccessBrushProperty));
+            _terminalControl.Bind(TerminalControl.GutterFailureBrushProperty, this.GetObservable(GutterFailureBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.StartingDirectoryProperty, this.GetObservable(StartingDirectoryProperty));
             _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));

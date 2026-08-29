@@ -61,6 +61,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="$(SiblingXTerm)" Condition="'$(UseSiblingXTerm)' == 'true'" />
-    <PackageReference Include="XTerm.NET" Version="2.0.0-rc001" Condition="'$(UseSiblingXTerm)' != 'true'" />
+    <PackageReference Include="XTerm.NET" Version="2.0.0-rc002" Condition="'$(UseSiblingXTerm)' != 'true'" />
   </ItemGroup>
 </Project>
