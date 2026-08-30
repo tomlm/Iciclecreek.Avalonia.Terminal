@@ -154,8 +154,7 @@ public class MouseAndSelectionTests
             Dispatcher.UIThread.RunJobs();
 
             Move(view, 40.0, 40.0);
-            Thread.Sleep(80);
-            var afterFirst = pty.Written.Length;
+            var afterFirst = AwaitOutput(pty).Length;
             Assert.That(afterFirst, Is.GreaterThan(0), "sanity: motion is being reported at all");
 
             // Four more events, all landing in the same cell.
@@ -181,13 +180,11 @@ public class MouseAndSelectionTests
             Dispatcher.UIThread.RunJobs();
 
             Move(view, 40.0, 40.0);
-            Thread.Sleep(80);
-            var afterFirst = pty.Written.Length;
+            var afterFirst = AwaitOutput(pty).Length;
 
             Move(view, 400.0, 200.0);
-            Thread.Sleep(120);
 
-            Assert.That(pty.Written.Length, Is.GreaterThan(afterFirst));
+            Assert.That(AwaitOutput(pty, afterFirst).Length, Is.GreaterThan(afterFirst));
         }
         finally { window.Close(); }
     }
@@ -208,9 +205,8 @@ public class MouseAndSelectionTests
             Dispatcher.UIThread.RunJobs();
 
             Move(view, 40.0, 40.0);             // same cell, now meaningful
-            Thread.Sleep(120);
 
-            Assert.That(pty.Written, Is.Not.Empty,
+            Assert.That(AwaitOutput(pty), Is.Not.Empty,
                 "the first motion after tracking is enabled must reach the application");
         }
         finally { window.Close(); }
@@ -226,14 +222,12 @@ public class MouseAndSelectionTests
             Dispatcher.UIThread.RunJobs();
 
             Move(view, 40.0, 40.0);
-            Thread.Sleep(80);
-            var afterPlain = pty.Written.Length;
+            var afterPlain = AwaitOutput(pty).Length;
             Assert.That(afterPlain, Is.GreaterThan(0), "sanity: the first move was reported");
 
             Move(view, 40.0, 40.0, KeyModifiers.Shift);
-            Thread.Sleep(120);
 
-            Assert.That(pty.Written.Length, Is.GreaterThan(afterPlain),
+            Assert.That(AwaitOutput(pty, afterPlain).Length, Is.GreaterThan(afterPlain),
                 "modifier state is part of the mouse report even when the cell is unchanged");
         }
         finally { window.Close(); }
@@ -281,11 +275,33 @@ public class MouseAndSelectionTests
 
             var mark = pty.Written.Length;
             Wheel(view, 3.0, KeyModifiers.None);
-            Thread.Sleep(120);
 
-            Assert.That(pty.Written.Length, Is.GreaterThan(mark));
+            Assert.That(AwaitOutput(pty, mark).Length, Is.GreaterThan(mark));
         }
         finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// Waits until more than <paramref name="previous"/> bytes have been sent, then returns them.
+    /// </summary>
+    /// <remarks>
+    /// For assertions that expect OUTPUT. The send path is async and completes off the dispatcher, so
+    /// a fixed sleep is a bet on how fast the machine is -- and it is a bet that loses silently,
+    /// because "nothing has arrived yet" and "nothing was sent" look identical from here. It lost on
+    /// the macOS CI runner while passing on every developer machine it was written on.
+    ///
+    /// A test expecting NOTHING still uses a fixed wait, because there is no growth to wait for.
+    /// </remarks>
+    private static string AwaitOutput(RecordingConnection pty, int previous = 0)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && pty.Written.Length <= previous)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(10);
+        }
+
+        return pty.Written;
     }
 
     // ----------------------------------------------------------------- input
