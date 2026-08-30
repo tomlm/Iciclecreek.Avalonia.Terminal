@@ -191,6 +191,21 @@ namespace Iciclecreek.Avalonia.Terminal
         private const double DimOpacity = 0.4;
 
         /// <summary>
+        /// SGR 8 applied to a foreground that has already been through any inverse swap.
+        /// </summary>
+        /// <remarks>
+        /// <para>ALREADY SWAPPED is the whole contract, and the reason this is a step of its own
+        /// rather than part of resolving the colour. Inverse exchanges the two brushes, so a
+        /// foreground concealed before the swap comes back as a transparent BACKGROUND -- concealing
+        /// nothing, and punching a hole in the fill instead.</para>
+        /// <para>Transparent rather than "do not draw", because the run still has to occupy its
+        /// cells: the background is still painted, the cursor still lands on the right column, and a
+        /// copy still finds the characters. Concealed means unreadable, not absent.</para>
+        /// </remarks>
+        public static IBrush ApplyConceal(this BufferCell cell, IBrush swappedForeground)
+            => cell.Attributes.IsInvisible() ? Brushes.Transparent : swappedForeground;
+
+        /// <summary>
         /// The colour an underline is drawn in, or null when it follows the text.
         /// </summary>
         /// <remarks>

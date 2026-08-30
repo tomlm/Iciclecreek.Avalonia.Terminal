@@ -2555,12 +2555,30 @@ namespace Iciclecreek.Terminal
             if (CursorBlink && IsFocused)
             {
                 _cursorBlinkOn = !_cursorBlinkOn;
+
+                // Over the VIEWPORT, not over buffer rows 0..Rows.
+                //
+                // GetLine takes an absolute buffer row, so 0..Rows is the oldest scrollback the
+                // terminal has ever held -- lines nobody is looking at. On a fresh terminal the two
+                // ranges coincide, which is why this looked right; the moment anything scrolls off
+                // the top they diverge completely, and SGR 5 text stops blinking for the rest of the
+                // session because the lines actually on screen keep their cached runs.
+                var top = _terminal.Buffer.ViewportY;
                 for (int y = 0; y < _terminal.Rows; y++)
                 {
-                    var line = _terminal.Buffer.GetLine(y);
-                    if (line != null && line.Any(cell => cell.Attributes.IsBlink()))
+                    var line = _terminal.Buffer.GetLine(top + y);
+                    if (line == null)
+                        continue;
+
+                    // A plain loop rather than Any(): this runs twice a second over every visible
+                    // row, and the predicate closure was being allocated for each of them.
+                    for (int x = 0; x < line.Length; x++)
                     {
-                        line.Cache = null;
+                        if (line[x].Attributes.IsBlink())
+                        {
+                            line.Cache = null;
+                            break;
+                        }
                     }
                 }
 
@@ -3698,7 +3716,7 @@ namespace Iciclecreek.Terminal
             {
                 var point = e.GetPosition(this);
                 var col = PointerColumn(point.X);
-                var row = (int)(point.Y / _charHeight);
+                var row = PointerRow(point.Y);
 
                 // Any press hands selection back to the mouse — a later Shift+arrow re-anchors at the
                 // cursor rather than extending whatever the pointer just drew. FIRST, so it still runs
@@ -3825,7 +3843,7 @@ namespace Iciclecreek.Terminal
                 {
                     var releasePoint = e.GetPosition(this);
                     var releaseCol = PointerColumn(releasePoint.X);
-                    var releaseRow = (int)(releasePoint.Y / _charHeight);
+                    var releaseRow = PointerRow(releasePoint.Y);
                     var released = FindUrlAtColumn(_terminal.Buffer.ViewportY + releaseRow, releaseCol);
 
                     // Only fire if the pointer is still on the same url it was pressed on.
@@ -3861,7 +3879,7 @@ namespace Iciclecreek.Terminal
 
                 var point = e.GetPosition(this);
                 var col = PointerColumn(point.X);
-                var row = (int)(point.Y / _charHeight);
+                var row = PointerRow(point.Y);
 
                 var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties, e.InitialPressMouseButton);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
@@ -3886,7 +3904,7 @@ namespace Iciclecreek.Terminal
             {
                 var point = e.GetPosition(this);
                 var col = PointerColumn(point.X);
-                var row = (int)(point.Y / _charHeight);
+                var row = PointerRow(point.Y);
 
                 // If we're selecting, update the selection
                 if (_isSelecting)
@@ -3974,7 +3992,7 @@ namespace Iciclecreek.Terminal
 
                 var point = e.GetPosition(this);
                 var col = PointerColumn(point.X);
-                var row = (int)(point.Y / _charHeight);
+                var row = PointerRow(point.Y);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
 
                 var button = notches > 0 ? XT.Input.MouseButton.WheelUp : XT.Input.MouseButton.WheelDown;
@@ -6161,9 +6179,27 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private int PointerColumn(double x)
             => _charWidth > 0
-                // Clamped at zero: a pointer INSIDE the gutter is over no column, and a negative
-                // one would flow into selection and mouse reporting as an index.
-                ? Math.Max(0, (int)((x - Math.Max(0, GutterWidth)) / _charWidth))
+                // Clamped at BOTH ends. Zero because a pointer inside the gutter is over no column,
+                // and a negative one would flow into selection and mouse reporting as an index --
+                // and Cols - 1 because the control is wider than a whole number of cells, so the
+                // strip of padding at the right edge resolves to a column that does not exist. A
+                // click there reported a column past the last one to the application, and asked the
+                // selection for a cell off the end of the line.
+                ? Math.Clamp((int)((x - Math.Max(0, GutterWidth)) / _charWidth), 0, Math.Max(0, _terminal.Cols - 1))
+                : 0;
+
+        /// <summary>The row under a pointer at <paramref name="y"/>, clamped to the grid.</summary>
+        /// <remarks>
+        /// The counterpart to <see cref="PointerColumn"/>, and it did not exist -- every caller
+        /// divided by the row height and used the result unchecked. A pointer above the control gives
+        /// a NEGATIVE row and one below the last line gives a row past the end, and both reached the
+        /// selection and the application as if they were positions on screen. Both happen in ordinary
+        /// use: a drag that leaves the control at speed reports well outside it, and a capture keeps
+        /// delivering those events.
+        /// </remarks>
+        private int PointerRow(double y)
+            => _charHeight > 0
+                ? Math.Clamp((int)(y / _charHeight), 0, Math.Max(0, _terminal.Rows - 1))
                 : 0;
 
         /// <remarks>
@@ -6573,6 +6609,14 @@ namespace Iciclecreek.Terminal
                     (foreground, background, swapped) = (background, foreground, !swapped);
                 if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                     (foreground, background, swapped) = (background, foreground, !swapped);
+
+                // SGR 8. The emulator has recorded it since the parser was written and nothing here
+                // ever read it, so concealed text -- a password prompt that echoes, a spoiler --
+                // was drawn in full.
+                //
+                // Applied AFTER the swaps above -- see ApplyConceal, where the ordering is the
+                // substance of it rather than a detail.
+                foreground = cell.ApplyConceal(foreground);
 
                 var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                 var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
@@ -7424,6 +7468,15 @@ namespace Iciclecreek.Terminal
 
             int viewportLines = _terminal.Rows;
 
+            // The selection API takes a row relative to the LIVE scroll position -- it adds YDisp
+            // itself -- while the frame around this was composed against the viewportY the caller
+            // snapshotted. Output arriving mid-frame moves YDisp, and the highlight was then drawn
+            // over rows the text underneath it no longer occupied: a band of selection sitting one or
+            // two lines away from the selected words.
+            //
+            // Shifting by the difference asks about the snapshot's rows in the API's own terms.
+            int toLiveRows = viewportY - _terminal.Buffer.YDisp;
+
             for (int screenY = 0; screenY < viewportLines; screenY++)
             {
                 // Find cells that are selected in this row
@@ -7432,7 +7485,7 @@ namespace Iciclecreek.Terminal
 
                 for (int x = 0; x < _terminal.Cols; x++)
                 {
-                    if (_terminal.Selection.IsCellSelected(x, screenY))
+                    if (_terminal.Selection.IsCellSelected(x, screenY + toLiveRows))
                     {
                         if (!selectionStartX.HasValue)
                             selectionStartX = x;
