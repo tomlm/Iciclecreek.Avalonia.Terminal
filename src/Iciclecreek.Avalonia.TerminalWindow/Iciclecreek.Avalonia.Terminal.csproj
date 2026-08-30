@@ -41,7 +41,7 @@
          spans the pty layer and this control (the reader-handover of issue 123) cannot wait a
          package round-trip per iteration. -->
     <ProjectReference Include="$(MSBuildThisFileDirectory)../../../Porta.Pty/src/Porta.Pty/Porta.Pty.csproj" Condition="'$(SolutionName)' == 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
-    <PackageReference Include="Porta.Pty" Version="2.2.0" Condition="'$(SolutionName)' != 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
+    <PackageReference Include="Porta.Pty" Version="2.2.1" Condition="'$(SolutionName)' != 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
   </ItemGroup>
