@@ -2209,8 +2209,22 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void OnTerminalColorChanged(object? sender, EventArgs e)
         {
-            Dispatcher.UIThread.Post(() =>
+            // COALESCED, because the work is a walk of the whole scrollback and the trigger is one
+            // escape sequence. A program setting the sixteen ANSI colours on startup -- which is what
+            // every theme-setting shell profile does -- posted sixteen full-buffer walks, and a
+            // buffer holding ten thousand lines made that O(sequences x lines) of UI-thread time for
+            // an answer that is identical after the first.
+            //
+            // Only one is queued at a time, so the walk happens once for however many arrived.
+            if (_paletteWalkQueued)
+                return;
+
+            _paletteWalkQueued = true;
+
+            PostToHost(() =>
             {
+                _paletteWalkQueued = false;
+
                 if (_terminal == null)
                     return;
 
@@ -2224,6 +2238,9 @@ namespace Iciclecreek.Terminal
                 InvalidateVisual();
             });
         }
+
+        /// <summary>Whether a full-buffer cache walk is already waiting to run.</summary>
+        private volatile bool _paletteWalkQueued;
 
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
@@ -2266,6 +2283,18 @@ namespace Iciclecreek.Terminal
                 // Re-themed after the emulator was built, so the palette that answers OSC 10/11 has to move
                 // with it. AffectsRender already covers the repaint; this is the emulator's own copy.
                 SyncPaletteToBrushes();
+
+                // And the cached runs, which hold brushes resolved from the OLD default. A repaint
+                // replays them, so without this a re-theme changed the emulator's palette and left
+                // every line already on screen drawn in the previous colours until something else
+                // happened to invalidate it.
+                //
+                // SyncPaletteToBrushes covers the case it can: a solid brush becomes a palette entry,
+                // and OnTerminalColorChanged then drops the caches. A brush it cannot express as RGB
+                // -- a gradient, an image -- changes no palette entry, raises no colour change, and
+                // so dropped nothing at all. That is the gap, and it is why this is unconditional
+                // rather than only for the brushes that fail to convert.
+                InvalidateRunCaches();
             }
             else if (change.Property == CursorStyleProperty)
             {
@@ -5035,6 +5064,95 @@ namespace Iciclecreek.Terminal
         // exception here unwinds through Terminal.Write into the read loop's catch-all, which ends the
         // loop - the terminal shows no further output for the rest of its life.
 
+        /// <summary>Whether a run is nothing but blanks, and so has no ink to put down.</summary>
+        /// <remarks>
+        /// Spaces only, deliberately. A tab has already been expanded by the emulator, and anything
+        /// else that LOOKS blank -- a zero-width space, an ideographic space -- still occupies its
+        /// cell in a way a font may render, so it is left to draw.
+        /// </remarks>
+        private static bool IsBlankRun(string text)
+        {
+            for (var i = 0; i < text.Length; i++)
+            {
+                if (text[i] != ' ')
+                    return false;
+            }
+
+            return text.Length > 0;
+        }
+
+        /// <summary>Drops every cached run, so the next frame resolves its brushes again.</summary>
+        private void InvalidateRunCaches()
+        {
+            if (_terminal == null)
+                return;
+
+            for (int y = 0; y < _terminal.Buffer.Length; y++)
+            {
+                var line = _terminal.Buffer.GetLine(y);
+                if (line != null)
+                    line.Cache = null;
+            }
+
+            InvalidateVisual();
+        }
+
+        /// <summary>The most recent shape a program asked for; only the last one is applied.</summary>
+        private string? _pendingPointerShape;
+
+        /// <summary>Host callbacks waiting for the UI thread, and whether a drain is already queued.</summary>
+        private readonly List<Action> _pendingHostCallbacks = new();
+        private bool _hostDrainQueued;
+
+        /// <summary>
+        /// Runs <paramref name="callback"/> on the UI thread, sharing ONE dispatcher job with
+        /// everything else queued before the UI thread gets round to it.
+        /// </summary>
+        /// <remarks>
+        /// <para>These seams are raised from Terminal.Write on the pty reader thread, once per escape
+        /// sequence, and posting each one separately means a burst of sequences becomes a burst of
+        /// dispatcher entries -- each holding a closure, which holds its event args, which holds
+        /// whatever they carry. Measured: 0.9 MB of output pinning 86 MB of live heap, because the
+        /// reader can queue far faster than the UI thread drains.</para>
+        /// <para>Nothing is dropped. The callbacks still run, in order, and each still does exactly
+        /// what it did -- what changes is that N of them cost one dispatcher job instead of N, and
+        /// live in a list rather than N captured closures.</para>
+        /// <para>The flag is what makes it one job: a drain is queued only when none is pending, and
+        /// the next arrival joins the queue the pending one will read.</para>
+        /// </remarks>
+        private void PostToHost(Action callback)
+        {
+            bool needsDrain;
+            lock (_pendingHostCallbacks)
+            {
+                _pendingHostCallbacks.Add(callback);
+                needsDrain = !_hostDrainQueued;
+                _hostDrainQueued = true;
+            }
+
+            if (needsDrain)
+                Dispatcher.UIThread.Post(DrainHostCallbacks);
+        }
+
+        private void DrainHostCallbacks()
+        {
+            Action[] batch;
+            lock (_pendingHostCallbacks)
+            {
+                batch = _pendingHostCallbacks.ToArray();
+                _pendingHostCallbacks.Clear();
+                _hostDrainQueued = false;
+            }
+
+            foreach (var callback in batch)
+            {
+                // One failing callback must not swallow the rest of the batch. Separately posted,
+                // each of these was independent; batching them must not make them share a fate.
+                try { callback(); }
+                catch (Exception ex) { Debug.WriteLine($"[TerminalView] host callback failed: {ex.Message}"); }
+            }
+        }
+
         /// <summary>
         /// Whether an OSC 52 / Kitty 5522 selection target names the one clipboard a host has.
         /// </summary>
@@ -5146,10 +5264,10 @@ namespace Iciclecreek.Terminal
         }
 
         private void OnTerminalNotificationReceived(object? sender, XT.Events.TerminalEvents.NotificationEventArgs e) =>
-            Dispatcher.UIThread.Post(() => RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e)));
+            PostToHost(() => RaiseEvent(new TerminalNotificationEventArgs(NotificationRequestedEvent, e)));
 
         private void OnTerminalAttentionRequested(object? sender, XT.Events.TerminalEvents.AttentionRequestedEventArgs e) =>
-            Dispatcher.UIThread.Post(() => RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action)));
+            PostToHost(() => RaiseEvent(new TerminalAttentionEventArgs(AttentionRequestedEvent, e.Action)));
 
         /// <summary>
         /// Kitty OSC 22: the program chose a pointer shape. The link-hover hand keeps the last
@@ -5159,9 +5277,15 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void OnTerminalPointerShapeChanged(object? sender, XT.Events.TerminalEvents.PointerShapeEventArgs e)
         {
-            Dispatcher.UIThread.Post(() =>
+            // LAST ONE WINS, so a program cycling shapes queues one job rather than one per change.
+            // Unlike a notification, an intermediate pointer shape is not an event anybody missed:
+            // it is a state, and only the final value was ever going to be visible.
+            _pendingPointerShape = e.Shape;
+
+            PostToHost(() =>
             {
-                var cursor = MapPointerShape(e.Shape);
+                var shape = _pendingPointerShape;
+                var cursor = MapPointerShape(shape);
 
                 // A reset restores what the CONTROL had, not null. MapPointerShape(null) is null, and so
                 // is any name Avalonia has no cursor for, so restoring the mapped value would have made
@@ -6715,7 +6839,18 @@ namespace Iciclecreek.Terminal
 
                 if (fill is not null)
                     context.FillRectangle(fill, rect);
-                context.DrawText(formattedText, position);
+
+                // A run of blanks with no fill and no decoration has nothing to draw. Most of a
+                // terminal is exactly that -- the grid is blank to the right of every line -- and
+                // each of those runs was shaping a string of spaces and issuing a DrawText for it
+                // every frame. Spaces have no ink, so the call could only ever produce nothing.
+                //
+                // The DECORATION check is what makes it safe: an underline or a strikethrough on
+                // blanks is visible, and is drawn by hand below rather than by DrawText, so it has to
+                // survive this. So does a fill, which is handled above and is why swapped runs and
+                // coloured backgrounds are unaffected.
+                if (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null)
+                    context.DrawText(formattedText, position);
 
                 // Drawn on the BUILD path as well as the cached replay below. A line is painted here
                 // on the frame it changes and replayed afterwards, so wiring only the replay leaves
