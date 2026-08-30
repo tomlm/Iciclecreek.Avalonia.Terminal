@@ -139,6 +139,27 @@ public class KittyKeyboardTests
         return Since(pty, mark);
     }
 
+    /// <summary>
+    /// A mark taken past output the test EXPECTS, having waited for it to arrive.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart to <see cref="AwaitSince"/>, for the other shape of the same race. AwaitSince
+    /// waits for output the test is about to READ; this waits for output the test is about to step
+    /// OVER, so a slow send cannot leave it on the wrong side of the mark and be attributed to
+    /// whatever happens next.
+    /// </remarks>
+    private static int MarkPast(RecordingConnection pty, int previous)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && Settle(pty).Length <= previous)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(10);
+        }
+
+        return Mark(pty);
+    }
+
     [AvaloniaTest]
     public void A_negotiated_application_receives_CSI_u_rather_than_the_legacy_encoding()
     {
@@ -205,9 +226,20 @@ public class KittyKeyboardTests
         {
             // Flags that do NOT include reporting event types, so releases are not wanted.
             Negotiate(view, flags: 1);
+
+            var before = Mark(pty);
             Press(view, Key.Up, p: PhysicalKey.ArrowUp);
-            Dispatcher.UIThread.RunJobs();
-            var mark = Mark(pty);
+
+            // The PRESS is expected to send. Under flags 1 the generator hands a plain arrow back to
+            // the legacy encoding, so ESC[A goes out -- and marking before it lands leaves the
+            // press's own bytes sitting after the mark, where the release gets blamed for them.
+            //
+            // Mark alone could not wait for it. It settles on a quiet window, and a stream that is
+            // still empty because the write has not started yet is quiet by that measure: it
+            // answered "nothing more is coming" 25ms into a send that had not begun. Failed only on
+            // the macOS runner, and only sometimes, which is what a cold thread pool looks like from
+            // here.
+            var mark = MarkPast(pty, before);
 
             Release(view, Key.Up, p: PhysicalKey.ArrowUp);
 
