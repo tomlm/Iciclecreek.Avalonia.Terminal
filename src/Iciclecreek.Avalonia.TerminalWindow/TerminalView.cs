@@ -137,6 +137,9 @@ namespace Iciclecreek.Terminal
         // Selection start is deferred until pointer movement so that a plain click doesn't show a caret.
         private (int Col, int Row)? _pendingSelectionStart = null;
 
+        /// <summary>The last motion reported to the application, so an unchanged one is not re-sent.</summary>
+        private (int Col, int Row, XT.Input.MouseEventType Type)? _lastReportedMotion;
+
         // Wheel accumulator. A notched mouse delivers Delta.Y = ±1 per detent, but a trackpad (and any
         // precision mouse) delivers a stream of FRACTIONS — on macOS a slow two-finger drag is dozens of
         // ~0.05 events. Truncating each event to an int on its own rounds every one of those to zero
@@ -3843,7 +3846,11 @@ namespace Iciclecreek.Terminal
                     {
                         // Defer single-click selection until the pointer actually moves;
                         // this avoids showing a single-cell caret on every click.
-                        _pendingSelectionStart = (col, row);
+                        // The ABSOLUTE buffer row, not the viewport row. Output arriving between the
+                        // press and the first movement scrolls the viewport, and a viewport row then
+                        // names different content than it did when the user clicked -- so the
+                        // selection began somewhere they had not pressed. Absolute rows do not move.
+                        _pendingSelectionStart = (col, _terminal.Buffer.ViewportY + row);
                         _isSelecting = true;
                     }
                     else
@@ -3966,10 +3973,23 @@ namespace Iciclecreek.Terminal
                     if (_pendingSelectionStart.HasValue)
                     {
                         // First movement after a single click — now actually start the selection.
-                        _terminal.Selection.StartSelection(_pendingSelectionStart.Value.Col, _pendingSelectionStart.Value.Row, XT.Selection.SelectionMode.Normal);
+                        // Back into viewport space against the CURRENT scroll position, since that is
+                        // what the selection API takes. A row stored absolute and converted here
+                        // names the same content it named at the press, however far the view has
+                        // scrolled since.
+                        var anchorRow = _pendingSelectionStart.Value.Row - _terminal.Buffer.ViewportY;
+                        _terminal.Selection.StartSelection(_pendingSelectionStart.Value.Col, anchorRow,
+                                                           XT.Selection.SelectionMode.Normal);
                         _pendingSelectionStart = null;
                     }
                     _terminal.Selection.UpdateSelection(col, viewportRow);
+
+                    // Dragging past an edge scrolls the view, so the selection can reach content that
+                    // is not on screen -- which is what dragging past an edge means in every other
+                    // text surface. Without it the drag pinned itself to the edge row and the user
+                    // had to let go, scroll, and start again.
+                    ScrollForDragAt(point.Y);
+
                     RequestPaint();
                     e.Handled = true;
                     return;
@@ -3990,6 +4010,22 @@ namespace Iciclecreek.Terminal
                     ? XT.Input.MouseEventType.Drag
                     : XT.Input.MouseEventType.Move;
 
+                // Once per CELL crossed, not once per pointer event.
+                //
+                // The protocol reports positions in cells, so every event inside one cell produces
+                // an identical sequence -- and a modern pointer fires them at several hundred hertz.
+                // A program tracking the mouse was reading hundreds of copies of "still at 40,12" a
+                // second, which is bandwidth through the pty, parse work at the far end, and for
+                // anything that redraws on motion, a repaint per event.
+                //
+                // Remembered per button state as well as position: a drag and a hover at the same
+                // cell are different reports, and collapsing them would swallow the button change.
+                var here = (col, row, eventType);
+                if (_lastReportedMotion == here)
+                    return;
+
+                _lastReportedMotion = here;
+
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
@@ -4000,6 +4036,31 @@ namespace Iciclecreek.Terminal
             {
                 Debug.WriteLine($"Error handling mouse move: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Scrolls the viewport when a drag has gone past the top or bottom edge.
+        /// </summary>
+        /// <remarks>
+        /// One row per move event, which is what makes it feel like a scroll rather than a jump: the
+        /// pointer keeps producing events while it is held outside the control, so the view keeps
+        /// creeping, and it stops the moment the pointer comes back inside.
+        /// </remarks>
+        private void ScrollForDragAt(double y)
+        {
+            if (_charHeight <= 0)
+                return;
+
+            int delta = y < 0 ? -1
+                      : y > _terminal.Rows * _charHeight ? 1
+                      : 0;
+
+            if (delta == 0)
+                return;
+
+            var target = Math.Clamp(ViewportY + delta, 0, MaxScrollback);
+            if (target != ViewportY)
+                ViewportY = target;
         }
 
         protected override void OnPointerExited(PointerEventArgs e)
@@ -4020,7 +4081,12 @@ namespace Iciclecreek.Terminal
             if (delta == 0)
                 return;
 
-            if (_ptyConnection != null && _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None)
+            // ShouldHandleSelection rather than the tracking mode alone, which is the same question
+            // asked the same way as for a click: Shift is the host's override, and it means "this
+            // gesture is mine, not the application's". It worked for Shift+click and not for
+            // Shift+wheel, so the one way to scroll a terminal's own scrollback while a full-screen
+            // application had the mouse did nothing.
+            if (_ptyConnection != null && !ShouldHandleSelection(e.KeyModifiers))
             {
                 // The app owns the wheel — report NOTCHES to it, and notches are what Delta.Y already
                 // counts: one per detent. Accumulate so a trackpad's fractional stream turns into whole
@@ -4164,6 +4230,26 @@ namespace Iciclecreek.Terminal
 
                 if (oldValue != _isAlternateBuffer)
                 {
+                    // A selection belongs to the screen it was made on. The two buffers are different
+                    // content at the same coordinates, so a selection left standing across the switch
+                    // still highlights rows 3 to 7 -- of whatever is there NOW. Copying it returned
+                    // the text of a full-screen application the user had never selected, from a
+                    // rectangle that looked like it was over their shell output.
+                    //
+                    // Cleared on the switch either way, since it is wrong in both directions.
+                    if (_terminal.Selection.HasSelection)
+                        _terminal.Selection.ClearSelection();
+
+                    // With the keyboard-selection anchor, which is in the same coordinates and would
+                    // otherwise go on extending a selection that no longer exists.
+                    _kbSelAnchor = null;
+                    _kbSelWholeInput = false;
+
+                    // And any drag in flight. The pointer is still down, but what it was dragging
+                    // over is gone.
+                    _isSelecting = false;
+                    _pendingSelectionStart = null;
+
                     RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
                 }
 
