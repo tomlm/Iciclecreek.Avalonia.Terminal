@@ -4550,6 +4550,32 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
         {
+            // PIXEL GEOMETRY is answered here, inline, on whatever thread the query arrived on --
+            // which is the PTY reader's. The emulator waits synchronously for these answers, so
+            // routing them through the UI thread stalled the reader for up to WindowInfoPatience
+            // whenever the UI was busy: a program that asks CSI 14/15/16 t mid-stream froze its own
+            // output for a quarter of a second. The answers are the metrics PublishCellPixelSize
+            // already published into Options on every layout pass -- plain int reads, safe from any
+            // thread, and the SAME numbers the emulator tiles images by, which is the consistency
+            // the placeholder path depends on. A host cannot meaningfully override the view's real
+            // pixel metrics, so these no longer consult handlers; position, titles and state are
+            // genuinely the host's to answer and keep the dispatched path below.
+            switch (e.Request)
+            {
+                case XT.Common.WindowInfoRequest.CellSizePixels:
+                    e.CellWidth = _terminal.Options.CellWidthPixels;
+                    e.CellHeight = _terminal.Options.CellHeightPixels;
+                    e.Handled = e.CellWidth > 0 && e.CellHeight > 0;
+                    return;
+
+                case XT.Common.WindowInfoRequest.SizePixels:
+                case XT.Common.WindowInfoRequest.ScreenSizePixels:
+                    e.WidthPixels = _terminal.Cols * _terminal.Options.CellWidthPixels;
+                    e.HeightPixels = _terminal.Rows * _terminal.Options.CellHeightPixels;
+                    e.Handled = e.WidthPixels > 0 && e.HeightPixels > 0;
+                    return;
+            }
+
             if (!Dispatcher.UIThread.CheckAccess())
             {
                 // Whoever gets here first wins, and the loser does nothing.
@@ -4605,31 +4631,7 @@ namespace Iciclecreek.Terminal
                     e.CellWidth = args.CellWidth;
                     e.CellHeight = args.CellHeight;
                     e.Title = args.Title;
-                    return;
                 }
-            }
-
-            // Nobody upstream answered, and this view KNOWS the geometry questions -- it publishes
-            // exactly these numbers into the emulator's options every layout pass. Leaving a
-            // geometry query unanswered is worse than wrong: a client sizing a placeholder grid
-            // falls back to guessing a cell size, the emulator tiles the image by the real one,
-            // and the two disagree about how many cells the picture covers -- which shears the
-            // picture into repeated bands and split columns. The answer must be the SAME metric
-            // the emulator tiles with, which is Options.CellWidthPixels: device pixels.
-            switch (e.Request)
-            {
-                case XT.Common.WindowInfoRequest.CellSizePixels:
-                    e.CellWidth = _terminal.Options.CellWidthPixels;
-                    e.CellHeight = _terminal.Options.CellHeightPixels;
-                    e.Handled = e.CellWidth > 0 && e.CellHeight > 0;
-                    break;
-
-                case XT.Common.WindowInfoRequest.SizePixels:
-                case XT.Common.WindowInfoRequest.ScreenSizePixels:
-                    e.WidthPixels = _terminal.Cols * _terminal.Options.CellWidthPixels;
-                    e.HeightPixels = _terminal.Rows * _terminal.Options.CellHeightPixels;
-                    e.Handled = e.WidthPixels > 0 && e.HeightPixels > 0;
-                    break;
             }
         }
 

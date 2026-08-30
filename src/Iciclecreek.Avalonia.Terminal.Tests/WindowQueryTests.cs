@@ -110,16 +110,44 @@ public class WindowQueryTests
         window.Close();
     }
 
-    /// <summary>The values the host supplied are the ones that go out, not defaults.</summary>
+    /// <summary>
+    /// For facts only the host can know -- where the window sits -- the values the host supplied
+    /// are the ones that go out. Pixel geometry no longer consults handlers at all: those answers
+    /// come inline from the view's own published metrics, on the reader's thread, because waiting
+    /// on the UI thread for a number the view already knows stalled the reader for up to a quarter
+    /// of a second whenever the UI was busy.
+    /// </summary>
     [AvaloniaTest]
     public async Task The_answer_carries_what_the_host_said()
     {
         var (view, pty, window) = LiveView();
         AnswerWith(view, 640, 480);
 
-        view.Terminal.Write(Esc + "[14t");
+        view.Terminal.Write(Esc + "[13t");
 
-        Assert.That(await PtyWaits.AwaitOutput(pty), Does.Contain("480").And.Contain("640"));
+        Assert.That(await PtyWaits.AwaitOutput(pty), Does.Contain("20").And.Contain("10"),
+            "CSI 3 ; x ; y t with the handler's coordinates");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// Pixel geometry is answered on the READER's thread from the published metrics -- no UI-thread
+    /// round trip, no quarter-second stall when the UI is busy, and the same numbers the emulator
+    /// tiles images by.
+    /// </summary>
+    [AvaloniaTest]
+    public async Task Pixel_geometry_reports_the_views_own_metrics_not_a_handlers()
+    {
+        var (view, pty, window) = LiveView();
+        AnswerWith(view, 640, 480);   // a handler claiming other numbers is not consulted
+
+        view.Terminal.Write(Esc + "[16t");
+
+        var written = await PtyWaits.AwaitOutput(pty);
+        Assert.That(written, Does.StartWith(Esc + "[6;"));
+        Assert.That(written, Does.Not.Contain("640").And.Not.Contain("480"),
+            "the view's real cell size goes out, not the handler's fiction");
 
         window.Close();
     }
