@@ -318,6 +318,11 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private bool _boldIsBright = true;
 
+        // The MinimumContrastRatio enforcer, with its (fg, bg) -> adjusted cache. The option is
+        // snapshotted into it once per frame beside _boldIsBright; at the default ratio of 1 the
+        // per-run call below short-circuits and rendering is byte-identical to before it existed.
+        private readonly MinimumContrast _minimumContrast = new();
+
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
                 nameof(IsAlternateBuffer),
@@ -6781,6 +6786,10 @@ namespace Iciclecreek.Terminal
             // screen drawn under each rule would be worse than either.
             _boldIsBright = _terminal.Options.DrawBoldTextInBrightColors;
 
+            // Same discipline for the contrast floor: one ratio for the whole frame. The snapshot
+            // also owns the (fg, bg) -> adjusted cache, cleared when the ratio moves.
+            _minimumContrast.SnapshotRatio(_terminal.Options.MinimumContrastRatio);
+
             var surface = GetValue(BackgroundProperty);
             // Through the shared test, which also asks about IBrush.Opacity -- a second way to be
             // translucent that this checked alpha alone for, and missed.
@@ -7099,6 +7108,30 @@ namespace Iciclecreek.Terminal
                     (foreground, background, swapped) = (background, foreground, !swapped);
                 if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                     (foreground, background, swapped) = (background, foreground, !swapped);
+
+                // Options.MinimumContrastRatio. Applied AFTER the swaps, because the pair being
+                // tested must be the pair being painted -- an inverted cell's readable colour is its
+                // swapped one -- and BEFORE conceal, which makes the foreground transparent on
+                // purpose and must stay the last word. Only the foreground moves; the background is
+                // the theme's.
+                //
+                // `background` here is the right thing to test against even when no fill is painted:
+                // GetBackgroundBrush resolves a default-background cell to the same colour Render
+                // painted the surface with. The guards skip the cases where "the colour behind this
+                // text" has no single answer -- a run over an image placement, a translucent host
+                // background showing through, or a non-solid brush -- and the runs xterm.js also
+                // exempts because their glyphs join into shapes with their neighbours.
+                if (_minimumContrast.Active
+                    && !runHasBackdrop
+                    && !MinimumContrast.IsExemptRun(text)
+                    && foreground is ISolidColorBrush fgSolid
+                    && background is ISolidColorBrush bgSolid
+                    && BufferCellExtensions.IsFullyOpaque(background))
+                {
+                    var contrasted = _minimumContrast.Apply(fgSolid.Color, bgSolid.Color);
+                    if (contrasted != fgSolid.Color)
+                        foreground = new SolidColorBrush(contrasted, fgSolid.Opacity);
+                }
 
                 // SGR 8. The emulator has recorded it since the parser was written and nothing here
                 // ever read it, so concealed text -- a password prompt that echoes, a spoiler --
@@ -7862,6 +7895,20 @@ namespace Iciclecreek.Terminal
                     if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                         (foreground, background, swapped) = (background, foreground, !swapped);
 
+                    // The contrast floor applies wherever a cell's text is drawn, in the same slot:
+                    // after the swaps, before conceal. A sized block is one cell's glyph, so the
+                    // exemption test sees just that.
+                    if (_minimumContrast.Active
+                        && !MinimumContrast.IsExemptRun(cell.Content)
+                        && foreground is ISolidColorBrush blockFgSolid
+                        && background is ISolidColorBrush blockBgSolid
+                        && BufferCellExtensions.IsFullyOpaque(background))
+                    {
+                        var contrasted = _minimumContrast.Apply(blockFgSolid.Color, blockBgSolid.Color);
+                        if (contrasted != blockFgSolid.Color)
+                            foreground = new SolidColorBrush(contrasted, blockFgSolid.Opacity);
+                    }
+
                     // And here, the third place a cell's text is drawn. OSC 66 blocks shape their
                     // own runs too.
                     foreground = cell.ApplyConceal(foreground);
@@ -8033,6 +8080,22 @@ namespace Iciclecreek.Terminal
                             (foreground, background, swapped) = (background, foreground, !swapped);
                         if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                             (foreground, background, swapped) = (background, foreground, !swapped);
+
+                        // The contrast floor, in the same slot as the run path: after the swaps,
+                        // before conceal. Doubled lines draw their own text, so without this a
+                        // program's unreadable colour became readable everywhere EXCEPT its
+                        // double-width headings -- which are the text it most wanted seen.
+                        if (_minimumContrast.Active
+                            && !dwRunHasBackdrop
+                            && !MinimumContrast.IsExemptRun(text)
+                            && foreground is ISolidColorBrush dwFgSolid
+                            && background is ISolidColorBrush dwBgSolid
+                            && BufferCellExtensions.IsFullyOpaque(background))
+                        {
+                            var contrasted = _minimumContrast.Apply(dwFgSolid.Color, dwBgSolid.Color);
+                            if (contrasted != dwFgSolid.Color)
+                                foreground = new SolidColorBrush(contrasted, dwFgSolid.Opacity);
+                        }
 
                         // After the swaps, as everywhere else. A DECDWL/DECDHL row draws its own
                         // text rather than going through the run path, so conceal has to be applied
