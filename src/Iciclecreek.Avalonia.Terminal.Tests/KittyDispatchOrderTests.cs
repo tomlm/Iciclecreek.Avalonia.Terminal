@@ -133,6 +133,27 @@ public class KittyDispatchOrderTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void Meta_left_reaches_CSI_u_once_Kitty_is_negotiated()
+    {
+        // The macOS line-edge alias deliberately stands down under Kitty, but the general Meta
+        // passthrough must stand down too. Otherwise the chord falls into the gap between them and
+        // produces neither the legacy Home sequence nor the negotiated modified-arrow event.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            Press(view, Key.Left, KeyModifiers.Meta, PhysicalKey.ArrowLeft);
+            var sent = Settled(pty);
+
+            Assert.That(sent, Is.Not.Empty, "the negotiated protocol must receive the Meta chord");
+            Assert.That(sent, Does.StartWith(Esc + "["),
+                "the chord itself, in CSI-u form: " + Readable(sent));
+            Assert.That(sent, Is.Not.EqualTo(Esc + "[H"),
+                "the legacy macOS line-edge alias must remain disabled under Kitty");
+        }
+        finally { window.Close(); }
+    }
+
     // ---------------------------------------------- releases without a press
 
     [AvaloniaTest]

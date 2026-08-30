@@ -2878,7 +2878,11 @@ namespace Iciclecreek.Terminal
                     return;
                 }
 
-                if ((e.KeyModifiers & KeyModifiers.Meta) != 0)
+                // A legacy Meta chord belongs to the host application, so leave it unhandled. Once
+                // Kitty is active, however, Meta is part of the protocol's key event and must reach
+                // TrySendKittyKeyAsync below. Returning here would make Cmd+Left/Right disappear: the
+                // shell alias above correctly declines it, then this guard would drop it before CSI-u.
+                if ((e.KeyModifiers & KeyModifiers.Meta) != 0 && !_terminal.KittyKeyboardActive)
                     return;
 
                 // Alt/Ctrl + Left/Right — "move by word". What the emulator generates for these is a
