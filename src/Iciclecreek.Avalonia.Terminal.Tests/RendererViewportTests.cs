@@ -152,6 +152,44 @@ public class RendererViewportTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void Conceal_is_applied_everywhere_a_cell_is_drawn_not_only_the_run_path()
+    {
+        // There are three places a cell's text is shaped: the ordinary run path, DECDWL/DECDHL rows,
+        // and OSC 66 sized blocks. Conceal landed in the first only, so a concealed password showed
+        // in full on any line a program happened to double.
+        //
+        // Counted rather than exercised through each renderer, which needs pixels this platform has
+        // no backend for. What it guards is the thing that actually went wrong: a fourth draw site
+        // appearing without the call.
+        var source = System.IO.File.ReadAllText(SourcePath("TerminalView.cs"));
+
+        Assert.That(Occurrences(source, "ApplyConceal(foreground)"), Is.EqualTo(3),
+            "every path that shapes a cell's text must conceal it; add the call, then update this count");
+    }
+
+    private static int Occurrences(string haystack, string needle)
+    {
+        var n = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal); i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+            n++;
+        return n;
+    }
+
+    /// <summary>The library source file, found relative to the test assembly.</summary>
+    private static string SourcePath(string file)
+    {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src")))
+            dir = dir.Parent;
+
+        Assert.That(dir, Is.Not.Null, "could not find the repo root from " + AppContext.BaseDirectory);
+        var path = System.IO.Path.Combine(dir!.FullName, "src", "Iciclecreek.Avalonia.TerminalWindow", file);
+        Assert.That(System.IO.File.Exists(path), Is.True, "not where this test expected: " + path);
+        return path;
+    }
+
     private static XTerm.Buffer.BufferCell CellAfter(TerminalView view, string write)
     {
         view.Terminal.Write(write);

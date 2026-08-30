@@ -7279,6 +7279,11 @@ namespace Iciclecreek.Terminal
                         (foreground, background, swapped) = (background, foreground, !swapped);
                     if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                         (foreground, background, swapped) = (background, foreground, !swapped);
+
+                    // And here, the third place a cell's text is drawn. OSC 66 blocks shape their
+                    // own runs too.
+                    foreground = cell.ApplyConceal(foreground);
+
                     if (swapped || cell.GetBackgroundColor(_palette).HasValue)
                         context.FillRectangle(background, box);
 
@@ -7424,6 +7429,12 @@ namespace Iciclecreek.Terminal
                             (foreground, background, swapped) = (background, foreground, !swapped);
                         if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
                             (foreground, background, swapped) = (background, foreground, !swapped);
+
+                        // After the swaps, as everywhere else. A DECDWL/DECDHL row draws its own
+                        // text rather than going through the run path, so conceal has to be applied
+                        // here too -- otherwise a concealed password shows in full on any line a
+                        // program happened to double.
+                        foreground = cell.ApplyConceal(foreground);
 
                         var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                         var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
