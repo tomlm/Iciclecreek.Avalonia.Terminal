@@ -6195,6 +6195,19 @@ namespace Iciclecreek.Terminal
                     // handles its own cursor positioning and shouldn't be scrolled.
                     if (!_isAlternateBuffer)
                     {
+                        // UNDER THE LOCK, like every other mutation of the emulator from this thread.
+                        //
+                        // These two move the VIEWPORT, and the renderer reads it: Render captures
+                        // ViewportY once and then indexes lines by absolute row for the rest of the
+                        // frame. A scroll landing in the middle of that leaves the capture describing
+                        // where the viewport WAS, so the rest of the frame is drawn from rows that
+                        // have since moved -- content from the wrong line, for one frame, whenever a
+                        // write happens to land inside a paint.
+                        //
+                        // The write above was already guarded and this was not, which made it the
+                        // half of the race that survived guarding the other half.
+                        lock (_terminalLock)
+                        {
                         if (_followBottom)
                         {
                             _terminal.Buffer.ScrollToBottom();
@@ -6211,6 +6224,7 @@ namespace Iciclecreek.Terminal
                             // is why skipping it looks sufficient and is not. Holding the position here is
                             // what actually hands the viewport to the host.
                             _terminal.Buffer.ViewportY = Math.Min(oldY, MaxScrollback);
+                        }
                         }
 
                         // Read and notified either way: a view parked in the scrollback still needs its
@@ -6763,6 +6777,40 @@ namespace Iciclecreek.Terminal
         private readonly List<SizedBlockDraw> _sizedBlockDraws = new();
 
         public override void Render(DrawingContext context)
+        {
+            // The frame reads the buffer, and the pty reader writes it. Every write was already
+            // guarded; this read never was, so a paint landing inside a write drew half of one state
+            // and half of another -- a run cached for content that had just changed, cells from a
+            // line being rewritten underneath the loop. Intermittent by nature: it needs the two
+            // threads to overlap, so it shows on some draws and not others.
+            //
+            // ONE known interaction, and it is bounded rather than fatal. The window-info seam is
+            // raised from Terminal.Write while the reader holds this lock, and it waits on the UI
+            // thread for an answer. If a query lands while the UI thread is here waiting for the
+            // lock, neither moves until that wait gives up -- 250ms, after which the reader answers
+            // "cannot say" and both continue. Rare (it takes a CSI 18t arriving inside a paint) and
+            // survivable, where the race it replaces is neither.
+            //
+            // The real answer is to stop reading live state in the frame at all: snapshot what the
+            // frame needs under this lock, release it, and draw from the copy. That is a larger
+            // change and it is coming; this stops the corruption in the meantime.
+            lock (_terminalLock)
+            {
+                RenderFrame(context);
+            }
+        }
+
+        private void RenderFrame(DrawingContext context)
+        {
+            // DIAGNOSTIC ONLY -- not a proposed fix. Serialises the frame against the pty reader so
+            // we can see whether the artifacts are a read/write race on the buffer.
+            lock (_terminalLock)
+            {
+                RenderLocked(context);
+            }
+        }
+
+        private void RenderLocked(DrawingContext context)
         {
             _sizedBlockDraws.Clear();
             // The terminal's own background, painted once for the whole surface.
