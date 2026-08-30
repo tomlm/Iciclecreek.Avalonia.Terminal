@@ -232,9 +232,6 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
-        /// </summary>
-        /// <summary>
         /// Releases the terminal behind this control, and the process with it.
         /// </summary>
         /// <remarks>
@@ -252,6 +249,9 @@ namespace Iciclecreek.Terminal
             GC.SuppressFinalize(this);
         }
 
+        /// <summary>
+        /// Gets the underlying <see cref="XTerm.Terminal"/> instance.
+        /// </summary>
         public XTerm.Terminal Terminal => _terminalView!.Terminal;
 
         /// <inheritdoc cref="TerminalView.InputSent"/>

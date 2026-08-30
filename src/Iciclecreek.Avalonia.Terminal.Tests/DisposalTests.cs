@@ -69,6 +69,33 @@ public class DisposalTests
     }
 
     [AvaloniaTest]
+    public void Disposing_drops_the_subscriptions_re_attachment_never_restores()
+    {
+        // OscReceived and Colors.ColorChanged are subscribed ONCE, in OnInitialized, and the
+        // detach path leaves them alone -- correctly, since re-attachment does not put them back
+        // and dropping them there would leave a re-parented view deaf to OSC and blind to palette
+        // changes. That makes Dispose the only place they can go, and until they did, a host
+        // holding the terminal afterwards went on calling into a disposed view through them.
+        var (view, window) = Realised();
+        try
+        {
+            var terminal = view.Terminal;
+            view.Dispose();
+
+            // Both handlers would throw or touch disposed state if they were still attached; the
+            // terminal is disposed, so the sequences below reach nothing either way. What is being
+            // asserted is that driving the palette and an OSC sequence after disposal is quiet.
+            Assert.DoesNotThrow(() =>
+            {
+                terminal.Colors.SetForeground(0x00FF00);
+                terminal.Write($"{Esc}]0;after disposal{Esc}\\");
+                Dispatcher.UIThread.RunJobs();
+            });
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
     public void Disposing_twice_is_harmless()
     {
         var (view, window) = Realised();

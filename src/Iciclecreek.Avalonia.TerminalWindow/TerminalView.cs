@@ -2309,6 +2309,16 @@ namespace Iciclecreek.Terminal
 
             UnsubscribeTerminalEvents();
 
+            // The two OnInitialized subscribes ONCE and re-attachment never restores, so they
+            // belong here and not in the shared method above. Detach drops only what attach puts
+            // back; dropping these there would leave a re-parented view permanently deaf to OSC
+            // sequences and blind to palette changes, which is a worse bug than the leak.
+            //
+            // They are the rest of the leak all the same: a host holding the terminal after
+            // disposing the view would otherwise keep calling into it through these two.
+            _terminal.OscReceived -= OnTerminalOscReceived;
+            _terminal.Colors.ColorChanged -= OnTerminalColorChanged;
+
             _atomicUpdateTimeout?.Dispose();
             _atomicUpdateTimeout = null;
             _atomicUpdate = false;
