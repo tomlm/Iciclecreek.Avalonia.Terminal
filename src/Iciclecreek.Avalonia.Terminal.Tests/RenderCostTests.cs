@@ -111,6 +111,36 @@ public class RenderCostTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void A_burst_of_pointer_shape_changes_queues_one_job()
+    {
+        // The exception to "nothing is dropped": a shape is a STATE, not an event, so only the last
+        // one was ever going to be visible. Called out in the PR and untested until now, which is
+        // how per-sequence queue growth gets reintroduced.
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Options.PointerShapesEnabled = true;
+
+            foreach (var shape in new[] { "pointer", "text", "wait", "crosshair", "progress" })
+                view.Terminal.Write($"{Esc}]22;{shape}{Bel}");
+
+            var waiting = Field<List<Action>>(view, "_pendingHostCallbacks");
+            lock (waiting)
+            {
+                Assert.That(waiting.Count, Is.EqualTo(1),
+                    "five shape changes, one job -- only the last was ever going to be visible");
+            }
+
+            // And the shape that survives is the last one asked for.
+            var pending = typeof(TerminalView).GetField("_pendingPointerShape",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.That(pending, Is.Not.Null, "_pendingPointerShape has been renamed; update this test");
+            Assert.That(pending!.GetValue(view), Is.EqualTo("progress"));
+        }
+        finally { window.Close(); }
+    }
+
     // ----------------------------------------------- one walk, not one per colour
 
     [AvaloniaTest]

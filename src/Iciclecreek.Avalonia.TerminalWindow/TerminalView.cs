@@ -2216,31 +2216,34 @@ namespace Iciclecreek.Terminal
             // an answer that is identical after the first.
             //
             // Only one is queued at a time, so the walk happens once for however many arrived.
-            if (_paletteWalkQueued)
-                return;
+            // Under the same lock the queue uses, because this is raised from BOTH threads: the pty
+            // reader for an OSC palette sequence, and the UI thread through SyncPaletteToBrushes. A
+            // plain check-and-set could have both find it false and queue two walks -- which is the
+            // one thing the flag exists to prevent, arrived at by the shortest route.
+            lock (_pendingHostCallbacks)
+            {
+                if (_paletteWalkQueued)
+                    return;
 
-            _paletteWalkQueued = true;
+                _paletteWalkQueued = true;
+            }
 
             PostToHost(() =>
             {
-                _paletteWalkQueued = false;
-
-                if (_terminal == null)
-                    return;
-
-                for (int y = 0; y < _terminal.Buffer.Length; y++)
+                lock (_pendingHostCallbacks)
                 {
-                    var line = _terminal.Buffer.GetLine(y);
-                    if (line != null)
-                        line.Cache = null;
+                    _paletteWalkQueued = false;
                 }
 
-                InvalidateVisual();
+                // The same walk InvalidateRunCaches does, so it is called rather than repeated: two
+                // copies of a loop over the whole buffer is one copy that goes stale.
+                InvalidateRunCaches();
             });
         }
 
         /// <summary>Whether a full-buffer cache walk is already waiting to run.</summary>
-        private volatile bool _paletteWalkQueued;
+        /// <remarks>Guarded by the queue's own lock; see OnTerminalColorChanged.</remarks>
+        private bool _paletteWalkQueued;
 
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
@@ -5098,7 +5101,16 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>The most recent shape a program asked for; only the last one is applied.</summary>
-        private string? _pendingPointerShape;
+        /// <remarks>
+        /// Written on the pty reader thread and read on the UI thread, so the accesses are volatile:
+        /// without that "last one wins" is a claim the memory model does not actually make, and the
+        /// UI thread could apply a shape two changes stale.
+        /// </remarks>
+        private volatile string? _pendingPointerShape;
+
+        /// <summary>Whether a shape change is already waiting to be applied.</summary>
+        /// <remarks>Guarded by the queue's own lock, like the palette walk.</remarks>
+        private bool _pointerShapeQueued;
 
         /// <summary>Host callbacks waiting for the UI thread, and whether a drain is already queued.</summary>
         private readonly List<Action> _pendingHostCallbacks = new();
@@ -5148,8 +5160,11 @@ namespace Iciclecreek.Terminal
             {
                 // One failing callback must not swallow the rest of the batch. Separately posted,
                 // each of these was independent; batching them must not make them share a fate.
+                // The WHOLE exception, not just its message. A message alone drops the stack and any
+                // inner exception, which is most of what makes a swallowed failure diagnosable --
+                // and swallowing is the point here, so this line is all anybody gets.
                 try { callback(); }
-                catch (Exception ex) { Debug.WriteLine($"[TerminalView] host callback failed: {ex.Message}"); }
+                catch (Exception ex) { Debug.WriteLine($"[TerminalView] host callback failed: {ex}"); }
             }
         }
 
@@ -5282,8 +5297,25 @@ namespace Iciclecreek.Terminal
             // it is a state, and only the final value was ever going to be visible.
             _pendingPointerShape = e.Shape;
 
+            // And one JOB for however many arrive, not one each. Coalescing the value alone still
+            // queued a callback per sequence, each of which then applied the same final shape -- so
+            // a program cycling a spinner through OSC 22 grew the queue exactly as before, just to
+            // do redundant work when it drained.
+            lock (_pendingHostCallbacks)
+            {
+                if (_pointerShapeQueued)
+                    return;
+
+                _pointerShapeQueued = true;
+            }
+
             PostToHost(() =>
             {
+                lock (_pendingHostCallbacks)
+                {
+                    _pointerShapeQueued = false;
+                }
+
                 var shape = _pendingPointerShape;
                 var cursor = MapPointerShape(shape);
 
