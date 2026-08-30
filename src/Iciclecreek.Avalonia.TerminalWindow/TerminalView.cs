@@ -4310,6 +4310,20 @@ namespace Iciclecreek.Terminal
             await _semaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
+                // Re-asked after the wait, not just captured before it.
+                //
+                // The capture above stops the reference changing mid-write, which is a different
+                // problem from this one. Waiting on the semaphore is an await, and a queue of
+                // keystrokes waiting behind a slow write can sit here across a detach or a relaunch --
+                // at which point the captured connection is one the view has handed back to its owner,
+                // and writing to it types this view's input into somebody else's process.
+                //
+                // Dropped rather than redirected to the current connection. Input aimed at a process
+                // that is no longer here belongs to nothing: sending it onwards would put half a
+                // command line into whatever replaced it.
+                if (!ReferenceEquals(_ptyConnection, ptyConnection))
+                    return;
+
                 var bytes = Utf8NoBom.GetBytes(data);
                 await ptyConnection.WriterStream.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
                 await ptyConnection.WriterStream.FlushAsync(ct).ConfigureAwait(false);
@@ -5263,6 +5277,25 @@ namespace Iciclecreek.Terminal
             // attach path sets, meaning exactly the same thing — this process is somebody else's now.
             _externalConnection = true;
             CleanupProcess();
+
+            // KNOWN LIMITATION, recorded here because the code gives no hint of it.
+            //
+            // This does not stop the reader. That thread is parked inside a SYNCHRONOUS Read on the
+            // connection's stream, and the only way to make such a read return is to close the stream
+            // underneath it — which is exactly what must not happen here, since the stream is what is
+            // being handed over. Cancelling _processCts does not touch a blocking read.
+            //
+            // So for a quiet process the thread stays parked indefinitely, holding this view, its
+            // emulator and its scrollback alive through the loop's closure. And when the process does
+            // write, that thread takes the chunk: the loop now notices it is no longer the owner and
+            // stops without painting it anywhere, which is better than delivering another owner's
+            // output into this view, but the bytes are still gone rather than delivered to the new
+            // owner.
+            //
+            // Fixing it properly means deciding what a handover IS at the API level -- the detached
+            // connection would have to carry its reader, or carry the bytes already taken off the
+            // stream, so the new owner resumes rather than races. That is a public contract change,
+            // and it is not being made quietly in a bug fix.
             return connection;
         }
 
@@ -5471,6 +5504,28 @@ namespace Iciclecreek.Terminal
                     // Cancellation is by teardown rather than by token: disposing the connection closes the
                     // stream and the blocking read throws, which the catch below handles.
                     var bytesRead = connection.ReaderStream.Read(buffer, 0, buffer.Length);
+
+                    // Asked AGAIN, on the other side of the read.
+                    //
+                    // The condition on the while loop is the same question, and asking it there is
+                    // not enough on its own: this read blocks for as long as the process stays quiet,
+                    // which at an idle prompt is indefinitely. A detach or a relaunch lands in that
+                    // window routinely -- it is the window a detach is most likely to land in, being
+                    // nearly all of the loop's life -- and the chunk that ends the read then belongs
+                    // to a connection this view no longer owns.
+                    //
+                    // Everything below assumed otherwise. The bytes went into _terminal, so output
+                    // meant for whoever now owns the process was painted into this view and lost to
+                    // them; OutputReceived fired for it, under a comment asserting the check above
+                    // had already made that impossible; and ShellReady could be raised for a process
+                    // that is not this view's.
+                    //
+                    // Breaking rather than continuing: the while condition would stop the loop on the
+                    // next pass anyway, and this makes it stop without first reading a SECOND chunk
+                    // out of a stream that is not ours to read.
+                    if (!ReferenceEquals(_ptyConnection, connection))
+                        break;
+
                     if (bytesRead == 0)
                     {
                         // Process has exited — fallback in case OnPtyProcessExited didn't fire first.
@@ -5536,9 +5591,11 @@ namespace Iciclecreek.Terminal
                         if (_outputOnReadTask)
                         {
                             // Straight through, on this thread. No staleness guard is needed here that the
-                            // loop does not already provide: the ReferenceEquals check in the while condition
-                            // means a loop reading for a replaced connection has already stopped, so there is
-                            // no queued callback that could outlive its process.
+                            // loop does not already provide -- and what provides it is the check after the
+                            // READ, not the one in the while condition this comment used to cite. That one
+                            // is asked before a read that blocks for the whole idle life of the process, so
+                            // it says nothing about who owns the bytes it eventually returns. A sniffer was
+                            // being handed another connection's output on the strength of it.
                             //
                             // The catch matters MORE on this path than on the dispatcher one, and for a
                             // different reason: an escaping exception here propagates into ReadPtyOutputAsync
@@ -5666,6 +5723,22 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
+                // Only speak for the connection this loop was reading, and only while it is still the
+                // one the view owns.
+                //
+                // The interlock alone could not answer that. InstallConnection RESETS it as it
+                // publishes a new connection, so a stale loop -- one whose stream was closed out from
+                // under it by exactly that replacement, which is how it got here -- read the flag as
+                // 0 and took it for permission to speak. It then wrote "Error reading from process"
+                // into the terminal belonging to its SUCCESSOR: a relaunch that worked, reporting a
+                // failure, describing a process that is already gone.
+                //
+                // ReferenceEquals is asked first because it is the question that was missing. The
+                // interlock stays behind it for its original job: a stream closing after the process
+                // has already exited is expected, and not worth a line of red.
+                if (!ReferenceEquals(_ptyConnection, connection))
+                    return;
+
                 // If the process has already exited the stream closing is expected — swallow silently.
                 if (_processExitHandled != 0)
                     return;
