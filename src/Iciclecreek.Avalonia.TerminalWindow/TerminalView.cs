@@ -6,6 +6,7 @@ using Avalonia.Input.TextInput;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -246,7 +247,9 @@ namespace Iciclecreek.Terminal
             XT.Graphics.LinePlacement? Placement = null,
             XT.Graphics.TerminalImage? Image = null,
             XT.Common.UnderlineStyle UnderlineStyle = XT.Common.UnderlineStyle.None,
-            IBrush? UnderlineBrush = null)
+            IBrush? UnderlineBrush = null,
+            GlyphRun? Glyphs = null,
+            IBrush? Foreground = null)
         {
             /// <summary>Whether this run draws a picture rather than text.</summary>
             public bool IsImage => Placement is not null && Image is not null;
@@ -317,6 +320,38 @@ namespace Iciclecreek.Terminal
         /// uses overlap. Held on the instance rather than statically so two views do not contend.
         /// </remarks>
         private readonly StringBuilder _runTextBuilder = new(256);
+
+        /// <summary>
+        /// Whether runs may be drawn as pre-shaped glyphs rather than through FormattedText.
+        /// </summary>
+        /// <remarks>
+        /// Exists so the two pipelines can be rendered and COMPARED, which is the only way to see a
+        /// difference the test suite cannot: every assertion there is about buffer state or geometry,
+        /// and a run drawn wrongly passes all of them. Not a supported switch -- it is here to be
+        /// turned off by the bench and by anyone bisecting a rendering complaint.
+        /// </remarks>
+        internal static bool GlyphRunFastPathEnabled = true;
+
+        /// <summary>The top level this view is in, remembered rather than searched for.</summary>
+        private TopLevel? _topLevel;
+
+        /// <summary>
+        /// The device scale to snap geometry to.
+        /// </summary>
+        /// <remarks>
+        /// TopLevel.GetTopLevel walks UP the visual tree looking for the root, and this is read once
+        /// per frame at the top of Render -- so every frame paid a tree walk to learn something that
+        /// changes when the window moves to another display and at no other time. The reference is
+        /// captured when the view is attached and dropped when it is detached; the scaling is read
+        /// through it each time, since that genuinely can change while attached.
+        /// </remarks>
+        private double RenderScale => (_topLevel ??= TopLevel.GetTopLevel(this))?.RenderScaling ?? 1.0;
+
+        /// <summary>Distance from a run's top edge to its baseline, at the current font.</summary>
+        private double _baseline;
+
+        /// <summary>Glyph typefaces by style and weight, so the font manager is asked once each.</summary>
+        private readonly Dictionary<(FontStyle Style, FontWeight Weight), GlyphTypeface?> _glyphTypefaces = new();
 
         /// <summary>
         /// The emulator's <c>DrawBoldTextInBrightColors</c>, snapshotted per frame beside the palette.
@@ -2567,6 +2602,10 @@ namespace Iciclecreek.Terminal
         protected override void OnDetachedFromLogicalTree(LogicalTreeAttachmentEventArgs e)
         {
             base.OnDetachedFromLogicalTree(e);
+
+            // The remembered top level goes with the tree it belonged to. A re-parented view finds
+            // the new one on its next frame.
+            _topLevel = null;
 
             // Nothing left to unwind, and nothing that wants unwinding twice.
             if (_disposed)
@@ -6572,6 +6611,16 @@ namespace Iciclecreek.Terminal
             _charWidth = _measureText.Width;
             _charHeight = _measureText.Height;
 
+            // Where the glyph path puts its baseline. FormattedText draws from a top-left origin and
+            // works this out itself; a GlyphRun is positioned BY its baseline, so the difference has
+            // to be known explicitly or every glyph sits a fraction of a line off.
+            _baseline = _measureText.Baseline;
+
+            // The typefaces a run can ask for, invalidated with the font. Resolving one goes through
+            // the font manager, and doing that per run per rebuild was measurable next to the draw
+            // it precedes.
+            _glyphTypefaces.Clear();
+
             PublishCellPixelSize();
         }
 
@@ -6592,7 +6641,7 @@ namespace Iciclecreek.Terminal
             if (_terminal is null || _charWidth <= 0 || _charHeight <= 0)
                 return;
 
-            var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+            var scale = RenderScale;
             var cellWidth = Math.Max(1, (int)Math.Round(_charWidth * scale));
             var cellHeight = Math.Max(1, (int)Math.Round(_charHeight * scale));
 
@@ -6920,7 +6969,7 @@ namespace Iciclecreek.Terminal
             if (surface is not null)
                 context.FillRectangle(surface, new Rect(Bounds.Size));
 
-            var scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+            var scale = RenderScale;
 
             // The gutter, and the shift that keeps the grid out of it.
             //
@@ -7088,6 +7137,8 @@ namespace Iciclecreek.Terminal
 
                 if (run.IsImage)
                     DrawImageRun(context, run, startYPos, rowHeight, scale);
+                else if (run.Glyphs is not null)
+                    DrawGlyphs(context, run, position);
                 else if (run.Text is not null)
                     context.DrawText(run.Text, position);
 
@@ -7359,6 +7410,8 @@ namespace Iciclecreek.Terminal
                 // substance of it rather than a detail.
                 foreground = cell.ApplyConceal(foreground);
 
+                var style = cell.GetFontStyle();
+                var weight = cell.GetFontWeight();
                 var td = cell.GetTextDecorations();
 
                 // Underlines are drawn by hand below rather than through TextDecorations, because
@@ -7387,14 +7440,22 @@ namespace Iciclecreek.Terminal
                 // is visible, and an underline is drawn by hand rather than by DrawText. A fill is safe
                 // too -- it is a run of its own business, drawn whether or not there is text, which is
                 // why swapped runs and coloured backgrounds are unaffected.
+                // The fast path first: shape once here rather than on every frame that replays
+                // the line. Declines anything it cannot draw faithfully -- see TryBuildGlyphRun --
+                // and a decoration is one of those, because that is set on the FormattedText.
+                GlyphRun? glyphs = null;
                 FormattedText? formattedText = null;
                 if (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null)
                 {
-                    var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
-                    formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-                                                      typeface, FontSize, foreground);
-                    if (td != null)
-                        formattedText.SetTextDecorations(td);
+                    glyphs = td == null ? TryBuildGlyphRun(text, cellCount, style, weight) : null;
+                    if (glyphs is null)
+                    {
+                        var typeface = new Typeface(FontFamily, style, weight);
+                        formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                                                          typeface, FontSize, foreground);
+                        if (td != null)
+                            formattedText.SetTextDecorations(td);
+                    }
                 }
 
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
@@ -7414,8 +7475,10 @@ namespace Iciclecreek.Terminal
                 // Named rather than positional: the record gained Placement and Image ahead of these
                 // when pictures moved onto lines, so position no longer says which is which.
                 var run = new CachedTextRun(formattedText, runStartX, cellCount, fill,
+                                            Glyphs: glyphs, Foreground: foreground,
                                             UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush);
                 textRuns.Add(run);
+
             }
 
             // And the pictures that cover the text, still back to front, now that it is down.
@@ -8033,6 +8096,107 @@ namespace Iciclecreek.Terminal
                 Marshal.Copy(source.Array!, source.Offset + (y * sourceStride),
                              IntPtr.Add(destination, y * destinationRowBytes), sourceStride);
             }
+        }
+
+        /// <summary>
+        /// Draws a cached glyph run at <paramref name="position"/>.
+        /// </summary>
+        /// <remarks>
+        /// Through a TRANSFORM rather than by moving the run. A cached run is replayed at a different
+        /// screen row every time the buffer scrolls, so its origin has to change -- and the two ways
+        /// to do that are not equivalent. Setting BaselineOrigin measured at 2,914ns and 1,032 bytes
+        /// against 1,948ns and 32 for a translate, because assigning it discards what the run had
+        /// worked out about itself. It is also a write to an object the context may not have consumed
+        /// yet, which a transform never is.
+        /// </remarks>
+        private static void DrawGlyphs(DrawingContext context, CachedTextRun run, Point position)
+        {
+            using (context.PushTransform(Matrix.CreateTranslation(position.X, position.Y)))
+                context.DrawGlyphRun(run.Foreground ?? Brushes.Transparent, run.Glyphs!);
+        }
+
+        /// <summary>
+        /// A glyph run for <paramref name="text"/>, or null when this run has to go through
+        /// <see cref="FormattedText"/> instead.
+        /// </summary>
+        /// <remarks>
+        /// <para>WHY AT ALL: FormattedText is lazy. Building one costs 33ns because it does nothing;
+        /// the shaping happens inside DrawText, on every frame, for every run -- measured at 14,777ns
+        /// and 4,032 bytes a call, which is essentially the whole cost of a frame. A terminal does not
+        /// need that, because a run's TEXT never changes between frames, only where it is drawn. So
+        /// the shaping is done once here and the result blitted: 1,948ns and 32 bytes.</para>
+        /// <para>WHY A FAST PATH RATHER THAN A REPLACEMENT: everything FormattedText does that this
+        /// does not is real. It picks fallback fonts for characters the primary font lacks, it shapes
+        /// clusters, it handles bidi. This takes only the runs where none of that applies and hands
+        /// back null for the rest, which is the same division XTerm.NET's print path draws for the
+        /// same reason.</para>
+        /// <para>The conditions, and what each one is protecting:</para>
+        /// <list type="bullet">
+        /// <item>ONE CHAR PER CELL. A cluster puts several chars in one cell, so the char count and
+        /// the column count stop agreeing and per-cell advances cannot be assigned.</item>
+        /// <item>NO SURROGATES. An astral codepoint is two chars and is usually an emoji, which needs
+        /// a fallback font and often a colour one.</item>
+        /// <item>EVERY GLYPH PRESENT. Glyph 0 is .notdef -- the tofu box. The primary font not having
+        /// a character is exactly when fallback is needed, so it is exactly when to decline.</item>
+        /// <item>NO DECORATIONS. Those are set on the FormattedText itself.</item>
+        /// </list>
+        /// <para>Advances are set explicitly to the cell width rather than taken from the font. For a
+        /// monospace face the two agree, and pinning them means they agree by construction rather
+        /// than by assumption -- a fraction of a pixel of drift per cell would be a hundred and twenty
+        /// of them across a line.</para>
+        /// </remarks>
+        private GlyphRun? TryBuildGlyphRun(string text, int cellCount, FontStyle style, FontWeight weight)
+        {
+            if (!GlyphRunFastPathEnabled)
+                return null;
+
+            if (text.Length == 0 || text.Length != cellCount || _charWidth <= 0)
+                return null;
+
+            var glyphTypeface = GlyphTypefaceFor(style, weight);
+            if (glyphTypeface is null)
+                return null;
+
+            var map = glyphTypeface.CharacterToGlyphMap;
+            var glyphs = new GlyphInfo[text.Length];
+
+            for (var i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (char.IsSurrogate(c))
+                    return null;
+
+                if (!map.TryGetGlyph(c, out var glyph) || glyph == 0)
+                    return null;
+
+                glyphs[i] = new GlyphInfo(glyph, i, _charWidth, default);
+            }
+
+            return new GlyphRun(glyphTypeface, FontSize, text.AsMemory(), glyphs,
+                                baselineOrigin: new Point(0, _baseline));
+        }
+
+        /// <summary>The glyph typeface for a style and weight, resolved once per font.</summary>
+        private GlyphTypeface? GlyphTypefaceFor(FontStyle style, FontWeight weight)
+        {
+            if (_glyphTypefaces.TryGetValue((style, weight), out var cached))
+                return cached;
+
+            GlyphTypeface? resolved;
+            try
+            {
+                resolved = new Typeface(FontFamily, style, weight).GlyphTypeface;
+            }
+            catch
+            {
+                // A font that cannot produce a glyph typeface is not an error worth surfacing from a
+                // render: it means this run takes the FormattedText path, which is where it would
+                // have gone anyway before any of this existed.
+                resolved = null;
+            }
+
+            _glyphTypefaces[(style, weight)] = resolved;
+            return resolved;
         }
 
         private void RenderHoveredUrl(DrawingContext context, int viewportY, double scale)

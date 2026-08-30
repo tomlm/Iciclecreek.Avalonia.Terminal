@@ -7,6 +7,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Media.Immutable;
 using Avalonia.Platform;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using Iciclecreek.Terminal;
@@ -49,6 +50,7 @@ internal static class Program
 
         Report(results);
         Microbench();
+        PixelCompare();
         return 0;
     }
 
@@ -108,6 +110,7 @@ internal static class Program
             }),
 
             new("static", "nothing written; every line replays from cache", _ => string.Empty),
+            new("selected", "cached replay with the whole screen selected", _ => string.Empty),
         };
     }
 
@@ -125,6 +128,15 @@ internal static class Program
         // starts from a warm buffer rather than an empty one.
         view.Terminal.Write(Corpus.All[0].Frame(0));
         Dispatcher.UIThread.RunJobs();
+
+        // The selection pass walks every cell of every row asking whether it is selected, which only
+        // happens when there IS a selection -- so it needs a corpus that has one to be measured at
+        // all. Everything else about this frame is identical to "static".
+        if (corpus.Name == "selected")
+        {
+            view.Terminal.Selection.SelectAll();
+            Dispatcher.UIThread.RunJobs();
+        }
 
         // Every frame's text built UP FRONT. Building it inside the loop would put the harness's own
         // string work inside the numbers, and for the SGR corpora that is more allocation than the
@@ -237,7 +249,30 @@ internal static class Program
         var glyphRun = new GlyphRun(glyphTypeface, 14, sample.AsMemory(), indices,
                                     baselineOrigin: new Point(0, 14));
 
+        Console.WriteLine("  GlyphInfo constructors:");
+        foreach (var c in typeof(GlyphInfo).GetConstructors())
+            Console.WriteLine($"    ({string.Join(", ", c.GetParameters().Select(p => p.ParameterType.Name + " " + p.Name))})");
+        Console.WriteLine($"  measured advance for 'x': {(glyphTypeface.TryGetHorizontalGlyphAdvance(map.GetGlyph('x'), out var adv) ? adv : -1)} design units, em={glyphTypeface.Metrics.DesignEmHeight}");
+        Console.WriteLine();
+
         Time("DrawGlyphRun, cached run", N, target, ctx => ctx.DrawGlyphRun(immutable, glyphRun));
+
+        // A cached run gets replayed at a DIFFERENT screen row as the buffer scrolls, so its origin
+        // cannot simply be baked in. Two ways to move it, and the choice matters more than it looks:
+        // mutating a run the context may not have consumed yet is a correctness question, not just a
+        // speed one.
+        var moveCount = 0;
+        Time("DrawGlyphRun + set BaselineOrigin", N, target, ctx =>
+        {
+            glyphRun.BaselineOrigin = new Point(0, 14 + (++moveCount & 1));
+            ctx.DrawGlyphRun(immutable, glyphRun);
+        });
+
+        Time("DrawGlyphRun + PushTransform", N, target, ctx =>
+        {
+            using (ctx.PushTransform(Matrix.CreateTranslation(0, ++moveCount & 1)))
+                ctx.DrawGlyphRun(immutable, glyphRun);
+        });
         Time("build GlyphRun (shape) only", N, target, _ =>
         {
             var r = new GlyphRun(glyphTypeface, 14, sample.AsMemory(), indices, new Point(0, 14));
@@ -270,6 +305,69 @@ internal static class Program
         var bytes = (GC.GetAllocatedBytesForCurrentThread() - b0) / (double)n;
 
         Console.WriteLine($"{name,-38} {ns,10:F0} {bytes,12:F1}");
+    }
+
+    /// <summary>
+    /// Renders each corpus with the glyph fast path on and off, and compares the pixels.
+    /// </summary>
+    /// <remarks>
+    /// The test suite cannot see this. Every assertion in it is about buffer state or geometry, and
+    /// a run drawn through a different pipeline passes all of them while looking wrong -- which is
+    /// the entire risk of this change. What matters is not that the two are byte-identical, since
+    /// two shaping pipelines may round a subpixel differently, but that no pixel is far off and
+    /// almost none differ at all.
+    /// </remarks>
+    private static void PixelCompare()
+    {
+        Console.WriteLine($"{"corpus",-12} {"differing px",14} {"of total",12} {"worst channel",14}");
+        Console.WriteLine(new string('-', 60));
+
+        foreach (var corpus in Corpus.All)
+        {
+            if (corpus.Name == "static") continue;
+
+            var withGlyphs = Capture(corpus, useGlyphRun: true);
+            var withText = Capture(corpus, useGlyphRun: false);
+
+            long differing = 0, worst = 0;
+            for (var i = 0; i < withGlyphs.Length; i++)
+            {
+                int d = Math.Abs(withGlyphs[i] - withText[i]);
+                if (d != 0) differing++;
+                if (d > worst) worst = d;
+            }
+
+            var pct = 100.0 * differing / withGlyphs.Length;
+            Console.WriteLine($"{corpus.Name,-12} {differing,14:N0} {pct,11:F3}% {worst,14}");
+        }
+
+        Console.WriteLine();
+    }
+
+    private static byte[] Capture(Corpus corpus, bool useGlyphRun)
+    {
+        TerminalView.GlyphRunFastPathEnabled = useGlyphRun;
+
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 1400, Height = 900, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        view.Terminal.Write(corpus.Frame(1));
+        Dispatcher.UIThread.RunJobs();
+
+        var target = new RenderTargetBitmap(new PixelSize(1400, 900));
+        using (var ctx = target.CreateDrawingContext())
+            view.Render(ctx);
+
+        using var stream = new MemoryStream();
+        target.Save(stream);
+        target.Dispose();
+        window.Close();
+
+        TerminalView.GlyphRunFastPathEnabled = true;
+        return stream.ToArray();
     }
 
     private static void Report(List<Result> results)
