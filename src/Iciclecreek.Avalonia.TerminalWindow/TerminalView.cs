@@ -5748,6 +5748,17 @@ namespace Iciclecreek.Terminal
             // — subscribing after the reader starts is a window in which it is missed entirely.
             InstallConnection(connection);
             connection.ProcessExited += OnPtyProcessExited;
+
+            // Bytes a detached reader stole before this attach are the EARLIEST unread output, so
+            // replaying them before our own reader starts preserves stream order exactly -- consume
+            // them through the same pipeline a read would. After the loop below starts, that
+            // guarantee is gone, which is why the claim happens here and not lazily.
+            if (PendingHandoverBytes.ClaimOnAttach(connection) is { Length: > 0 } parked)
+            {
+                var replayLatch = true;   // mid-session bytes; readiness must not re-announce
+                ConsumeOutputChunk(Encoding.UTF8.GetString(parked), ref replayLatch, _processCts.Token);
+            }
+
             // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
             //
             // No readiness wait here, unlike the spawn path, and that is deliberate. AttachConnection is
@@ -5763,12 +5774,15 @@ namespace Iciclecreek.Terminal
             // output.
             var readerToken = _processCts.Token;
 
-            _ = Task.Factory.StartNew(
+            _readLoopTask = Task.Factory.StartNew(
                 () => ReadPtyOutputAsync(connection, readerToken),
                 CancellationToken.None,
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
-                TaskScheduler.Default);
+                TaskScheduler.Default).Unwrap();
         }
+
+        /// <summary>The running read loop, so a detach can wait for a cancellable one to finish.</summary>
+        private Task? _readLoopTask;
 
         /// <summary>
         /// Stop following the current connection and hand it back, without stopping the process behind it.
@@ -5800,11 +5814,38 @@ namespace Iciclecreek.Terminal
             // Marked external BEFORE cleanup, which is what makes cleanup let it live: the same flag the
             // attach path sets, meaning exactly the same thing — this process is somebody else's now.
             _externalConnection = true;
+            var readLoop = _readLoopTask;
+            _readLoopTask = null;
             CleanupProcess();
 
-            // KNOWN LIMITATION, recorded here because the code gives no hint of it.
+            if (connection.SupportsCancellableRead)
+            {
+                // CleanupProcess cancelled the token, and a cancellable read honours it while parked
+                // -- so the loop is unwinding NOW, having consumed nothing. Waiting for it makes the
+                // handover deterministic: when this returns, exactly zero readers hold the stream,
+                // and the next owner's first read sees the next byte the process writes. The timeout
+                // is a ceiling for a loop mid-chunk, not an expected cost; a loop that outlives it
+                // parks its final chunk like a blocking one would, so nothing is lost either way.
+                try { readLoop?.Wait(TimeSpan.FromSeconds(2)); }
+                catch (AggregateException) { /* the loop's own exit paths already spoke for it */ }
+            }
+            else
+            {
+                // A blocking reader cannot be stopped without closing the stream, so it stays parked
+                // until the process next speaks -- see the KNOWN LIMITATION below. What CHANGED: the
+                // chunk that finally unparks it is no longer simply lost. It is parked in
+                // PendingHandoverBytes, and an owner attaching afterwards replays it first, in
+                // order. Only a chunk stolen AFTER the new owner attached is dropped, because late
+                // delivery could reorder -- and reordered output corrupts where a gap merely gaps.
+            }
+
+            PendingHandoverBytes.NoteDetached(connection);
+
+            // KNOWN LIMITATION -- for BLOCKING-mode connections only, as of issue #123's fix.
+            // A connection whose SupportsCancellableRead is true has no such window: its loop was
+            // cancelled and awaited above, consuming nothing.
             //
-            // This does not stop the reader. That thread is parked inside a SYNCHRONOUS Read on the
+            // For the rest: this does not stop the reader. That thread is parked inside a SYNCHRONOUS Read on the
             // connection's stream, and the only way to make such a read return is to close the stream
             // underneath it — which is exactly what must not happen here, since the stream is what is
             // being handed over. Cancelling _processCts does not touch a blocking read.
@@ -5946,11 +5987,11 @@ namespace Iciclecreek.Terminal
                 // lost 23 of 24 outputs entirely while reporting a clean exit 0. It never reproduced on an
                 // idle developer machine and was near-total on a contended CI box.
                 var readerUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _ = Task.Factory.StartNew(
+                _readLoopTask = Task.Factory.StartNew(
                     () => ReadPtyOutputAsync(spawned, _processCts.Token, readerUp),
                     CancellationToken.None,
                     TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
-                    TaskScheduler.Default);
+                    TaskScheduler.Default).Unwrap();
 
                 // Bounded and never fatal: if the reader cannot start, the terminal behaves exactly as it
                 // used to rather than hanging the caller that opened it.
@@ -5979,6 +6020,164 @@ namespace Iciclecreek.Terminal
             Process = process;
             Args = args ?? Array.Empty<string>();
             await LaunchProcess();
+        }
+
+        /// <summary>
+        /// Runs one chunk of process output through everything a chunk gets: the sniffer event, the
+        /// emulator, scroll-follow, readiness, IME and the repaint.
+        /// </summary>
+        /// <remarks>
+        /// Extracted from the read loop so an ATTACH can replay bytes a detached reader parked
+        /// (<see cref="PendingHandoverBytes"/>) through the identical pipeline — a second,
+        /// almost-the-same delivery path would drift. <paramref name="shellReadyPosted"/> is the
+        /// loop's once-per-process latch; a replay passes true, because parked bytes are mid-session
+        /// output and must not re-announce readiness. <paramref name="cancellationToken"/> is the
+        /// loop's token, which two of the posted callbacks compare against the CURRENT process's to
+        /// refuse stale delivery — a replay passes the current one.
+        /// </remarks>
+        private void ConsumeOutputChunk(string output, ref bool shellReadyPosted, CancellationToken cancellationToken)
+        {
+
+            // Guarded so an unsubscribed terminal pays nothing: without it every chunk allocates a
+            // closure and queues a dispatcher callback for no subscriber. The ?.Invoke inside still
+            // covers the race where the last handler unsubscribes between here and delivery.
+            if (OutputReceived != null)
+            {
+                if (_outputOnReadTask)
+                {
+                    // Straight through, on this thread. No staleness guard is needed here that the
+                    // loop does not already provide -- and what provides it is the check after the
+                    // READ, not the one in the while condition this comment used to cite. That one
+                    // is asked before a read that blocks for the whole idle life of the process, so
+                    // it says nothing about who owns the bytes it eventually returns. A sniffer was
+                    // being handed another connection's output on the strength of it.
+                    //
+                    // The catch matters MORE on this path than on the dispatcher one, and for a
+                    // different reason: an escaping exception here propagates into ReadPtyOutputAsync
+                    // and ends the read loop, leaving a live process with a frozen view and nothing
+                    // reported.
+                    try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
+                    catch { /* a sniffer must never kill the read loop */ }
+                }
+                else
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        // Same guard ShellReady uses: the callback can still be queued when a relaunch
+                        // swaps the process out underneath it, and without this a consumer sees the old
+                        // process's bytes attributed to the new one.
+                        if (_processCts?.Token != cancellationToken)
+                            return;
+
+                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
+                        catch { /* a sniffer must never take the app down */ }
+                    });
+                }
+            }
+
+            // Snapshot before write so we can detect buffer growth (MaxScrollback
+            // increases when _terminal.Write adds lines; ScrollToBottom only moves
+            // ViewportY and does not affect buffer length).
+            var oldMax = MaxScrollback;
+            var oldY = _terminal.Buffer.ViewportY;
+
+            // Sampled BEFORE the write. Ordering is the subtle part: once _terminal.Write has run
+            // YBase has already advanced, so a view that genuinely WAS at the tail reads as
+            // not-following and the terminal stops following its own output.
+            //
+            // Alternate-buffer apps (vim, htop) position their own cursor and the scroll below is
+            // skipped for them regardless, so they count as following.
+            _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
+
+            lock (_terminalLock)
+            {
+                _terminal.Write(output);
+
+                // See _inputStartRow. A change of row means the shell drew something new, so the
+                // recorded input start is stale — but where the prompt ENDS is not known until the
+                // user types, since the prompt may still be arriving.
+                int cursorRow = _terminal.Buffer.YBase + _terminal.Buffer.Y;
+                if (cursorRow != _lastOutputRow)
+                {
+                    _lastOutputRow = cursorRow;
+                    _inputStartPending = !_semanticPrompt;
+                }
+            }
+
+            // Signal on the first chunk only. Posting per chunk would keep queueing UI-thread
+            // callbacks for the life of the process, which is pure overhead once the shell is
+            // long since ready and adds up under high-throughput output.
+            if (!shellReadyPosted)
+            {
+                shellReadyPosted = true;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    // The callback can still be queued when a relaunch swaps the process out
+                    // underneath it; the token identifies which process it belongs to.
+                    if (_processCts?.Token != cancellationToken)
+                        return;
+
+                    ShellReady?.Invoke(this, EventArgs.Empty);
+                });
+            }
+
+            // Auto-scroll to bottom when new content arrives, but only in normal buffer.
+            // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)
+            // handles its own cursor positioning and shouldn't be scrolled.
+            if (!_isAlternateBuffer)
+            {
+                if (_followBottom)
+                {
+                    _terminal.Buffer.ScrollToBottom();
+                }
+                else if (!_autoScroll && _terminal.Buffer.ViewportY != oldY)
+                {
+                    // Gating ScrollToBottom is NOT enough to mean "never auto-scrolls", which is what
+                    // this property advertises. The emulator advances ViewportY itself as YBase grows
+                    // whenever the view is sitting at the bottom, so with the scroll merely skipped a
+                    // terminal with auto-scroll off still tracked the tail exactly — measured at
+                    // ViewportY == MaxScrollback after every chunk, indistinguishable from on.
+                    //
+                    // ScrollToBottom only ever mattered for a view that had been scrolled AWAY, which
+                    // is why skipping it looks sufficient and is not. Holding the position here is
+                    // what actually hands the viewport to the host.
+                    _terminal.Buffer.ViewportY = Math.Min(oldY, MaxScrollback);
+                }
+
+                // Read and notified either way: a view parked in the scrollback still needs its
+                // scrollbar to learn that the buffer grew underneath it.
+                var newY = _terminal.Buffer.ViewportY;
+                var newMax = MaxScrollback;
+
+                if (oldMax != newMax || oldY != newY)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (oldMax != newMax)
+                            RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax);
+                        if (oldY != newY)
+                            RaisePropertyChanged(ViewportYProperty, oldY, newY);
+                    });
+                }
+            }
+
+            // Notify IME of cursor position change after terminal processes data
+            Dispatcher.UIThread.Post(() =>
+            {
+                _inputMethodClient?.NotifyCursorRectangleChanged();
+
+                // And the TEXT around it, which the client advertises support for and was
+                // never told about. An IME asks once, caches, and waits to be told -- so it
+                // was composing against whatever the line held the first time it looked.
+                _inputMethodClient?.NotifySurroundingTextChanged();
+            });
+
+            // Output is the only thing that can start or stop an animation, and the clock is
+            // a dispatcher timer, so the decision has to be made on the UI thread. The check
+            // behind it is a walk of a list that is empty for a terminal showing text.
+            Dispatcher.UIThread.Post(SyncAnimationClock);
+
+            RequestPaint();
         }
 
         /// <param name="connection">
@@ -6027,7 +6226,34 @@ namespace Iciclecreek.Terminal
                     //
                     // Cancellation is by teardown rather than by token: disposing the connection closes the
                     // stream and the blocking read throws, which the catch below handles.
-                    var bytesRead = connection.ReaderStream.Read(buffer, 0, buffer.Length);
+                    int bytesRead;
+                    if (connection.SupportsCancellableRead)
+                    {
+                        // A connection that PROMISES cancellable reads gets the awaited form: parked
+                        // on the pty layer's poller rather than on this thread, and the token lands
+                        // while waiting for data -- before read(2) runs -- so a detach unparks the
+                        // loop without consuming a byte and without touching the stream it is
+                        // handing over. The measured case against `await ReadAsync` (137 ms vs
+                        // 7,546 ms, output lost under load) damned SYNC-OVER-ASYNC -- fake async
+                        // over a blocking descriptor parking pool threads -- and says nothing about
+                        // an event-driven wait, which is what the capability certifies.
+                        try
+                        {
+                            bytesRead = await connection.ReaderStream
+                                .ReadAsync(buffer, 0, buffer.Length, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // A detach or teardown. Nothing was consumed -- that is the guarantee
+                            // the capability advertises, and Porta.Pty tests it.
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        bytesRead = connection.ReaderStream.Read(buffer, 0, buffer.Length);
+                    }
 
                     // Asked AGAIN, on the other side of the read.
                     //
@@ -6047,8 +6273,20 @@ namespace Iciclecreek.Terminal
                     // Breaking rather than continuing: the while condition would stop the loop on the
                     // next pass anyway, and this makes it stop without first reading a SECOND chunk
                     // out of a stream that is not ours to read.
+                    //
+                    // The chunk in hand is not simply dropped any more. If the connection's next
+                    // owner has not attached yet, these are by construction the earliest unread
+                    // bytes, and parking them lets that owner replay them FIRST -- lossless, in
+                    // order. Once an owner is attached its own reader races this one on the same
+                    // descriptor, and late delivery could interleave into the middle of what it
+                    // already consumed -- inside an escape sequence, even. Reordered output
+                    // corrupts; a gap merely gaps. So then, and only then, the chunk is dropped.
                     if (!ReferenceEquals(_ptyConnection, connection))
+                    {
+                        if (bytesRead > 0)
+                            PendingHandoverBytes.TryPark(connection, buffer.AsSpan(0, bytesRead));
                         break;
+                    }
 
                     if (bytesRead == 0)
                     {
@@ -6106,147 +6344,7 @@ namespace Iciclecreek.Terminal
                     }
 
                     var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-
-                    // Guarded so an unsubscribed terminal pays nothing: without it every chunk allocates a
-                    // closure and queues a dispatcher callback for no subscriber. The ?.Invoke inside still
-                    // covers the race where the last handler unsubscribes between here and delivery.
-                    if (OutputReceived != null)
-                    {
-                        if (_outputOnReadTask)
-                        {
-                            // Straight through, on this thread. No staleness guard is needed here that the
-                            // loop does not already provide -- and what provides it is the check after the
-                            // READ, not the one in the while condition this comment used to cite. That one
-                            // is asked before a read that blocks for the whole idle life of the process, so
-                            // it says nothing about who owns the bytes it eventually returns. A sniffer was
-                            // being handed another connection's output on the strength of it.
-                            //
-                            // The catch matters MORE on this path than on the dispatcher one, and for a
-                            // different reason: an escaping exception here propagates into ReadPtyOutputAsync
-                            // and ends the read loop, leaving a live process with a frozen view and nothing
-                            // reported.
-                            try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
-                            catch { /* a sniffer must never kill the read loop */ }
-                        }
-                        else
-                        {
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                // Same guard ShellReady uses: the callback can still be queued when a relaunch
-                                // swaps the process out underneath it, and without this a consumer sees the old
-                                // process's bytes attributed to the new one.
-                                if (_processCts?.Token != cancellationToken)
-                                    return;
-
-                                try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
-                                catch { /* a sniffer must never take the app down */ }
-                            });
-                        }
-                    }
-
-                    // Snapshot before write so we can detect buffer growth (MaxScrollback
-                    // increases when _terminal.Write adds lines; ScrollToBottom only moves
-                    // ViewportY and does not affect buffer length).
-                    var oldMax = MaxScrollback;
-                    var oldY = _terminal.Buffer.ViewportY;
-
-                    // Sampled BEFORE the write. Ordering is the subtle part: once _terminal.Write has run
-                    // YBase has already advanced, so a view that genuinely WAS at the tail reads as
-                    // not-following and the terminal stops following its own output.
-                    //
-                    // Alternate-buffer apps (vim, htop) position their own cursor and the scroll below is
-                    // skipped for them regardless, so they count as following.
-                    _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
-
-                    lock (_terminalLock)
-                    {
-                        _terminal.Write(output);
-
-                        // See _inputStartRow. A change of row means the shell drew something new, so the
-                        // recorded input start is stale — but where the prompt ENDS is not known until the
-                        // user types, since the prompt may still be arriving.
-                        int cursorRow = _terminal.Buffer.YBase + _terminal.Buffer.Y;
-                        if (cursorRow != _lastOutputRow)
-                        {
-                            _lastOutputRow = cursorRow;
-                            _inputStartPending = !_semanticPrompt;
-                        }
-                    }
-
-                    // Signal on the first chunk only. Posting per chunk would keep queueing UI-thread
-                    // callbacks for the life of the process, which is pure overhead once the shell is
-                    // long since ready and adds up under high-throughput output.
-                    if (!shellReadyPosted)
-                    {
-                        shellReadyPosted = true;
-                        Dispatcher.UIThread.Post(() =>
-                        {
-                            // The callback can still be queued when a relaunch swaps the process out
-                            // underneath it; the token identifies which process it belongs to.
-                            if (_processCts?.Token != cancellationToken)
-                                return;
-
-                            ShellReady?.Invoke(this, EventArgs.Empty);
-                        });
-                    }
-
-                    // Auto-scroll to bottom when new content arrives, but only in normal buffer.
-                    // Alternate buffer (used by full-screen apps like vim, htop, asciiquarium)
-                    // handles its own cursor positioning and shouldn't be scrolled.
-                    if (!_isAlternateBuffer)
-                    {
-                        if (_followBottom)
-                        {
-                            _terminal.Buffer.ScrollToBottom();
-                        }
-                        else if (!_autoScroll && _terminal.Buffer.ViewportY != oldY)
-                        {
-                            // Gating ScrollToBottom is NOT enough to mean "never auto-scrolls", which is what
-                            // this property advertises. The emulator advances ViewportY itself as YBase grows
-                            // whenever the view is sitting at the bottom, so with the scroll merely skipped a
-                            // terminal with auto-scroll off still tracked the tail exactly — measured at
-                            // ViewportY == MaxScrollback after every chunk, indistinguishable from on.
-                            //
-                            // ScrollToBottom only ever mattered for a view that had been scrolled AWAY, which
-                            // is why skipping it looks sufficient and is not. Holding the position here is
-                            // what actually hands the viewport to the host.
-                            _terminal.Buffer.ViewportY = Math.Min(oldY, MaxScrollback);
-                        }
-
-                        // Read and notified either way: a view parked in the scrollback still needs its
-                        // scrollbar to learn that the buffer grew underneath it.
-                        var newY = _terminal.Buffer.ViewportY;
-                        var newMax = MaxScrollback;
-
-                        if (oldMax != newMax || oldY != newY)
-                        {
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                if (oldMax != newMax)
-                                    RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax);
-                                if (oldY != newY)
-                                    RaisePropertyChanged(ViewportYProperty, oldY, newY);
-                            });
-                        }
-                    }
-
-                    // Notify IME of cursor position change after terminal processes data
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        _inputMethodClient?.NotifyCursorRectangleChanged();
-
-                        // And the TEXT around it, which the client advertises support for and was
-                        // never told about. An IME asks once, caches, and waits to be told -- so it
-                        // was composing against whatever the line held the first time it looked.
-                        _inputMethodClient?.NotifySurroundingTextChanged();
-                    });
-
-                    // Output is the only thing that can start or stop an animation, and the clock is
-                    // a dispatcher timer, so the decision has to be made on the UI thread. The check
-                    // behind it is a walk of a list that is empty for a terminal showing text.
-                    Dispatcher.UIThread.Post(SyncAnimationClock);
-
-                    RequestPaint();
+                    ConsumeOutputChunk(output, ref shellReadyPosted, cancellationToken);
                 }
             }
             catch (OperationCanceledException)

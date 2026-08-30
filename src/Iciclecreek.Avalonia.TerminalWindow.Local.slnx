@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/Porta.Pty/">
+    <Project Path="../../Porta.Pty/src/Porta.Pty/Porta.Pty.csproj" />
+  </Folder>
   <Folder Name="/XTerm.NET/">
     <Project Path="../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj" />
     <Project Path="../../XTerm.NET/src/XTerm.NET.Tests/XTerm.NET.Tests.csproj" />

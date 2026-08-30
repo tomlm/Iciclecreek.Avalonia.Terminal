@@ -36,7 +36,12 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.2" />
-    <PackageReference Include="Porta.Pty" Version="2.2.0" />
+    <!-- Same arrangement as XTerm.NET below: the Local solution builds against a sibling
+         checkout, everything else against the package. Needed for the same reason: work that
+         spans the pty layer and this control (the reader-handover of issue 123) cannot wait a
+         package round-trip per iteration. -->
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../../../Porta.Pty/src/Porta.Pty/Porta.Pty.csproj" Condition="'$(SolutionName)' == 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
+    <PackageReference Include="Porta.Pty" Version="2.2.0" Condition="'$(SolutionName)' != 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
   </ItemGroup>

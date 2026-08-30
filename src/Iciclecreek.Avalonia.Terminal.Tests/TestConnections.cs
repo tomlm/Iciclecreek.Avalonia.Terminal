@@ -140,3 +140,78 @@ internal sealed class PushConnection : IPtyConnection
     public void Dispose() { }
     public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
 }
+
+/// <summary>
+/// A pty double whose reads honour their cancellation token the way Porta.Pty's async-IO streams do:
+/// cancellation lands while WAITING and consumes nothing.
+/// </summary>
+/// <remarks>
+/// The contract under test in HandoverTests, held by a double so the tests need no real pty. A
+/// cancelled read leaves every pushed chunk exactly where it was — that is the property
+/// <see cref="Porta.Pty.IPtyConnection.SupportsCancellableRead"/> certifies, and the double must
+/// keep it or the tests would pass against semantics the real thing does not have.
+/// </remarks>
+internal sealed class CancellablePushConnection : IPtyConnection
+{
+    private sealed class CancellableStream : Stream
+    {
+        private readonly SemaphoreSlim _available = new(0);
+        private readonly ConcurrentQueue<byte[]> _queue = new();
+        private byte[]? _chunk;
+        private int _consumed;
+
+        public void Push(byte[] bytes) { _queue.Enqueue(bytes); _available.Release(); }
+
+        /// <summary>How many chunks sit unconsumed — what a lossless detach must leave intact.</summary>
+        public int PendingChunks => _queue.Count + (_chunk != null && _consumed < _chunk!.Length ? 1 : 0);
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            ValidateBufferArguments(buffer, offset, count);
+            while (_chunk == null || _consumed == _chunk.Length)
+            {
+                // The wait is where cancellation lands; a token fired here has consumed nothing.
+                await _available.WaitAsync(cancellationToken);
+                _queue.TryDequeue(out _chunk);
+                _consumed = 0;
+            }
+
+            var n = Math.Min(count, _chunk!.Length - _consumed);
+            Array.Copy(_chunk, _consumed, buffer, offset, n);
+            _consumed += n;
+            return n;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private readonly CancellableStream _stream = new();
+
+    public Stream ReaderStream => _stream;
+    public Stream WriterStream { get; } = new MemoryStream();
+    public bool SupportsCancellableRead => true;
+
+    public void Push(string text) => _stream.Push(Encoding.UTF8.GetBytes(text));
+
+    /// <summary>Chunks pushed but not yet read — zero loss means a detach leaves this untouched.</summary>
+    public int PendingChunks => _stream.PendingChunks;
+
+    public int ExitCode => 0;
+    public bool WaitForExit(int milliseconds) => true;
+    public int Pid => -1;
+    public void Kill() { }
+    public void Resize(int columns, int rows) { }
+    public void Dispose() { }
+    public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
+}
