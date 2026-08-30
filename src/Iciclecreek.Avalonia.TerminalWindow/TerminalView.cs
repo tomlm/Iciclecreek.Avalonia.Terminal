@@ -3995,9 +3995,6 @@ namespace Iciclecreek.Terminal
             });
         }
 
-        /// <summary>
-        /// Answers a program asking about the window — its size in cells or pixels, its position, its title.
-        /// </summary>
         /// <summary>How long the reader waits for the UI thread to answer a window query.</summary>
         /// <remarks>
         /// Generous for a handler that only reads window state, and short enough that a wedged UI
@@ -4006,7 +4003,8 @@ namespace Iciclecreek.Terminal
         private static readonly TimeSpan WindowInfoPatience = TimeSpan.FromMilliseconds(250);
 
         /// <summary>
-        /// Answers a window query from the UI thread, without letting the reader wait on it for ever.
+        /// Answers a program asking about the window — its size in cells or pixels, its position, or
+        /// its title — from the UI thread, without letting the reader wait on it for ever.
         /// </summary>
         /// <remarks>
         /// <para>The answer genuinely needs the UI thread -- only it knows the window -- and the
