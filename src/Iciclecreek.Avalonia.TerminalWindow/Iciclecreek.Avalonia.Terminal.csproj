@@ -48,6 +48,6 @@
 
   <ItemGroup>
     <ProjectReference Include="$(MSBuildThisFileDirectory)../../../XTerm.NET/src/XTerm.NET/XTerm.NET.csproj" Condition="'$(SolutionName)' == 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
-    <PackageReference Include="XTerm.NET" Version="2.0.0-rc003" Condition="'$(SolutionName)' != 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
+    <PackageReference Include="XTerm.NET" Version="2.0.0-rc005" Condition="'$(SolutionName)' != 'Iciclecreek.Avalonia.TerminalWindow.Local'" />
   </ItemGroup>
 </Project>
