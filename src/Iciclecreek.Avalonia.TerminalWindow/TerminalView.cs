@@ -1451,11 +1451,17 @@ namespace Iciclecreek.Terminal
             // property -- bindings, styles and the property system all go on working, and every reader
             // gets the object the emulator actually reads.
             //
+            // SetCurrentValue rather than SetValue, to say redirect rather than take ownership. Note
+            // that Avalonia is not WPF here: SetValue does NOT clear a binding on a styled property,
+            // and a test that binds Options and pushes through it passes either way. So this is about
+            // intent rather than a bug being fixed -- the value is being pointed at the emulator's
+            // instance, not claimed on the host's behalf.
+            //
             // Not everything on it is live even so, and that is XTerm.NET's contract rather than this
             // one's: Cols, Rows, and the initial theme are consumed while the emulator is built. Use
             // Resize for the dimensions. Scrollback, Theme and TabStopWidth ARE live as of XTerm.NET's
             // options audit, and BufferSize here forwards to Scrollback.
-            SetValue(OptionsProperty, _terminal.Options);
+            SetCurrentValue(OptionsProperty, _terminal.Options);
 
             // Seeded here so it is never unset. Render replaces it every frame; this is only what the very
             // first one starts from, and what anything drawing before that frame would otherwise trip over.
@@ -2208,7 +2214,7 @@ namespace Iciclecreek.Terminal
             if (change.Property == OptionsProperty && _terminal != null &&
                 !ReferenceEquals(change.NewValue, _terminal.Options))
             {
-                SetValue(OptionsProperty, _terminal.Options);
+                SetCurrentValue(OptionsProperty, _terminal.Options);
                 return;
             }
 

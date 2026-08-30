@@ -735,7 +735,7 @@ namespace Iciclecreek.Terminal
                 // with its emulator's own once that exists -- and that answer came before there was
                 // anything listening for it. Seeding here catches the case where the view was already
                 // initialised; the bridge keeps the two in step from this point on.
-                SetValue(OptionsProperty, _terminalView.Options);
+                SetCurrentValue(OptionsProperty, _terminalView.Options);
                 // (no window event hooking needed)
             }
         }
@@ -791,7 +791,12 @@ namespace Iciclecreek.Terminal
                 // Mirrored through the property-changed bridge rather than assigned after the template is
                 // applied, because the order of OnApplyTemplate against the view's OnInitialized is not
                 // this class's to assume. Whenever the view's value moves, this follows it.
-                SetValue(OptionsProperty, e.NewValue as XTerm.Options.TerminalOptions);
+                //
+                // SetCurrentValue for the same reason as in the view: this is a redirect, not a claim
+                // of ownership. It is not load-bearing -- Avalonia keeps a binding alive across a
+                // plain SetValue, unlike WPF -- so the binding test below guards the behaviour rather
+                // than this particular call.
+                SetCurrentValue(OptionsProperty, e.NewValue as XTerm.Options.TerminalOptions);
             }
         }
 

@@ -126,6 +126,53 @@ public class LiveOptionsTests
     }
 
     [AvaloniaTest]
+    public void A_binding_on_Options_survives_the_view_adopting_the_live_instance()
+    {
+        // A GUARD rather than a regression test, and worth saying so. Copilot read the seeding
+        // below as WPF would -- where SetValue writes a local value that detaches a binding for
+        // good -- but Avalonia does not work that way: flipping both call sites back to plain
+        // SetValue leaves this passing. So nothing here is currently broken, and this exists to
+        // notice if that stops being true, or if the seeding starts competing with a host's
+        // binding some other way.
+        //
+        // Asserted on the CONTROL rather than the view, because the view deliberately snaps any
+        // foreign value back to the emulator's instance, which would mask the question entirely.
+        var source = new SourceHolder { Value = new XTerm.Options.TerminalOptions { TermName = "bound-one" } };
+        var control = new TerminalControl { Process = "" };
+        control.Bind(TerminalControl.OptionsProperty,
+                     new global::Avalonia.Data.Binding(nameof(SourceHolder.Value)) { Source = source });
+
+        var window = TerminalHost.Show(control);
+        try
+        {
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var replacement = new XTerm.Options.TerminalOptions { TermName = "second-one" };
+            source.Value = replacement;
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(control.Options, Is.SameAs(replacement),
+                "a host that bound Options must still own the property after the control seeds "
+                + "itself from the view");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>A bindable source, so the test can push a new value through a live binding.</summary>
+    private sealed class SourceHolder : global::Avalonia.AvaloniaObject
+    {
+        public static readonly global::Avalonia.StyledProperty<XTerm.Options.TerminalOptions?> ValueProperty =
+            global::Avalonia.AvaloniaProperty.Register<SourceHolder, XTerm.Options.TerminalOptions?>(nameof(Value));
+
+        public XTerm.Options.TerminalOptions? Value
+        {
+            get => GetValue(ValueProperty);
+            set => SetValue(ValueProperty, value);
+        }
+    }
+
+    [AvaloniaTest]
     public void A_live_option_written_after_startup_changes_what_the_terminal_does()
     {
         // Reference equality proves the plumbing; this proves it matters. Scrollback is live in
