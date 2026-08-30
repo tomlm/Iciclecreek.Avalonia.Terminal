@@ -5816,6 +5816,15 @@ namespace Iciclecreek.Terminal
             _externalConnection = true;
             var readLoop = _readLoopTask;
             _readLoopTask = null;
+
+            // Marked ownerless BEFORE cleanup, and the ordering is load-bearing. The read loop
+            // parks a stolen chunk only when the connection is marked detached; it decides to
+            // steal the moment cleanup swaps _ptyConnection out. Marking afterwards left a
+            // window -- cleanup done, mark not yet set -- where a chunk arriving right then was
+            // dropped as if an owner had attached, when none had. Before cleanup there is no
+            // such window: while the view still owns the connection the loop delivers normally
+            // and never consults the mark.
+            PendingHandoverBytes.NoteDetached(connection);
             CleanupProcess();
 
             if (connection.SupportsCancellableRead)
@@ -5838,8 +5847,6 @@ namespace Iciclecreek.Terminal
                 // order. Only a chunk stolen AFTER the new owner attached is dropped, because late
                 // delivery could reorder -- and reordered output corrupts where a gap merely gaps.
             }
-
-            PendingHandoverBytes.NoteDetached(connection);
 
             // KNOWN LIMITATION -- for BLOCKING-mode connections only, as of issue #123's fix.
             // A connection whose SupportsCancellableRead is true has no such window: its loop was
