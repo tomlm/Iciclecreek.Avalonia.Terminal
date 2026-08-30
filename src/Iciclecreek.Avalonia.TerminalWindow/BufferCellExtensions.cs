@@ -94,7 +94,11 @@ namespace Iciclecreek.Avalonia.Terminal
             // deliberately translucent terminal opaque wherever a cell inverts or the block cursor
             // lands. Two different answers to "is the default background the emulator's or the
             // host's" in one renderer would be worse than either answer.
-            if (defaultBrush is ISolidColorBrush { Color.A: 255 })
+            // BOTH transparency channels. A brush is see-through if its colour carries alpha or if
+            // the brush itself is set below full opacity, and those are independent -- a host that
+            // writes Opacity = 0.8 on an opaque colour is asking for the same thing as one that
+            // writes alpha, and only the second was being honoured.
+            if (IsFullyOpaque(defaultBrush))
                 return new SolidColorBrush(FromRgb(palette.Background));
 
             return defaultBrush;
@@ -215,6 +219,17 @@ namespace Iciclecreek.Avalonia.Terminal
                 realColor = PalleteToColor(color, palette);  // Palette mode
             return realColor;
         }
+
+        /// <summary>
+        /// Whether <paramref name="brush"/> hides what is behind it completely.
+        /// </summary>
+        /// <remarks>
+        /// Two independent channels have to agree: the colour's own alpha, and the brush's Opacity.
+        /// Either one below full means the host is asking to be seen through, and no RGB palette
+        /// entry can express that -- so the emulator's default colour must not be substituted for it.
+        /// </remarks>
+        internal static bool IsFullyOpaque(IBrush? brush)
+            => brush is ISolidColorBrush { Color.A: 255 } solid && solid.Opacity >= 1.0;
 
         /// <summary>A 0xRRGGBB value from the emulator's palette, as a colour.</summary>
         internal static Color FromRgb(int rgb) =>

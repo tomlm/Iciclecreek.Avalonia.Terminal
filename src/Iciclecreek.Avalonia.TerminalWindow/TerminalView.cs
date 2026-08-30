@@ -6261,7 +6261,9 @@ namespace Iciclecreek.Terminal
             _boldIsBright = _terminal.Options.DrawBoldTextInBrightColors;
 
             var surface = GetValue(BackgroundProperty);
-            if (surface is ISolidColorBrush opaque && opaque.Color.A == 255)
+            // Through the shared test, which also asks about IBrush.Opacity -- a second way to be
+            // translucent that this checked alpha alone for, and missed.
+            if (BufferCellExtensions.IsFullyOpaque(surface))
             {
                 // The terminal's default background is the emulator's, not this brush — they agree until a
                 // program moves it with OSC 11, and then the program is the one that should win. A brush

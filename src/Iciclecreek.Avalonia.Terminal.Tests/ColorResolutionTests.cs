@@ -206,9 +206,14 @@ public class ColorResolutionTests
         try
         {
             var (cell, palette) = FirstCell(view, "X");
-            var translucent = new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0));
+            var byAlpha = new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0));
+            Assert.That(cell.GetBackgroundBrush(palette, byAlpha), Is.SameAs(byAlpha));
 
-            Assert.That(cell.GetBackgroundBrush(palette, translucent), Is.SameAs(translucent));
+            // The OTHER way to be translucent, and independent of the first: a host that writes
+            // Opacity = 0.8 on an opaque colour is asking for exactly the same thing, and only the
+            // alpha form was being honoured.
+            var byOpacity = new SolidColorBrush(Colors.Black) { Opacity = 0.8 };
+            Assert.That(cell.GetBackgroundBrush(palette, byOpacity), Is.SameAs(byOpacity));
         }
         finally { window.Close(); }
     }
