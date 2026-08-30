@@ -562,6 +562,21 @@ public class SixelRenderingTests
     }
 
     [AvaloniaTest]
+    public void A_positive_vertical_offset_crops_at_the_row_instead_of_stretching()
+    {
+        var image = EvenImage();
+
+        Assert.That(TerminalView.TryPlanImageBlit(
+            Run(image, 0, 4, 0, 0, 8, 3, offsetY: 1), 0, 20, 10, 20, 1.0,
+            out var source, out var destination), Is.True);
+
+        Assert.That(destination.Bottom, Is.LessThanOrEqualTo(20),
+            "the shifted strip must not paint into the following text row");
+        Assert.That(source.Height, Is.LessThan(3),
+            "the source must be cropped with the destination, not squeezed into it");
+    }
+
+    [AvaloniaTest]
     public void An_empty_run_is_refused()
     {
         var image = EvenImage();

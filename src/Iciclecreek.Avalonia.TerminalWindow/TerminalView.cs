@@ -7159,13 +7159,38 @@ namespace Iciclecreek.Terminal
             var drawnWidth = sourceWidth / cell * charWidth;
             var drawnHeight = placement.SrcHeight / (double)cellHigh * charHeight;
 
-            var startX = Snap(run.StartX * charWidth + offsetX, scale);
-            var endX = Snap(run.StartX * charWidth + offsetX + drawnWidth, scale);
-            var topY = offsetY > 0 ? Snap(startYPos + offsetY, scale) : startYPos;
+            // Clip the shifted destination to the cell box. Cropping the source by the same
+            // proportions is essential: merely shortening the destination would squeeze the full
+            // source into it and recreate the edge stretching this method is meant to remove.
+            var boxLeft = run.StartX * charWidth;
+            var boxRight = (run.StartX + shown) * charWidth;
+            var rawLeft = boxLeft + offsetX;
+            var rawTop = startYPos + offsetY;
+            var clippedLeft = Math.Max(boxLeft, rawLeft);
+            var clippedRight = Math.Min(boxRight, rawLeft + drawnWidth);
+            var clippedTop = Math.Max(startYPos, rawTop);
+            var clippedBottom = Math.Min(startYPos + rowHeight, rawTop + drawnHeight);
 
-            // Never beyond the row it belongs to. A picture is placed per line, so a source taller
-            // than one cell would otherwise paint down over the row below it.
-            var endY = Snap(startYPos + offsetY + Math.Min(drawnHeight, rowHeight), scale);
+            if (clippedRight <= clippedLeft || clippedBottom <= clippedTop)
+                return false;
+
+            var sourceX = clippedLeft == rawLeft
+                ? placement.SrcX
+                : placement.SrcX + (clippedLeft - rawLeft) / drawnWidth * sourceWidth;
+            var sourceY = clippedTop == rawTop
+                ? placement.SrcY
+                : placement.SrcY + (clippedTop - rawTop) / drawnHeight * placement.SrcHeight;
+            var clippedSourceWidth = clippedLeft == rawLeft && clippedRight == rawLeft + drawnWidth
+                ? sourceWidth
+                : (clippedRight - clippedLeft) / drawnWidth * sourceWidth;
+            var clippedSourceHeight = clippedTop == rawTop && clippedBottom == rawTop + drawnHeight
+                ? placement.SrcHeight
+                : (clippedBottom - clippedTop) / drawnHeight * placement.SrcHeight;
+
+            var startX = Snap(clippedLeft, scale);
+            var endX = Snap(clippedRight, scale);
+            var topY = Snap(clippedTop, scale);
+            var endY = Snap(clippedBottom, scale);
 
             destination = new Rect(startX, topY, Math.Max(0, endX - startX), Math.Max(0, endY - topY));
             if (destination.Width <= 0 || destination.Height <= 0)
@@ -7174,7 +7199,7 @@ namespace Iciclecreek.Terminal
                 return false;
             }
 
-            source = new Rect(placement.SrcX, placement.SrcY, sourceWidth, placement.SrcHeight);
+            source = new Rect(sourceX, sourceY, clippedSourceWidth, clippedSourceHeight);
             return true;
         }
 
@@ -7516,6 +7541,7 @@ namespace Iciclecreek.Terminal
                         string text = String.Empty;
                         int cellCount = 0;
                         int runStartX = 0;
+                        var dwRunHasBackdrop = CoveredByBackdrop(dwPainted, x, x + Math.Max(1, cell.Width));
 
                         // Skip placeholder cells (width 0) that follow wide characters
                         if (cell.Width == 0)
@@ -7532,7 +7558,8 @@ namespace Iciclecreek.Terminal
                             while (x < line.Length && x < effectiveCols)
                             {
                                 var currentCell = line[x];
-                                if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes)
+                                if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes
+                                    || CoveredByBackdrop(dwPainted, x, x + 1) != dwRunHasBackdrop)
                                     break;
                                 textBuilder.Append(currentCell.Content);
                                 cellCount += currentCell.Width;
@@ -7577,7 +7604,7 @@ namespace Iciclecreek.Terminal
 
                         var position = new Point(startX, startYPos);
 
-                        if (swapped || cell.GetBackgroundColor(_palette).HasValue)
+                        if ((swapped || cell.GetBackgroundColor(_palette).HasValue) && !dwRunHasBackdrop)
                             context.FillRectangle(background, rect);
                         context.DrawText(formattedText, position);
 
