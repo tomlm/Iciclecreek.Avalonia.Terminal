@@ -6691,6 +6691,16 @@ namespace Iciclecreek.Terminal
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
                 var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
+
+                // Unless a picture is already there. Placements with a NEGATIVE z-index are drawn
+                // before the text precisely so the text sits on top of them -- and then every cell
+                // with a background of its own painted an opaque rectangle over the picture it was
+                // supposed to be sitting on, erasing the thing the z-index asked for.
+                //
+                // The text still draws. What is dropped is only the fill, which is what was covering
+                // the picture; a cell with no picture behind it is untouched.
+                if (fill is not null && CoveredByBackdrop(painted, runStartX, runStartX + cellCount))
+                    fill = null;
                 // Cache only content-dependent data, not screen position
                 // Named rather than positional: the record gained Placement and Image ahead of these
                 // when pictures moved onto lines, so position no longer says which is which.
@@ -7062,6 +7072,19 @@ namespace Iciclecreek.Terminal
             return false;
         }
 
+        /// <summary>
+        /// Whether a picture has already been drawn UNDER the columns <paramref name="start"/> to
+        /// <paramref name="end"/>, so painting a background there would erase it.
+        /// </summary>
+        /// <remarks>
+        /// Only the negative-z placements reach this list at the point it is asked, because the row
+        /// pass draws those before the text and the rest after it. That is the whole distinction: a
+        /// picture in front of the text is allowed to cover a background, a picture behind it is what
+        /// the background was covering.
+        /// </remarks>
+        private static bool CoveredByBackdrop(List<XT.Graphics.LinePlacement> painted, int start, int end)
+            => OverlapsAny(painted, start, end);
+
         private static bool OverlapsAny(List<XT.Graphics.LinePlacement> earlier, int start, int end)
         {
             foreach (var placement in earlier)
@@ -7116,10 +7139,28 @@ namespace Iciclecreek.Terminal
             var offsetX = placement.OffsetX / (double)cell * charWidth;
             var offsetY = placement.OffsetY / (double)cellHigh * charHeight;
 
+            // The destination is the picture's OWN size expressed in screen pixels, not the box of
+            // cells it was assigned. Those agree for every full cell and disagree at the edges, which
+            // is exactly where the stretching showed.
+            //
+            // A picture whose width is not a whole number of cells still occupies a whole number of
+            // cells in the buffer, so drawing it across all of them stretched it sideways to fill the
+            // remainder. Worse vertically: the LAST row of a picture usually has fewer pixels left
+            // than a cell is tall, and that short strip was being stretched over a full text row --
+            // so the bottom of every picture was subtly taller than the rest of it.
+            //
+            // srcWidth and srcHeight are in image pixels and cell/cellHigh say how many of those make
+            // one cell, which is the same conversion the offsets above already use.
+            var drawnWidth = sourceWidth / cell * charWidth;
+            var drawnHeight = placement.SrcHeight / (double)cellHigh * charHeight;
+
             var startX = Snap(run.StartX * charWidth + offsetX, scale);
-            var endX = Snap((run.StartX + shown) * charWidth + offsetX, scale);
+            var endX = Snap(run.StartX * charWidth + offsetX + drawnWidth, scale);
             var topY = offsetY > 0 ? Snap(startYPos + offsetY, scale) : startYPos;
-            var endY = Snap(startYPos + offsetY + rowHeight, scale);
+
+            // Never beyond the row it belongs to. A picture is placed per line, so a source taller
+            // than one cell would otherwise paint down over the row below it.
+            var endY = Snap(startYPos + offsetY + Math.Min(drawnHeight, rowHeight), scale);
 
             destination = new Rect(startX, topY, Math.Max(0, endX - startX), Math.Max(0, endY - topY));
             if (destination.Width <= 0 || destination.Height <= 0)
@@ -7444,6 +7485,26 @@ namespace Iciclecreek.Terminal
                     // Only render the first half of the columns since they'll be doubled
                     int effectiveCols = _terminal.Cols / 2;
 
+                    // Pictures, which this path used to skip entirely -- so a picture on a line a
+                    // program had doubled simply disappeared, and the text still stored in those
+                    // cells was drawn in its place. Vanishing would have been the lesser bug.
+                    //
+                    // Inside the transform with everything else, so a doubled picture is doubled by
+                    // the same matrix that doubles the text around it. The runs are collected into a
+                    // list that is thrown away: this path sets line.Cache = null a few lines up,
+                    // because a transform is not something a cached draw list can carry.
+                    var dwPlacements = OrderedPlacements(line);
+                    var dwPainted = new List<XT.Graphics.LinePlacement>();
+                    var dwScratch = new List<CachedTextRun>();
+                    var dwNext = 0;
+
+                    for (; dwNext < dwPlacements.Count && dwPlacements[dwNext].ZIndex < 0; dwNext++)
+                    {
+                        AppendImageRun(context, line, dwPlacements[dwNext], startYPos, rowHeight, scale,
+                                       dwScratch, dwPainted);
+                        dwPainted.Add(dwPlacements[dwNext]);
+                    }
+
                     for (int x = 0; x < effectiveCols && x < line.Length;)
                     {
                         var cell = line[x];
@@ -7531,6 +7592,15 @@ namespace Iciclecreek.Terminal
                                                           UnderlineStyle: dwUnderline, UnderlineBrush: dwBrush);
                             DrawUnderline(context, dwRun, position, Math.Max(0, endX - startX), rowHeight);
                         }
+                    }
+
+                    // And the ones in FRONT of the text, after it, so the layering means the same
+                    // thing here as it does on an ordinary row.
+                    for (; dwNext < dwPlacements.Count; dwNext++)
+                    {
+                        AppendImageRun(context, line, dwPlacements[dwNext], startYPos, rowHeight, scale,
+                                       dwScratch, dwPainted);
+                        dwPainted.Add(dwPlacements[dwNext]);
                     }
                 }
             }

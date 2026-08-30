@@ -452,11 +452,22 @@ public class SixelRenderingTests
     }
 
     /// <summary>
-    /// A short bottom row still fills its row on screen. A run occupies whole cells by construction —
-    /// its height is one row — so the fraction lives in the source rather than the destination.
+    /// A short bottom row covers only the part of its row that it has pixels for.
     /// </summary>
+    /// <remarks>
+    /// <para>This assertion used to read the other way -- that the strip fills the whole row -- on
+    /// the argument that a run occupies whole cells by construction, so the fraction belongs in the
+    /// source rather than the destination. The first half of that is true and the conclusion does
+    /// not follow: the run owns a whole cell row in the BUFFER, which says nothing about how much of
+    /// it the picture should cover.</para>
+    /// <para>Filling it means scaling the last strip differently from every strip above it. Two
+    /// pixels stretched over a cell three pixels tall magnifies the bottom of the picture by half
+    /// again, inside one image -- visible on anything with a straight edge running through it, and
+    /// not what a sixel terminal does. xterm and kitty both blit at natural size and leave the
+    /// remainder of the cell showing the background.</para>
+    /// </remarks>
     [AvaloniaTest]
-    public void A_short_bottom_row_still_covers_its_row()
+    public void A_short_bottom_row_covers_only_what_it_has_pixels_for()
     {
         // Eight pixels tall over three-pixel cells: three rows, the last holding two pixels.
         var image = new TerminalImage(new byte[8 * 8 * 4], 8, 8, CellPixelWidth, CellPixelHeight);
@@ -465,7 +476,74 @@ public class SixelRenderingTests
             out var source, out var destination), Is.True);
 
         Assert.That(source, Is.EqualTo(new Rect(0, 6, 8, 2)));
+
+        // Two of the cell's three pixel rows, so two thirds of a twenty-pixel row.
+        Assert.That(destination.Height, Is.EqualTo(13));
+    }
+
+    /// <summary>
+    /// A full strip is unaffected: its pixels fill the cell exactly, so natural size IS the row.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_full_strip_still_covers_its_whole_row()
+    {
+        var image = new TerminalImage(new byte[8 * 8 * 4], 8, 8, CellPixelWidth, CellPixelHeight);
+
+        Assert.That(TerminalView.TryPlanImageBlit(Run(image, 0, 4, 0, 0, 8, 3), 0, 20, 10, 20, 1.0,
+            out _, out var destination), Is.True);
+
         Assert.That(destination.Height, Is.EqualTo(20));
+    }
+
+    /// <summary>
+    /// A picture whose width is not a whole number of cells is drawn at its width, not the box's.
+    /// </summary>
+    /// <remarks>
+    /// The horizontal twin of the row above, and it stretched the same way: the buffer gives the
+    /// picture whole cells, and drawing across all of them widened a picture that did not fill them.
+    /// </remarks>
+    [AvaloniaTest]
+    public void A_picture_narrower_than_its_cells_is_not_stretched_across_them()
+    {
+        // Seven pixels wide over two-pixel cells: three and a half cells, rounded up to four.
+        var image = new TerminalImage(new byte[7 * 6 * 4], 7, 6, CellPixelWidth, CellPixelHeight);
+
+        Assert.That(TerminalView.TryPlanImageBlit(Run(image, 0, 4, 0, 0, 7, 3), 0, 20, 10, 20, 1.0,
+            out _, out var destination), Is.True);
+
+        // Seven pixels over two-pixel cells is three and a half cells of ten pixels each.
+        Assert.That(destination.Width, Is.EqualTo(35));
+    }
+
+    /// <summary>
+    /// A cell with a picture BEHIND it does not paint its background over the picture.
+    /// </summary>
+    /// <remarks>
+    /// A negative z-index means "draw this under the text", and the row pass does exactly that --
+    /// then every cell carrying a background of its own painted an opaque rectangle across it,
+    /// erasing the thing the z-index had asked for. The text was still drawn on top, so the picture
+    /// was the only casualty.
+    /// </remarks>
+    [AvaloniaTest]
+    public void A_backdrop_picture_is_not_erased_by_the_text_drawn_over_it()
+    {
+        var behind = new List<LinePlacement>
+        {
+            new(1, column: 2, cols: 4, 0, 0, 8, 3, PlacementKind.Sixel),
+        };
+
+        Assert.That(CoveredByBackdrop(behind, 2, 6), Is.True, "the columns the picture occupies");
+        Assert.That(CoveredByBackdrop(behind, 4, 5), Is.True, "and any of them on their own");
+        Assert.That(CoveredByBackdrop(behind, 0, 2), Is.False, "but not the ones before it");
+        Assert.That(CoveredByBackdrop(behind, 6, 9), Is.False, "nor the ones after");
+    }
+
+    private static bool CoveredByBackdrop(List<LinePlacement> painted, int start, int end)
+    {
+        var m = typeof(TerminalView).GetMethod("CoveredByBackdrop",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(m, Is.Not.Null, "CoveredByBackdrop has been renamed; this test needs updating");
+        return (bool)m!.Invoke(null, new object[] { painted, start, end })!;
     }
 
     /// <summary>The X and Y keys shift a picture inside its first cell without enlarging the box.</summary>
