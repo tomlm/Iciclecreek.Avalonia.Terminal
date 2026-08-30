@@ -7,11 +7,14 @@ on:
       - main
     paths:
     - src/**
+  # Deliberately NOT filtered by path, matching XTerm.NET's workflow and for its reason: `build`
+  # is a required status check, and a required check that never starts is not pending -- it never
+  # exists, so branch protection blocks the pull request for ever. A documentation-only or
+  # workflow-only change could not be merged at all. The job is under a minute; the paths filter
+  # was buying that back at the cost of making one class of PR unmergeable -- this PR included.
   pull_request:
     branches: [ "main" ]
-    paths:
-    - src/**
-    
+
 jobs:
   build:
     runs-on: ubuntu-latest
