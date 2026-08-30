@@ -7416,6 +7416,7 @@ namespace Iciclecreek.Terminal
 
                 // Underlines are drawn by hand below rather than through TextDecorations, because
                 // Avalonia has no curly decoration and SGR 58 gives the underline a colour of its own.
+                // Decided BEFORE shaping, because whether a blank run needs shaping at all depends on it.
                 var underlineStyle = cell.Attributes.GetUnderlineStyle();
                 IBrush? underlineBrush = null;
                 if (underlineStyle != XT.Common.UnderlineStyle.None)
@@ -7478,6 +7479,7 @@ namespace Iciclecreek.Terminal
                                             Glyphs: glyphs, Foreground: foreground,
                                             UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush);
                 textRuns.Add(run);
+
 
             }
 

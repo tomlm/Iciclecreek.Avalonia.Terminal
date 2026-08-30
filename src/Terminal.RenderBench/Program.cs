@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
@@ -337,15 +338,25 @@ internal static class Program
             var withGlyphs = Capture(corpus, useGlyphRun: true);
             var withText = Capture(corpus, useGlyphRun: false);
 
+            // Over RAW BGRA, one pixel at a time. The first version compared the bytes of the
+            // SAVED image, and those are DEFLATE output: equality still meant identical frames,
+            // but the moment anything differed, "differing px" counted compressed-stream bytes
+            // and "worst channel" read compression artefacts -- numbers that look precise and
+            // mean nothing. Here a differing pixel is a pixel and a channel is a channel.
             long differing = 0, worst = 0;
-            for (var i = 0; i < withGlyphs.Length; i++)
+            for (var i = 0; i < withGlyphs.Length; i += 4)
             {
-                int d = Math.Abs(withGlyphs[i] - withText[i]);
-                if (d != 0) differing++;
-                if (d > worst) worst = d;
+                var pixelDiffers = false;
+                for (var c = 0; c < 4; c++)
+                {
+                    int d = Math.Abs(withGlyphs[i + c] - withText[i + c]);
+                    if (d != 0) pixelDiffers = true;
+                    if (d > worst) worst = d;
+                }
+                if (pixelDiffers) differing++;
             }
 
-            var pct = 100.0 * differing / withGlyphs.Length;
+            var pct = 100.0 * differing / (withGlyphs.Length / 4);
             Console.WriteLine($"{corpus.Name,-12} {differing,14:N0} {pct,11:F3}% {worst,14}");
         }
 
@@ -354,28 +365,55 @@ internal static class Program
 
     private static byte[] Capture(Corpus corpus, bool useGlyphRun)
     {
+        // The flag is process-global, so it is restored in a finally -- and to what it WAS, not to
+        // true -- or one failed capture would silently flip every benchmark after it onto one
+        // pipeline. The window and bitmap ride in the same finally for the same reason.
+        var previous = TerminalView.GlyphRunFastPathEnabled;
         TerminalView.GlyphRunFastPathEnabled = useGlyphRun;
+        Window? window = null;
+        RenderTargetBitmap? target = null;
+        try
+        {
+            var view = new TerminalView { Process = "" };
+            window = new Window { Width = 1400, Height = 900, Content = view };
+            window.Show();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
 
-        var view = new TerminalView { Process = "" };
-        var window = new Window { Width = 1400, Height = 900, Content = view };
-        window.Show();
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+            view.Terminal.Write(corpus.Frame(1));
+            Dispatcher.UIThread.RunJobs();
 
-        view.Terminal.Write(corpus.Frame(1));
-        Dispatcher.UIThread.RunJobs();
+            target = new RenderTargetBitmap(new PixelSize(1400, 900));
+            using (var ctx = target.CreateDrawingContext())
+                view.Render(ctx);
 
-        var target = new RenderTargetBitmap(new PixelSize(1400, 900));
-        using (var ctx = target.CreateDrawingContext())
-            view.Render(ctx);
+            return Pixels(target);
+        }
+        finally
+        {
+            target?.Dispose();
+            window?.Close();
+            TerminalView.GlyphRunFastPathEnabled = previous;
+        }
+    }
 
-        using var stream = new MemoryStream();
-        target.Save(stream);
-        target.Dispose();
-        window.Close();
+    /// <summary>The rendered frame as raw BGRA, straight off the bitmap -- no encoder involved.</summary>
+    private static byte[] Pixels(RenderTargetBitmap target)
+    {
+        var size = target.PixelSize;
+        var stride = size.Width * 4;
+        var px = new byte[stride * size.Height];
+        var handle = GCHandle.Alloc(px, GCHandleType.Pinned);
+        try
+        {
+            target.CopyPixels(new PixelRect(default, size), handle.AddrOfPinnedObject(), px.Length, stride);
+        }
+        finally
+        {
+            handle.Free();
+        }
 
-        TerminalView.GlyphRunFastPathEnabled = true;
-        return stream.ToArray();
+        return px;
     }
 
     private static void Report(List<Result> results)
