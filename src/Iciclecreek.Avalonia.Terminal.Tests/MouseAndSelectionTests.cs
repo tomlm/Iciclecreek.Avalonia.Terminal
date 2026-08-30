@@ -192,6 +192,30 @@ public class MouseAndSelectionTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void A_move_while_tracking_is_off_does_not_hide_the_first_tracked_move()
+    {
+        // Coalescing belongs to reports, not raw pointer events. If an unreported move is remembered
+        // while tracking is off, enabling mode 1003 and moving again inside that cell produces no
+        // first report, because the coordinates appear unchanged to the cache.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            Move(view, 40.0, 40.0);             // tracking off: nothing is sent
+            Assert.That(pty.Written, Is.Empty);
+
+            view.Terminal.Write($"{Esc}[?1003h");
+            Dispatcher.UIThread.RunJobs();
+
+            Move(view, 40.0, 40.0);             // same cell, now meaningful
+            Thread.Sleep(120);
+
+            Assert.That(pty.Written, Is.Not.Empty,
+                "the first motion after tracking is enabled must reach the application");
+        }
+        finally { window.Close(); }
+    }
+
     // -------------------------------------------------- Shift owns the wheel
 
     [AvaloniaTest]

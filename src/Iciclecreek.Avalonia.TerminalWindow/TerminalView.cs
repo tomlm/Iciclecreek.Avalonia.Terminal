@@ -138,7 +138,7 @@ namespace Iciclecreek.Terminal
         private (int Col, int Row)? _pendingSelectionStart = null;
 
         /// <summary>The last motion reported to the application, so an unchanged one is not re-sent.</summary>
-        private (int Col, int Row, XT.Input.MouseEventType Type)? _lastReportedMotion;
+        private (int Col, int Row, XT.Input.MouseEventType Type, XT.Input.MouseTrackingMode Mode)? _lastReportedMotion;
 
         // Wheel accumulator. A notched mouse delivers Delta.Y = ±1 per detent, but a trackpad (and any
         // precision mouse) delivers a stream of FRACTIONS — on macOS a slow two-finger drag is dozens of
@@ -4020,16 +4020,22 @@ namespace Iciclecreek.Terminal
                 //
                 // Remembered per button state as well as position: a drag and a hover at the same
                 // cell are different reports, and collapsing them would swallow the button change.
-                var here = (col, row, eventType);
+                var here = (col, row, eventType, _terminal.MouseTrackingMode);
                 if (_lastReportedMotion == here)
                     return;
-
-                _lastReportedMotion = here;
 
                 var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
+                    // Remember only a report that actually went out. A move while tracking is off
+                    // generates nothing; caching it would suppress the first real report if an
+                    // application enables tracking before the pointer crosses into another cell.
+                    _lastReportedMotion = here;
                     await SendToPtyAsync(sequence).ConfigureAwait(false);
+                }
+                else
+                {
+                    _lastReportedMotion = null;
                 }
             }
             catch (Exception ex)
@@ -4066,6 +4072,9 @@ namespace Iciclecreek.Terminal
         protected override void OnPointerExited(PointerEventArgs e)
         {
             base.OnPointerExited(e);
+            // Re-entering begins a new motion stream. Its first position is meaningful even when it
+            // happens to be the same edge cell as the final event before the pointer left.
+            _lastReportedMotion = null;
             ClearHoveredUrl();
         }
 
@@ -4249,6 +4258,7 @@ namespace Iciclecreek.Terminal
                     // over is gone.
                     _isSelecting = false;
                     _pendingSelectionStart = null;
+                    _lastReportedMotion = null;
 
                     RaisePropertyChanged(IsAlternateBufferProperty, oldValue, _isAlternateBuffer);
                 }
