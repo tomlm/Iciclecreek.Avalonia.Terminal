@@ -5210,7 +5210,36 @@ namespace Iciclecreek.Terminal
                 return;   // nothing a platform clipboard can hold as text; the transfer is declined whole
 
             var text = Encoding.UTF8.GetString(e.Formats[chosen].Data);
-            Dispatcher.UIThread.Post(() => _ = WriteToClipboardAsync(text));
+            Dispatcher.UIThread.Post(() => _ = QueueClipboardWriteAsync(text));
+        }
+
+        /// <summary>Serialises clipboard writes so they land in the order they were requested.</summary>
+        private readonly SemaphoreSlim _clipboardWriteGate = new(1, 1);
+
+        /// <summary>
+        /// Puts <paramref name="text"/> on the clipboard, after everything asked for before it.
+        /// </summary>
+        /// <remarks>
+        /// The writes used to be started fire-and-forget, one per OSC 52, so two arriving close
+        /// together raced -- and the clipboard ended up holding whichever finished last, which is not
+        /// the same as whichever was asked for last. A program writing a value and then correcting it
+        /// could leave the first value standing.
+        ///
+        /// Posts to the dispatcher run in order, so entering this gate in that order is enough to
+        /// keep them in it. Waiting here rather than at the post keeps the ordering without blocking
+        /// the UI thread.
+        /// </remarks>
+        private async Task QueueClipboardWriteAsync(string text)
+        {
+            await _clipboardWriteGate.WaitAsync().ConfigureAwait(true);
+            try
+            {
+                await WriteToClipboardAsync(text).ConfigureAwait(true);
+            }
+            finally
+            {
+                _clipboardWriteGate.Release();
+            }
         }
 
         private async Task WriteToClipboardAsync(string text)
@@ -5252,12 +5281,37 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void OnTerminalClipboardReadRequested(object? sender, XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
-            if (!e.MimeType.StartsWith("text/", StringComparison.Ordinal) || !IsClipboardTarget(e.Target))
+            if (!IsClipboardTarget(e.Target))
                 return;   // declined: OSC 52 stays silent, 5522 counts the mime unavailable
+
+            // Kitty's "list what you have" query. It is a MIME position holding a full stop rather
+            // than a mime, and it was falling through the text/ test and being declined -- so a
+            // program that politely asked what the clipboard could give it was told "nothing", and
+            // then asked for nothing.
+            //
+            // Answered synchronously, since the answer does not depend on the clipboard: it is what
+            // this host is able to supply, which is the same list either way.
+            if (e.MimeType == ".")
+            {
+                e.Text = SupportedClipboardMime;
+                return;
+            }
+
+            // ONLY text/plain, and the empty mime OSC 52 sends, which means the same thing.
+            //
+            // Any text/* used to be accepted and then answered with the plain text under the label
+            // that was asked for. A program requesting text/html received the plain text and was
+            // told it was HTML -- which is worse than a decline, because a decline is a fact it can
+            // act on and this is a lie it cannot detect.
+            if (e.MimeType.Length != 0 && e.MimeType != SupportedClipboardMime)
+                return;
 
             e.Defer();
             _ = Dispatcher.UIThread.InvokeAsync(() => RespondFromClipboardAsync(e));
         }
+
+        /// <summary>The one mime a platform clipboard can be relied on to hold.</summary>
+        private const string SupportedClipboardMime = "text/plain";
 
         private async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
@@ -5275,7 +5329,20 @@ namespace Iciclecreek.Terminal
 
             // Always answered, even with null: a deferred request the host never completes leaves a
             // 5522 read hanging, which is what the args' contract warns about.
-            e.Respond(text);
+            //
+            // Under _terminalLock, which is this host's answer to that contract's other line: "call
+            // it from the thread the terminal is driven on". This is the UI thread and the terminal
+            // is driven from the pty reader, so the lock is what makes the two exclusive. Responding
+            // writes a reply into the emulator, and doing that while the reader is inside
+            // Terminal.Write is a write into a parser mid-sequence.
+            //
+            // Taken here rather than around the await above: holding it across a clipboard read --
+            // which on Windows is a round trip to another process -- would stall the reader for as
+            // long as that took.
+            lock (_terminalLock)
+            {
+                e.Respond(text);
+            }
         }
 
         private void OnTerminalNotificationReceived(object? sender, XT.Events.TerminalEvents.NotificationEventArgs e) =>

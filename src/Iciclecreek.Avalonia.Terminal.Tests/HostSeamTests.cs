@@ -462,6 +462,119 @@ public class HostSeamTests
         finally { window.Close(); }
     }
 
+    // ------------------------------------------------ what the clipboard will answer for
+
+    [AvaloniaTest]
+    public void A_request_for_a_mime_the_host_cannot_supply_is_declined()
+    {
+        // Any text/* used to be accepted and then answered with the PLAIN text under whatever label
+        // was asked for. A program requesting text/html received plain text and was told it was
+        // HTML -- worse than a decline, because a decline is a fact it can act on and this is a lie
+        // it cannot detect.
+        var (view, window) = Realised();
+        try
+        {
+            var args = new XTerm.Events.TerminalEvents.ClipboardReadEventArgs("c", "text/html");
+            RaiseClipboardRead(view, args);
+
+            Assert.That(args.Deferred, Is.False, "nothing should have been promised");
+            Assert.That(args.Text, Is.Null, "and nothing answered");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_request_for_plain_text_is_still_accepted()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            foreach (var mime in new[] { "text/plain", "" })
+            {
+                var args = new XTerm.Events.TerminalEvents.ClipboardReadEventArgs("c", mime);
+                RaiseClipboardRead(view, args);
+
+                Assert.That(args.Deferred, Is.True, $"'{mime}' is a mime this host can answer");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void The_list_available_types_query_is_answered_rather_than_refused()
+    {
+        // Kitty's "." is a MIME position holding a full stop rather than a mime: "tell me what you
+        // have". It fell through the text/ test and was declined, so a program that politely asked
+        // what the clipboard could give it was told nothing, and then asked for nothing.
+        var (view, window) = Realised();
+        try
+        {
+            var args = new XTerm.Events.TerminalEvents.ClipboardReadEventArgs("c", ".");
+            RaiseClipboardRead(view, args);
+
+            Assert.That(args.Text, Is.EqualTo("text/plain"));
+            Assert.That(args.Deferred, Is.False, "the answer does not depend on the clipboard");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_request_for_a_selection_this_host_does_not_have_is_still_declined()
+    {
+        // The target check must not have been loosened along with the mime check.
+        var (view, window) = Realised();
+        try
+        {
+            var args = new XTerm.Events.TerminalEvents.ClipboardReadEventArgs("p", "text/plain");
+            RaiseClipboardRead(view, args);
+
+            Assert.That(args.Deferred, Is.False, "there is no primary selection to read");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Back_to_back_clipboard_writes_leave_the_LAST_one_standing()
+    {
+        // The writes were started fire-and-forget, one per OSC 52, so two arriving close together
+        // raced and the clipboard held whichever FINISHED last -- not whichever was asked for last.
+        //
+        // A GUARD rather than a regression test, and worth saying so: the headless clipboard answers
+        // synchronously, so the race needs a slow platform clipboard to lose. What this pins is the
+        // ordering the gate now guarantees.
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write($"{Esc}]52;c;{B64("first")}{Bel}");
+            view.Terminal.Write($"{Esc}]52;c;{B64("second")}{Bel}");
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(200);
+            Dispatcher.UIThread.RunJobs();
+
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            Assert.That(clipboard.TryGetTextAsync().GetAwaiter().GetResult(), Is.EqualTo("second"));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// Drives the read seam directly, which is where the accept/decline decision lives.
+    /// </summary>
+    /// <remarks>
+    /// Through the handler rather than a written sequence, because what is under test is which
+    /// requests are ANSWERED -- and a declined request is silence, which a test reading the wire
+    /// cannot tell from one that has not arrived yet.
+    /// </remarks>
+    private static void RaiseClipboardRead(TerminalView view,
+                                           XTerm.Events.TerminalEvents.ClipboardReadEventArgs args)
+    {
+        var m = typeof(TerminalView).GetMethod("OnTerminalClipboardReadRequested",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(m, Is.Not.Null, "OnTerminalClipboardReadRequested has been renamed; update this test");
+        m!.Invoke(view, new object?[] { null, args });
+        Dispatcher.UIThread.RunJobs();
+    }
+
     /// <summary>
     /// The deferred read has to resume somewhere the clipboard can be touched. Off the UI thread it
     /// resumed on a thread-pool thread with no SynchronizationContext, where Windows' clipboard
