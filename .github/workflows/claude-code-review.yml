@@ -47,13 +47,8 @@ jobs:
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Temporary, for diagnosis. Every run of this workflow has failed since it was added,
-          # with `Claude execution failed: result is_error:true` and nothing else -- the SDK
-          # reports 512ms, one turn and $0, so the model is never reached, and the action redacts
-          # the reason from both the job log and the check annotations. This is the switch that
-          # prints it. Remove once the cause is known and fixed.
           show_full_output: true
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
@@ -62,4 +57,9 @@ jobs:
           # is unverified reasoning about code it never executed.
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          claude_args: '--allowedTools "Bash(dotnet:*),Bash(gh pr edit:*),Bash(gh pr ready:*),Bash(gh pr view:*)"'
+          # --model pinned EXPLICITLY. Left to default, the CLI resolved to claude-opus-5[1m]
+          # -- the 1M-context variant, which this key cannot use -- and the first API call died
+          # in under half a second: is_error, zero cost, empty modelUsage, and the real error
+          # hidden by the default output redaction. show_full_output is on for the same reason:
+          # a failure that cannot be read from the log gets diagnosed by archaeology instead.
+          claude_args: '--model claude-opus-5 --allowedTools "Bash(dotnet:*),Bash(gh pr edit:*),Bash(gh pr ready:*),Bash(gh pr view:*)"'
