@@ -90,6 +90,16 @@ public class KittyDispatchOrderTests
         return last;
     }
 
+    /// <summary>Waits for output to grow past a known completed prefix, then lets it settle.</summary>
+    private static string AwaitAfter(RecordingConnection pty, int mark)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && pty.Written.Length <= mark)
+            Thread.Sleep(10);
+
+        return Settled(pty);
+    }
+
     private static string Readable(string s)
         => string.Concat(s.Select(c => c < 0x20 || c == 0x7f ? $"\\x{(int)c:x2}" : c.ToString()));
 
@@ -197,10 +207,10 @@ public class KittyDispatchOrderTests
             Assert.That(afterPress, Is.Not.Empty, "sanity: the press went out");
 
             Release(view, Key.A, KeyModifiers.None, PhysicalKey.A, "a");
-            Thread.Sleep(200);
+            var afterRelease = AwaitAfter(pty, afterPress.Length);
 
-            Assert.That(pty.Written.Length, Is.GreaterThan(afterPress.Length),
-                "the matching release must still be reported: " + Readable(pty.Written));
+            Assert.That(afterRelease.Length, Is.GreaterThan(afterPress.Length),
+                "the matching release must still be reported: " + Readable(afterRelease));
         }
         finally { window.Close(); }
     }
