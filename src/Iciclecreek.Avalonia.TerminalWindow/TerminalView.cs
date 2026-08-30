@@ -1099,14 +1099,16 @@ namespace Iciclecreek.Terminal
 
             for (var screenY = 0; screenY < _terminal.Rows; screenY++)
             {
-                foreach (var hit in _search.HitsOnRow(viewportY + screenY))
+                var absoluteRow = viewportY + screenY;
+                var cellScale = RowCellScale(absoluteRow);
+                foreach (var hit in _search.HitsOnRow(absoluteRow))
                 {
                     var brush = hit.MatchId == _currentMatchId ? SearchCurrentBrush : SearchHighlightBrush;
                     if (brush is null)
                         continue;
 
-                    var x1 = Snap(hit.Column * _charWidth, scale);
-                    var x2 = Snap(hit.EndColumn * _charWidth, scale);
+                    var x1 = Snap(hit.Column * _charWidth * cellScale, scale);
+                    var x2 = Snap(hit.EndColumn * _charWidth * cellScale, scale);
                     var y1 = Snap(screenY * _charHeight, scale);
                     var y2 = Snap((screenY + 1) * _charHeight, scale);
                     context.FillRectangle(brush, new Rect(x1, y1, Math.Max(0, x2 - x1), Math.Max(0, y2 - y1)));
@@ -7741,7 +7743,8 @@ namespace Iciclecreek.Terminal
                 return;
 
             int screenY = absoluteCursorY - viewportY;
-            double posX = Snap(cursorX * _charWidth, scale);
+            var cellScale = RowCellScale(absoluteCursorY);
+            double posX = Snap(cursorX * _charWidth * cellScale, scale);
             double posY = Snap(screenY * _charHeight, scale);
             double cellHeight = Snap((screenY + 1) * _charHeight, scale) - posY;
 
@@ -7757,13 +7760,27 @@ namespace Iciclecreek.Terminal
                 FontSize,
                 foreground);
 
-            double textWidth = formattedText.Width;
+            double textWidth = formattedText.Width * cellScale;
 
             // Draw background behind preedit text to cover existing content
             context.FillRectangle(background, new Rect(posX, posY, textWidth, cellHeight));
 
             // Draw the preedit text
-            context.DrawText(formattedText, new Point(posX, posY));
+            if (cellScale == 1.0)
+            {
+                context.DrawText(formattedText, new Point(posX, posY));
+            }
+            else
+            {
+                // The row's text is drawn under the same horizontal scale. This overlay is outside
+                // that row transform, so apply it around the preedit origin as well; scaling only
+                // the background geometry would leave the composing glyphs at half width.
+                var toOrigin = Matrix.CreateTranslation(-posX, -posY);
+                var widen = Matrix.CreateScale(cellScale, 1.0);
+                var back = Matrix.CreateTranslation(posX, posY);
+                using (context.PushTransform(toOrigin * widen * back))
+                    context.DrawText(formattedText, new Point(posX, posY));
+            }
 
             // Draw underline to indicate uncommitted composition text
             double underlineY = posY + cellHeight - Math.Max(1.0, scale);
