@@ -2677,9 +2677,9 @@ namespace Iciclecreek.Terminal
                         // handler is async void: the first await returns to the caller and the routed
                         // event finishes bubbling with Handled still false, so the old placement claimed
                         // an event that had already gone -- Cmd+X cut the selection and reached the
-                        // program as well. CanRemoveSelection is the same question CutAsync asks first,
-                        // which is what makes it safe to ask it here instead.
-                        if (CanRemoveSelection)
+                        // program as well. CanCut asks all three of the questions CutAsync asks
+                        // before it does anything, which is what makes it safe to ask them here instead.
+                        if (CanCut)
                         {
                             e.Handled = true;
                             await CutAsync().ConfigureAwait(false);
@@ -2731,7 +2731,7 @@ namespace Iciclecreek.Terminal
                                 // synchronously so the claim can be made before the first await, which is
                                 // the last moment anything is still listening for it. Here the old
                                 // placement meant Ctrl+X cut the line AND handed readline its prefix.
-                                if (CanRemoveSelection)
+                                if (CanCut)
                                 {
                                     e.Handled = true;
                                     await CutAsync().ConfigureAwait(false);
@@ -3045,6 +3045,25 @@ namespace Iciclecreek.Terminal
                && _kbSelAnchor.Value != _kbSelFocus;
 
         /// <summary>
+        /// Whether <see cref="CutAsync"/> will succeed, asked without starting it.
+        /// </summary>
+        /// <remarks>
+        /// <para>Exists so the key handlers can claim the chord BEFORE their first await, which is
+        /// the last moment anything is still listening for the flag. Claiming afterwards means the
+        /// event has already finished bubbling and the chord reaches the program as well.</para>
+        /// <para>CanRemoveSelection alone was not enough for that. Cut can still decline after it --
+        /// with no clipboard to write to, or a selection whose text is empty -- and a chord claimed
+        /// on the strength of a cut that then did not happen is swallowed for nothing. Both of those
+        /// are answerable here, synchronously, so this asks all three of the questions CutAsync asks
+        /// rather than the first one.</para>
+        /// <para>What is left is only the write itself failing, which nothing can predict.</para>
+        /// </remarks>
+        private bool CanCut
+            => CanRemoveSelection
+               && TopLevel.GetTopLevel(this)?.Clipboard is not null
+               && !string.IsNullOrEmpty(_terminal.Selection.GetSelectionText());
+
+        /// <summary>
         /// The bytes for one press of a key this view is pressing on the user's behalf, encoded for
         /// whichever keyboard protocol is live right now.
         /// </summary>
@@ -3076,8 +3095,16 @@ namespace Iciclecreek.Terminal
                 // well -- PSReadLine reads the pair. Scan code 0 for the same reason the real path
                 // uses 0: there is no hardware event here to take one from.
                 var unicode = avaloniaKey == Key.Back ? 0x08 : 0;
-                return Win32Record(vk, 0, unicode, isKeyDown: true, Win32ControlKeyState.None)
-                     + Win32Record(vk, 0, unicode, isKeyDown: false, Win32ControlKeyState.None);
+
+                // Through the same state builder a real key uses, rather than None. No modifier is
+                // held for a synthetic key, but the control-key state carries more than modifiers:
+                // the ENHANCED flag marks the extended-scan-code keys, and the right arrow this
+                // sends for a forward selection is one of them. A record without it describes a
+                // different key, and the console layer is entitled to read it as one.
+                var state = GetWin32ControlKeyState(KeyModifiers.None, avaloniaKey);
+
+                return Win32Record(vk, 0, unicode, isKeyDown: true, state)
+                     + Win32Record(vk, 0, unicode, isKeyDown: false, state);
             }
 
             if (_terminal.KittyKeyboardActive)

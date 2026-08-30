@@ -187,6 +187,27 @@ public class RegressionBucketTests
         };
     }
 
+    [AvaloniaTest]
+    public void The_cut_chord_is_not_swallowed_when_there_is_nothing_to_cut()
+    {
+        // The other side of claiming the event before the await. Claiming on the strength of a cut
+        // that then declines -- no clipboard, or a selection whose text is empty -- swallows a chord
+        // for nothing, and Ctrl+X is readline's prefix, which is worth more than a cut that did not
+        // happen. So the claim asks every question the cut asks, not just the first.
+        var (view, window) = Realised();
+        try
+        {
+            // No selection at all, which is the commonest case by far: the chord must reach the
+            // program untouched.
+            var args = KeyPress(Key.X, KeyModifiers.Control, PhysicalKey.X, "x");
+            view.RaiseEvent(args);
+
+            Assert.That(args.Handled, Is.False,
+                "with nothing to cut the chord belongs to the application");
+        }
+        finally { window.Close(); }
+    }
+
     // ------------------------------------------ Deletion under every protocol
 
     [AvaloniaTest]
