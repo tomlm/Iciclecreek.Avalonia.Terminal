@@ -1377,4 +1377,53 @@ public class SixelRenderingTests
         Assert.That(destination.Height, Is.EqualTo(7.0).Within(0.01),
             "a partial edge strip keeps its natural height");
     }
+
+    // ---- the unified mapping ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Every row of one placement must plan the SAME whole-picture mapping, or the per-row draws
+    /// resample differently and a fractional display scale puts a hairline at the boundary. The
+    /// scale here is Windows' 1.25, and the char height is deliberately not a whole number.
+    /// </summary>
+    [AvaloniaTest]
+    public void Every_natural_strip_of_a_picture_shares_one_whole_image_mapping()
+    {
+        var image = EvenImage();
+
+        Assert.That(TerminalView.TryPlanImageBlit(Run(image, 0, 4, 0, 0, 8, 3), 0, 13.6, 10, 13.6, 1.25,
+            out _, out _, out var first), Is.True);
+        Assert.That(TerminalView.TryPlanImageBlit(Run(image, 0, 4, 0, 3, 8, 3), 13.6, 13.6, 10, 13.6, 1.25,
+            out _, out _, out var second), Is.True);
+
+        Assert.That(second, Is.EqualTo(first), "two rows planned two different transforms");
+    }
+
+    [AvaloniaTest]
+    public void Every_stretched_strip_of_a_picture_shares_one_whole_image_mapping()
+    {
+        // 8x9 stretched into 2x3 cells: 3 source px per row, exactly.
+        var image = new TerminalImage(new byte[8 * 9 * 4], 8, 9, CellPixelWidth, CellPixelHeight);
+
+        Assert.That(TerminalView.TryPlanImageBlit(
+            StretchedRun(image, 0, 2, 0, 0, 8, 3, pxPerCellX: 4f, pxPerCellY: 3f),
+            0, 13.6, 10, 13.6, 1.25, out _, out _, out var first), Is.True);
+        Assert.That(TerminalView.TryPlanImageBlit(
+            StretchedRun(image, 0, 2, 0, 3, 8, 3, pxPerCellX: 4f, pxPerCellY: 3f),
+            13.6, 13.6, 10, 13.6, 1.25, out _, out _, out var second), Is.True);
+
+        Assert.That(second, Is.EqualTo(first));
+    }
+
+    /// <summary>The clip is still the row's own snapped box: the mapping never widens coverage.</summary>
+    [AvaloniaTest]
+    public void The_clip_is_unchanged_by_the_unified_mapping()
+    {
+        var image = EvenImage();
+
+        Assert.That(TerminalView.TryPlanImageBlit(Run(image, 0, 4, 0, 3, 8, 3), 20, 20, 10, 20, 1.0,
+            out var source, out var destination, out _), Is.True);
+
+        Assert.That(source, Is.EqualTo(new Rect(0, 3, 8, 3)));
+        Assert.That(destination, Is.EqualTo(new Rect(0, 20, 40, 20)));
+    }
 }
