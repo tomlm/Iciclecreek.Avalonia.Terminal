@@ -209,8 +209,13 @@ public class RenderCostTests
             {
                 GradientStops = { new GradientStop(Colors.Red, 0), new GradientStop(Colors.Blue, 1) },
             };
-            Dispatcher.UIThread.RunJobs();
 
+            // Asserted IMMEDIATELY, with no RunJobs in between, and that is the fix for a flake
+            // that reached CI: the invalidation is synchronous in OnPropertyChanged, but it also
+            // calls InvalidateVisual -- so running the dispatcher here let a headless render tick
+            // rebuild the cache (correctly, from the NEW brushes) before the assert, which then
+            // read the rebuilt list as "the invalidation never happened". Same thread, no jobs run:
+            // nothing can interleave between the set and this line.
             Assert.That(line.Cache, Is.Null,
                 "a re-theme the palette cannot express still has to invalidate what was drawn");
         }
