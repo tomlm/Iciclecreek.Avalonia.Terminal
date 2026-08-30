@@ -7,11 +7,14 @@ on:
       - main
     paths:
     - src/**
+  # Deliberately NOT filtered by path, matching XTerm.NET's workflow and for its reason: `build`
+  # is a required status check, and a required check that never starts is not pending -- it never
+  # exists, so branch protection blocks the pull request for ever. A documentation-only or
+  # workflow-only change could not be merged at all. The job is under a minute; the paths filter
+  # was buying that back at the cost of making one class of PR unmergeable -- this PR included.
   pull_request:
     branches: [ "main" ]
-    paths:
-    - src/**
-    
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -31,5 +34,37 @@ jobs:
     - name: Build
       run: dotnet build --no-restore src/Iciclecreek.Avalonia.TerminalWindow.slnx --property WarningLevel=0
       
+    - name: Test
+      run: dotnet test --no-build --verbosity normal src/Iciclecreek.Avalonia.TerminalWindow.slnx
+
+  # macOS as well as Linux, because this is a UI library and the two platforms do not agree about
+  # everything it touches: font metrics and text shaping come from a different stack, the pty is
+  # Darwin's rather than Linux's, and the clipboard and window seams are implemented per platform.
+  # A green Linux build says nothing about any of that.
+  #
+  # A SEPARATE job rather than a matrix on `build`, deliberately. A matrix renames the check to
+  # "build (ubuntu-latest)", and a required status check that no longer reports under its old name
+  # is not failing -- it never appears, and branch protection waits for it for ever.
+  #
+  # Free: standard GitHub-hosted runners, macOS included, are free and unlimited on public
+  # repositories. Only larger runners are billed there.
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout Iciclecreek.Avalonia.TerminalWindow.slnx
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore src/Iciclecreek.Avalonia.TerminalWindow.slnx
+
+    - name: Build
+      run: dotnet build --no-restore src/Iciclecreek.Avalonia.TerminalWindow.slnx --property WarningLevel=0
+
     - name: Test
       run: dotnet test --no-build --verbosity normal src/Iciclecreek.Avalonia.TerminalWindow.slnx
