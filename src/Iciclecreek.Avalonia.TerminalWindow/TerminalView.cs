@@ -7815,11 +7815,19 @@ namespace Iciclecreek.Terminal
             var typeface = new Typeface(FontFamily, FontStyle, FontWeight);
             var foreground = GetValue(ForegroundProperty) ?? Brushes.White;
 
-            // The EMULATOR's background, not the styled one -- the same rule the cell renderer
-            // follows. A program that moved its default background with OSC 11 had the composition
-            // box painted in the host's original colour, a rectangle of the wrong shade sitting in
-            // the middle of its own screen.
-            var background = (IBrush)new SolidColorBrush(BufferCellExtensions.FromRgb(_palette.Background));
+            // The same rule the cell renderer follows, which is not "always the palette": a default
+            // background resolves to the emulator's colour only when the host's own brush is fully
+            // opaque, and otherwise stays the host's. A translucent or gradient host is asking to be
+            // seen through, and no RGB palette entry can express that.
+            //
+            // Claiming to follow that rule and then using the palette unconditionally was worse than
+            // either choice on its own: it made the composition box the one opaque rectangle on an
+            // otherwise see-through terminal. Through the same IsFullyOpaque the cell path uses, so
+            // there is one rule rather than a copy of it here.
+            var styled = GetValue(BackgroundProperty) ?? Brushes.Black;
+            var background = BufferCellExtensions.IsFullyOpaque(styled)
+                ? new SolidColorBrush(BufferCellExtensions.FromRgb(_palette.Background))
+                : styled;
 
             var formattedText = new FormattedText(
                 preeditText,

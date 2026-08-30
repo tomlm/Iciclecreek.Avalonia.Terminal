@@ -32,15 +32,27 @@ public class ClippingTests
         return (view, window);
     }
 
-    private static double CharWidth(TerminalView v) => Field<double>(v, "_charWidth");
-    private static double CharHeight(TerminalView v) => Field<double>(v, "_charHeight");
+    // The PUBLIC properties, not the backing fields. The fields are zero until something asks for
+    // the metrics -- the properties are what run UpdateTextMetrics -- so reflecting on them made
+    // every geometry assertion here compare zero against zero and pass vacuously.
+    private static double CharWidth(TerminalView v) => v.CharWidth;
+    private static double CharHeight(TerminalView v) => v.CharHeight;
 
-    private static T Field<T>(TerminalView view, string name)
+
+
+    [AvaloniaTest]
+    public void The_metrics_these_tests_measure_against_are_real()
     {
-        var f = typeof(TerminalView).GetField(name,
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        Assert.That(f, Is.Not.Null, $"{name} has been renamed; this test needs updating");
-        return (T)f!.GetValue(view)!;
+        // Guards the guards. Every geometry assertion in this file multiplies by these, so if they
+        // came back zero the assertions would compare zero against zero and pass vacuously -- which
+        // is what reading the backing fields did.
+        var (view, window) = Realised();
+        try
+        {
+            Assert.That(CharWidth(view), Is.GreaterThan(0));
+            Assert.That(CharHeight(view), Is.GreaterThan(0));
+        }
+        finally { window.Close(); }
     }
 
     // -------------------------------------------------------- search highlight
