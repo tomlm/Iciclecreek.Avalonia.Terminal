@@ -387,13 +387,13 @@ public class HostSeamTests
 
             var backspace = view.Terminal.GenerateKeyInput(XT.Input.Key.Backspace, XT.Input.KeyModifiers.None);
             await view.PasteAsync();
-            await Task.Delay(200);
+            var written = await PtyWaits.AwaitOutput(pty);
 
             Assert.That(view.Terminal.Selection.HasSelection, Is.False,
                 "the selection has to go, or the replaced text stays highlighted over the new one");
-            Assert.That(pty.Written, Does.StartWith(string.Concat(Enumerable.Repeat(backspace, 5))),
+            Assert.That(written, Does.StartWith(string.Concat(Enumerable.Repeat(backspace, 5))),
                 "the deletion reaches the shell BEFORE the announce, so the insertion lands where the selection was");
-            Assert.That(pty.Written, Does.Contain("5522;type=read:status=OK"),
+            Assert.That(written, Does.Contain("5522;type=read:status=OK"),
                 "and the paste is still announced rather than typed");
         }
         finally { window.Close(); }

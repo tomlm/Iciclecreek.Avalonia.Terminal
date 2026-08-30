@@ -269,8 +269,14 @@ public class KittyKeyboardTests
             Press(view, Key.A, p: PhysicalKey.A, symbol: "a");
             var first = AwaitSince(pty, start);
 
+            // The release REPORTS under these flags, and its bytes land off-thread like any other
+            // key's. Marking before they arrive puts them after the mark, and the next read then
+            // swallows a release sequence it was never meant to see -- which on a slow runner it
+            // did. Drain it first, so the mark truly separates the release from the press.
+            var beforeRelease = Mark(pty);
             Release(view, Key.A, p: PhysicalKey.A, symbol: "a");
             Dispatcher.UIThread.RunJobs();
+            AwaitSince(pty, beforeRelease);
 
             var mark = Mark(pty);
             Press(view, Key.A, p: PhysicalKey.A, symbol: "a");

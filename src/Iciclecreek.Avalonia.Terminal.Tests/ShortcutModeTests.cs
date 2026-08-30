@@ -56,9 +56,9 @@ public class ShortcutModeTests
         await Task.Delay(60);
 
         Press(view, key, KeyModifiers.Control);
-        await Task.Delay(120);
 
-        Assert.That(pty.Written, Is.Not.Empty, $"Ctrl+{key} still belongs to the program");
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.Not.Empty,
+            $"Ctrl+{key} still belongs to the program");
         window.Close();
     }
 
@@ -93,9 +93,8 @@ public class ShortcutModeTests
         await clipboard!.SetTextAsync("pasted-text");
 
         Press(view, Key.V, KeyModifiers.Control);
-        await Task.Delay(250);
 
-        Assert.That(pty.Written, Is.EqualTo("pasted-text"),
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.EqualTo("pasted-text"),
             "the clipboard reached the shell, not the quoted-insert control character");
         window.Close();
     }
@@ -112,9 +111,9 @@ public class ShortcutModeTests
         var (view, pty, window) = LiveView(ShortcutMode.Desktop);
 
         Press(view, key, KeyModifiers.Control | KeyModifiers.Shift);
-        await Task.Delay(150);
 
-        Assert.That(pty.Written, Is.EqualTo(expected), "the character the unshifted chord used to send");
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.EqualTo(expected),
+            "the character the unshifted chord used to send");
         window.Close();
     }
 
@@ -128,9 +127,9 @@ public class ShortcutModeTests
         var (view, pty, window) = LiveView(ShortcutMode.Desktop);
 
         Press(view, Key.X, KeyModifiers.Control);
-        await Task.Delay(150);
 
-        Assert.That(pty.Written, Is.EqualTo("\u0018"), "Ctrl+X Ctrl+E and friends still work");
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.EqualTo("\u0018"),
+            "Ctrl+X Ctrl+E and friends still work");
         window.Close();
     }
 

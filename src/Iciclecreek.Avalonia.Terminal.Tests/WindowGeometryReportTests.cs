@@ -35,9 +35,11 @@ public class WindowGeometryReportTests
 
     private static async Task<string> AskAsync(TerminalWindow window, RecordingConnection pty, string query)
     {
+        // Every caller expects a reply, so wait for it to arrive rather than betting a fixed delay
+        // against a cold runner's thread pool. See PtyWaits.
+        var already = pty.Written.Length;
         window.Terminal.Write(Esc + query);
-        await Task.Delay(150);
-        return pty.Written;
+        return await PtyWaits.AwaitOutput(pty, already);
     }
 
     /// <summary>

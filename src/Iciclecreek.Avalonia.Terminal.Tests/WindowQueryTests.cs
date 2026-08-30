@@ -64,9 +64,8 @@ public class WindowQueryTests
         AnswerWith(view, 640, 480);
 
         view.Terminal.Write(Esc + query);
-        await Task.Delay(150);
 
-        Assert.That(pty.Written, Is.Not.Empty,
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.Not.Empty,
             "nothing was sent back — the handler's answer arrived after the emulator had stopped listening");
         Assert.That(pty.Written, Does.StartWith(Esc + "["), "and it should be a CSI report");
 
@@ -98,9 +97,8 @@ public class WindowQueryTests
         AnswerWith(view, 640, 480);
 
         view.Terminal.Write(Esc + "[14t");
-        await Task.Delay(150);
 
-        Assert.That(pty.Written, Does.Contain("480").And.Contain("640"));
+        Assert.That(await PtyWaits.AwaitOutput(pty), Does.Contain("480").And.Contain("640"));
 
         window.Close();
     }

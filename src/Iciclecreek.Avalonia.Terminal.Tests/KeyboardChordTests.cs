@@ -30,10 +30,50 @@ public class KeyboardChordTests
         return (view, pty, window);
     }
 
+    /// <summary>
+    /// Raises the key and waits for its output to ARRIVE, up to a deadline.
+    /// </summary>
+    /// <remarks>
+    /// This used to be a flat 150 ms delay, and a cold CI runner -- JIT, thread pool, the first
+    /// headless window -- can spend longer than that before the async-void key handler lands its
+    /// first byte. The first parameterised case of a fixture is the coldest, which is why exactly
+    /// one case failed on the macOS runner while its siblings passed warm. Waiting for growth makes
+    /// the wait as long as it needs to be and no longer; the deadline keeps a genuinely silent
+    /// implementation failing.
+    /// </remarks>
+    private static async Task<string> PressAndAwait(TerminalView view, Key key, KeyModifiers mods, RecordingConnection pty)
+    {
+        view.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = key, KeyModifiers = mods });
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && pty.Written.Length == 0)
+            await Task.Delay(10);
+
+        // Whatever arrived may still be arriving; let it finish.
+        var seen = pty.Written;
+        var quiet = 0;
+        while (DateTime.UtcNow < deadline && quiet < 5)
+        {
+            await Task.Delay(5);
+            var now = pty.Written;
+            quiet = now == seen ? quiet + 1 : 0;
+            seen = now;
+        }
+
+        return seen;
+    }
+
+    /// <summary>
+    /// Raises the key and watches a bounded window for output that must NOT come.
+    /// </summary>
+    /// <remarks>
+    /// The window is what defines the assertion -- "nothing was sent" can only ever mean "nothing
+    /// within this long" -- so a fixed delay is correct here in a way it is not above.
+    /// </remarks>
     private static async Task<string> PressAndSettle(TerminalView view, Key key, KeyModifiers mods, RecordingConnection pty)
     {
         view.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = key, KeyModifiers = mods });
-        await Task.Delay(150);   // OnKeyDown is async void; let any write land
+        await Task.Delay(150);
         return pty.Written;
     }
 
@@ -68,7 +108,7 @@ public class KeyboardChordTests
     public async Task Word_motion_sends_what_a_shell_actually_binds(Key key, KeyModifiers mods, string letter)
     {
         var (view, pty, window) = LiveView();
-        var written = await PressAndSettle(view, key, mods, pty);
+        var written = await PressAndAwait(view, key, mods, pty);
         Assert.That(written, Is.EqualTo(Esc + letter),
             "the modified-cursor sequence is bound by no default shell keymap and gets echoed as text");
         window.Close();
