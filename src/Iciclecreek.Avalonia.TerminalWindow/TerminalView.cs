@@ -2864,7 +2864,14 @@ namespace Iciclecreek.Terminal
                 // is how a Mac user asks for line-start and line-end. Sends exactly what Home and End
                 // send, so it is an alias rather than a second code path — and it has to come BEFORE the
                 // Meta passthrough below, which would otherwise swallow it.
-                if (IsMacOS && e.KeyModifiers == KeyModifiers.Meta && e.Key is Key.Left or Key.Right)
+                //
+                // Not while Kitty is negotiated. This is a translation into what a SHELL binds, and
+                // it is worth making only for a shell reading legacy sequences. An application that
+                // asked for CSI-u reads Cmd+Left as a modified arrow in that encoding, and handing
+                // it ESC[H instead sends a key nobody pressed, in a protocol it is no longer
+                // reading. Falling through delivers the actual chord.
+                if (IsMacOS && e.KeyModifiers == KeyModifiers.Meta && e.Key is Key.Left or Key.Right
+                    && !_terminal.KittyKeyboardActive)
                 {
                     e.Handled = true;
                     await SendToPtyAsync(e.Key == Key.Left ? "\u001b[H" : "\u001b[F").ConfigureAwait(false);
@@ -2887,9 +2894,15 @@ namespace Iciclecreek.Terminal
                 // Ctrl+Left — while neither binds ESC-b. Translating here replaced a chord they understand
                 // with one they ignore, so on Windows the key did nothing at all. Falling through hands them
                 // the actual key event a few lines below.
+                // And not while Kitty is negotiated, for the same reason as the macOS chord above and
+                // the same reason Win32 input mode is already excluded here: every exclusion on this
+                // list is a transport the shell is not reading ESC-b through. An application that
+                // negotiated CSI-u reads Alt+Left as a modified arrow and binds it itself; ESC-b is
+                // a key it never pressed.
                 if (e.Key is Key.Left or Key.Right
                     && e.KeyModifiers is KeyModifiers.Alt or KeyModifiers.Control
                     && !_terminal.Win32InputMode
+                    && !_terminal.KittyKeyboardActive
                     && !_terminal.IsAlternateBufferActive)
                 {
                     e.Handled = true;
@@ -2905,7 +2918,18 @@ namespace Iciclecreek.Terminal
                 // to send ESCAPE is via Win32 INPUT_RECORD format. Always use Win32 for ESC on Windows.
                 bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
                 bool isEscapeKey = e.Key == Key.Escape;
-                bool useWin32Format = _terminal.Win32InputMode || (isWindows && isEscapeKey);
+                // The Escape exception does NOT apply while Kitty is negotiated. It exists because
+                // ConPTY has no VT sequence for a plain Escape, so Win32 records are the only way to
+                // deliver one -- but an application that asked for CSI-u is not reading VT sequences
+                // for Escape either, it is reading CSI 27 u, and the terminal can send that. Without
+                // this, every Escape on Windows took the Win32 path and a negotiated application
+                // never received the encoding it had asked for.
+                //
+                // Win32 input MODE keeps its precedence unconditionally: that is a different
+                // transport rather than a competing encoding, and a process reading INPUT_RECORDs is
+                // reading them for every key.
+                bool useWin32Format = _terminal.Win32InputMode
+                                      || (isWindows && isEscapeKey && !_terminal.KittyKeyboardActive);
 
                 if (useWin32Format)
                 {
@@ -3545,7 +3569,18 @@ namespace Iciclecreek.Terminal
                 // Windows ConPTY limitation: Always send ESCAPE key in Win32 format
                 bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
                 bool isEscapeKey = e.Key == Key.Escape;
-                bool useWin32Format = _terminal.Win32InputMode || (isWindows && isEscapeKey);
+                // The Escape exception does NOT apply while Kitty is negotiated. It exists because
+                // ConPTY has no VT sequence for a plain Escape, so Win32 records are the only way to
+                // deliver one -- but an application that asked for CSI-u is not reading VT sequences
+                // for Escape either, it is reading CSI 27 u, and the terminal can send that. Without
+                // this, every Escape on Windows took the Win32 path and a negotiated application
+                // never received the encoding it had asked for.
+                //
+                // Win32 input MODE keeps its precedence unconditionally: that is a different
+                // transport rather than a competing encoding, and a process reading INPUT_RECORDs is
+                // reading them for every key.
+                bool useWin32Format = _terminal.Win32InputMode
+                                      || (isWindows && isEscapeKey && !_terminal.KittyKeyboardActive);
 
                 if (useWin32Format)
                 {
@@ -4527,9 +4562,29 @@ namespace Iciclecreek.Terminal
             // entry was already there, which is exactly that question.
             if (eventType == XT.Input.KittyKeyboardEventType.Press
                 && !_keysHeld.Add((e.PhysicalKey, e.Key)))
+            {
                 eventType = XT.Input.KittyKeyboardEventType.Repeat;
+            }
             else if (eventType == XT.Input.KittyKeyboardEventType.Release)
-                _keysHeld.Remove((e.PhysicalKey, e.Key));
+            {
+                // Only for a key whose PRESS this path actually sent. Remove answers that: the entry
+                // is put there by the press a few lines up, so its absence means the press never got
+                // this far.
+                //
+                // Plenty of presses do not. Shift+arrow extends a selection and returns; Ctrl+Shift+C
+                // copies; the whole macOS Meta family is claimed above. Every one of those still
+                // produces a key-up, and this method used to encode a release for it -- so an
+                // application that negotiated event types saw releases with no matching press, and a
+                // key it had never been told was down going up.
+                //
+                // Consumed rather than passed on, which is the same answer the press got: the host
+                // dealt with this keystroke, and both halves of it belong to the host.
+                if (!_keysHeld.Remove((e.PhysicalKey, e.Key)))
+                {
+                    e.Handled = true;
+                    return true;
+                }
+            }
 
             var sequence = _terminal.GenerateKittyKeyInput(ev, eventType);
 
