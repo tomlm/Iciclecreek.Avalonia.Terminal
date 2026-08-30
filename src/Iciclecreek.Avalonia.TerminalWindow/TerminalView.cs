@@ -6571,6 +6571,7 @@ namespace Iciclecreek.Terminal
                 string text = String.Empty;
                 int cellCount = 0;
                 int runStartX = 0;
+                var runHasBackdrop = CoveredByBackdrop(painted, x, x + Math.Max(1, cell.Width));
 
                 // Nothing is drawn where a Sixel covers, because a Sixel REPLACED what was there.
                 if (CoveredBySixel(line, x))
@@ -6621,6 +6622,10 @@ namespace Iciclecreek.Terminal
                         // starts an iteration on.
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes
                             || CoveredBySixel(line, x)
+                            // Background fill is cached for the whole text run. Split where backdrop
+                            // coverage changes so suppressing that fill affects only columns with a
+                            // negative-z picture behind them, not every same-style cell beside it.
+                            || CoveredByBackdrop(painted, x, x + 1) != runHasBackdrop
                             || (hasSizedRuns && line.TryGetSizedRunAt(x, out _)))
                             break;
                         textBuilder.Append(currentCell.Content);
@@ -6699,7 +6704,7 @@ namespace Iciclecreek.Terminal
                 //
                 // The text still draws. What is dropped is only the fill, which is what was covering
                 // the picture; a cell with no picture behind it is untouched.
-                if (fill is not null && CoveredByBackdrop(painted, runStartX, runStartX + cellCount))
+                if (fill is not null && runHasBackdrop)
                     fill = null;
                 // Cache only content-dependent data, not screen position
                 // Named rather than positional: the record gained Placement and Image ahead of these

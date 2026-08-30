@@ -926,6 +926,33 @@ public class SixelRenderingTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void A_backdrop_suppresses_fill_only_in_the_columns_it_covers()
+    {
+        // The picture covers columns 0-1. All four characters have identical attributes, so without
+        // a coverage boundary they form one cached run; suppressing that run's background also drops
+        // the red fill from columns 2-3, where there is no picture to preserve.
+        var (view, window) = Realised();
+        try
+        {
+            PlaceWithDepth(view, z: -1);
+            view.Terminal.Write(Esc + "[1;1H" + Esc + "[41mWXYZ");
+
+            var text = RunsForRow(view, 0).Where(r => r.Text is not null && r.StartX < 4).ToList();
+            var overPicture = text.Where(r => r.StartX < 2).ToList();
+            var besidePicture = text.Where(r => r.StartX >= 2 && r.StartX < 4).ToList();
+
+            Assert.That(overPicture, Is.Not.Empty);
+            Assert.That(overPicture.All(r => r.Background is null), Is.True,
+                "the explicit cell background must not erase the backdrop");
+            Assert.That(besidePicture, Is.Not.Empty,
+                "coverage must split the same-style text run at the picture edge");
+            Assert.That(besidePicture.All(r => r.Background is not null), Is.True,
+                "columns beside the picture must keep their explicit background");
+        }
+        finally { window.Close(); }
+    }
+
     /// <summary>
     /// A row whose text sits on a background must still terminate. The run builder used to stop at
     /// any cell holding a picture, which on a background cell ends the run on its own first cell and
