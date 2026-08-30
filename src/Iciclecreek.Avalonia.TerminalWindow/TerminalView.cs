@@ -309,6 +309,16 @@ namespace Iciclecreek.Terminal
         private XT.Common.ColorSnapshot _palette;
 
         /// <summary>
+        /// One builder for every text run the renderer collects, reused rather than reallocated.
+        /// </summary>
+        /// <remarks>
+        /// Safe to share because run collection is synchronous, single-pass and entirely on the UI
+        /// thread: a run is built and turned into a string before the next one starts, so no two
+        /// uses overlap. Held on the instance rather than statically so two views do not contend.
+        /// </remarks>
+        private readonly StringBuilder _runTextBuilder = new(256);
+
+        /// <summary>
         /// The emulator's <c>DrawBoldTextInBrightColors</c>, snapshotted per frame beside the palette.
         /// </summary>
         /// <remarks>
@@ -7164,7 +7174,12 @@ namespace Iciclecreek.Terminal
             // translucent picture blends over whatever was drawn under it.
             var placements = OrderedPlacements(line);
             var nextPlacement = 0;
-            var painted = new List<XT.Graphics.LinePlacement>();
+
+            // Allocated only when there IS a picture on the line, which for almost every line there
+            // is not. An empty list per line per rebuild is one allocation per row per frame to hold
+            // nothing. The shared empty instance is never written to -- the loop below only adds to
+            // it after OrderedPlacements has returned something.
+            var painted = placements.Count > 0 ? new List<XT.Graphics.LinePlacement>() : EmptyPlacements;
 
             for (; nextPlacement < placements.Count && placements[nextPlacement].ZIndex < 0; nextPlacement++)
             {
@@ -7225,8 +7240,14 @@ namespace Iciclecreek.Terminal
                 }
                 else if (cell.Width == 1)
                 {
-                    // Collect consecutive cells with same attributes
-                    var textBuilder = new StringBuilder();
+                    // Collect consecutive cells with same attributes.
+                    //
+                    // The builder is REUSED, not allocated per run. This is the innermost loop of the
+                    // renderer -- a screen of text is a few hundred runs and every one of them was
+                    // allocating a builder plus its backing array, to be thrown away a line later.
+                    // Cleared rather than replaced, so the array it grew to survives with it.
+                    var textBuilder = _runTextBuilder;
+                    textBuilder.Clear();
                     cellCount = 0;  // Total cell positions consumed (including wide char placeholders)
                     runStartX = x;
                     while (x < line.Length && x < _terminal.Cols)
@@ -7253,7 +7274,24 @@ namespace Iciclecreek.Terminal
                             || CoveredByBackdrop(painted, x, x + 1) != runHasBackdrop
                             || (hasSizedRuns && line.TryGetSizedRunAt(x, out _)))
                             break;
-                        textBuilder.Append(currentCell.Content);
+                        // Append the CHARACTER, not the Content string, whenever the cell is a single
+                        // codepoint in the basic plane -- which is nearly every cell of nearly every
+                        // terminal. Content is derived: it looks the codepoint up in an intern table
+                        // and hands back a string, and Append then copies its one char out again.
+                        // Going straight to the char skips the lookup and the string entirely.
+                        //
+                        // Anything else -- a cluster, an astral codepoint -- still goes through
+                        // Content, which is the only thing that knows how to spell it.
+                        // ClusterId 0 is "no cluster" -- XTerm.NET's ClusterTable.None, which is
+                        // internal to it, so the value is spelled out with the reason rather than
+                        // referenced. A cell with a cluster spans several codepoints and only
+                        // Content can spell it.
+                        if (currentCell.ClusterId == 0
+                            && currentCell.CodePoint > 0 && currentCell.CodePoint < 0x10000)
+                            textBuilder.Append((char)currentCell.CodePoint);
+                        else
+                            textBuilder.Append(currentCell.Content);
+
                         cellCount += currentCell.Width;
 
                         // Skip the placeholder cell that follows a wide character
