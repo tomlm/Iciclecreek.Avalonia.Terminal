@@ -73,15 +73,36 @@ public class WindowQueryTests
     }
 
     /// <summary>
-    /// A host that does NOT handle the request must not produce a reply — the terminal has nothing to say
-    /// and inventing an answer is worse than silence.
+    /// GEOMETRY the view itself knows is answered even with no handler: cell and text-area sizes
+    /// are the view's own numbers, and silence there makes an image client fall back to guessing
+    /// a cell size the emulator's tiling then disagrees with — which shears every placeholder
+    /// picture into repeated bands. The answer must be the same metric the emulator tiles with.
     /// </summary>
     [AvaloniaTest]
-    public async Task An_unhandled_query_stays_unanswered()
+    public async Task A_geometry_query_is_answered_even_with_no_handler()
     {
         var (view, pty, window) = LiveView();
 
-        view.Terminal.Write(Esc + "[14t");
+        view.Terminal.Write(Esc + "[16t");
+
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.Not.Empty,
+            "the view knows its own cell size and must say so");
+        Assert.That(pty.Written, Does.StartWith(Esc + "[6;"), "CSI 6 ; height ; width t");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// What the view CANNOT know on its own — where the window sits on the screen — still stays
+    /// unanswered without a handler: there the terminal genuinely has nothing to say, and
+    /// inventing an answer is worse than silence.
+    /// </summary>
+    [AvaloniaTest]
+    public async Task An_unhandled_query_the_view_cannot_answer_stays_unanswered()
+    {
+        var (view, pty, window) = LiveView();
+
+        view.Terminal.Write(Esc + "[13t");
         await Task.Delay(150);
 
         Assert.That(pty.Written, Is.Empty);

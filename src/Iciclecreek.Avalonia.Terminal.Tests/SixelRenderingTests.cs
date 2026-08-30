@@ -1300,4 +1300,81 @@ public class SixelRenderingTests
         }
         finally { window.Close(); }
     }
+
+    // ---- stretched placements ---------------------------------------------------------------------
+
+    /// <summary>
+    /// A run of a STRETCHED placement: the strip carries the box's pixels-per-cell, which is what
+    /// tells the renderer to fill the box rather than draw at natural size.
+    /// </summary>
+    private static TerminalView.CachedTextRun StretchedRun(TerminalImage image, int column, int cols,
+                                                           int srcX, int srcY, int srcWidth, int srcHeight,
+                                                           float pxPerCellX, float pxPerCellY)
+        => new(null, column, cols, null,
+               new LinePlacement(image.Id, column, cols, srcX, srcY, srcWidth, srcHeight,
+                                 PlacementKind.Kitty,
+                                 pxPerCellX: pxPerCellX, pxPerCellY: pxPerCellY),
+               image);
+
+    /// <summary>
+    /// The regression behind XTerm.NET#114. A picture stretched into a c/r box was drawn at its
+    /// own size instead: each row's strip fell short of its row (a stripe of background between
+    /// every pair of rows), and a picture shrunk into a small box was clipped rather than scaled.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_stretched_strip_fills_its_row_and_its_columns_exactly()
+    {
+        // An 8x9 picture in a 2-column, 3-row box: each cell covers 4x3 source pixels. This row's
+        // strip is the middle third. The destination must be the row's own box -- 2 cells wide,
+        // one row tall -- not the strip's natural size.
+        var image = new TerminalImage(new byte[8 * 9 * 4], 8, 9, CellPixelWidth, CellPixelHeight);
+
+        Assert.That(TerminalView.TryPlanImageBlit(
+                StretchedRun(image, 0, 2, 0, 3, 8, 3, pxPerCellX: 4f, pxPerCellY: 3f),
+                20, 20, 10, 20, 1.0,
+                out var source, out var destination), Is.True);
+
+        Assert.That(source, Is.EqualTo(new Rect(0, 3, 8, 3)));
+        Assert.That(destination, Is.EqualTo(new Rect(0, 20, 20, 20)));
+    }
+
+    /// <summary>
+    /// The hairline case. The emulator slices strips to WHOLE pixels, so a 299px picture over 8
+    /// rows hands out 37px strips against a 37.375px-per-cell ratio. Converting that back to
+    /// screen size leaves every row a fraction of a pixel short -- a seam across the picture,
+    /// repeated at every row boundary. A stretched strip is one full row of its box by
+    /// construction, so the destination comes from the row geometry and the rounding becomes a
+    /// sub-pixel sampling shift instead.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_whole_pixel_strip_against_a_fractional_ratio_still_fills_its_row()
+    {
+        var image = new TerminalImage(new byte[16 * 299 * 4], 16, 299, CellPixelWidth, CellPixelHeight);
+
+        Assert.That(TerminalView.TryPlanImageBlit(
+                StretchedRun(image, 0, 4, 0, 37, 16, 37, pxPerCellX: 4f, pxPerCellY: 37.375f),
+                20, 20, 10, 20, 1.0,
+                out _, out var destination), Is.True);
+
+        Assert.That(destination.Height, Is.EqualTo(20), "the strip must meet both of its neighbours");
+    }
+
+    /// <summary>
+    /// Natural placements carry zero and keep the unstretched edge that PR #119 established: a
+    /// half-cell strip draws half a cell, never a whole one.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_natural_edge_strip_is_not_stretched_to_fill_its_row()
+    {
+        var image = EvenImage();
+
+        // The last row of a 8x7 span at 3px cells has 1px left: a third of a cell, not a row.
+        Assert.That(TerminalView.TryPlanImageBlit(Run(image, 0, 4, 0, 6, 8, 1), 40, 20, 10, 20, 1.0,
+            out _, out var destination), Is.True);
+
+        // A third of a 20px row is 6.67px, snapped to the 7px device-pixel boundary -- the point
+        // is that it is nowhere near the full 20 a stretched strip would fill.
+        Assert.That(destination.Height, Is.EqualTo(7.0).Within(0.01),
+            "a partial edge strip keeps its natural height");
+    }
 }
