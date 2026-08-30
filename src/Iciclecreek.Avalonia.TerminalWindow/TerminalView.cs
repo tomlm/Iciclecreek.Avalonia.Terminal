@@ -3035,6 +3035,10 @@ namespace Iciclecreek.Terminal
                             ? erase
                             : erase + sequence;
 
+                        // Noted so the TextInput that may follow knows this keystroke has already
+                        // been reported, and does not send the same character a second time.
+                        _win32RecordSentForThisStroke = true;
+
                         await SendToPtyAsync(toSend).ConfigureAwait(false);
                         return;
                     }
@@ -3083,6 +3087,23 @@ namespace Iciclecreek.Terminal
                         e.Handled = true;
                         await SendToPtyAsync(sequence).ConfigureAwait(false);
                     }
+                    return;
+                }
+
+                // AltGr FIRST, because Windows and X11 both report it as Ctrl+Alt and the block below
+                // would otherwise turn a perfectly ordinary character into a control code. On a German
+                // layout AltGr+Q is @, on a French one AltGr+0 is @, and every one of them arrived
+                // here as Ctrl+Alt and left as NUL. Whole layouts could not type their own symbols.
+                if (IsAltGrComposed(e, out var altGrChar))
+                {
+                    e.Handled = true;
+
+                    // The character itself, with no modifiers -- because that is what the user typed.
+                    // The Ctrl and Alt are an artefact of how the platform spells AltGr, not part of
+                    // what was pressed.
+                    var replacedByAltGr = _pendingReplaceKeys;
+                    _pendingReplaceKeys = string.Empty;
+                    await SendToPtyAsync(replacedByAltGr + altGrChar).ConfigureAwait(false);
                     return;
                 }
 
@@ -3715,10 +3736,30 @@ namespace Iciclecreek.Terminal
                 return;
             }
 
-            // In Win32 Input Mode, text input is handled via KeyDown/KeyUp events
+            // In Win32 input mode ordinary keys are already reported as records from KeyDown, so
+            // sending their text again here would double every keystroke -- which is what the blanket
+            // skip was protecting against.
+            //
+            // But not everything that reaches TextInput has a KeyDown behind it. An IME commits its
+            // composition here, and so does a dead-key sequence: two presses that produce one
+            // character, and the character arrives as text with no key event carrying it. Those were
+            // silently discarded, so under cmd.exe no CJK, no accented Latin, nothing composed at all
+            // could be typed.
+            //
+            // Composed text is sent as records of its own, one per character, which is what the
+            // process is reading.
             if (_terminal.Win32InputMode)
             {
-                Debug.WriteLine($"[TerminalView] OnTextInput: Win32 input mode, skipping");
+                // Was a record already sent for this keystroke? Then this is the same character
+                // arriving a second way and must be dropped. Nothing sent means nothing produced it
+                // -- an IME commit, or the second press of a dead-key pair -- and that is the text
+                // this branch exists to carry.
+                var alreadySent = _win32RecordSentForThisStroke;
+                _win32RecordSentForThisStroke = false;
+                if (alreadySent)
+                    return;
+                e.Handled = true;
+                await SendToPtyAsync(Win32TextRecords(e.Text!)).ConfigureAwait(false);
                 return;
             }
 
@@ -4683,6 +4724,16 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private readonly HashSet<(PhysicalKey Physical, Key Logical)> _keysHeld = new();
 
+        /// <summary>
+        /// Whether the Win32 path has already reported the keystroke now in flight.
+        /// </summary>
+        /// <remarks>
+        /// Set when a key produces an INPUT_RECORD and read by the TextInput that may follow it, so
+        /// an ordinary key is not sent twice while composed text -- which has no key event behind it
+        /// -- still gets through. Cleared as it is read: it describes one keystroke, not a mode.
+        /// </remarks>
+        private bool _win32RecordSentForThisStroke;
+
         /// <summary>Builds the event the Kitty generator reads, or false when the key has no name it knows.</summary>
         private static bool TryBuildKittyKeyEvent(KeyEventArgs e, out XT.Options.KeyEvent ev)
         {
@@ -4731,7 +4782,14 @@ namespace Iciclecreek.Terminal
                                                       string pendingErase = "")
         {
             if (!_terminal.KittyKeyboardActive)
+            {
+                // Held keys are only meaningful while the protocol is. An application popping its
+                // flags -- which every full-screen one does on exit -- left the set populated, so the
+                // next press of a key that happened to be down at that moment reported as a REPEAT of
+                // a press the new application never saw.
+                _keysHeld.Clear();
                 return false;
+            }
 
             if (!TryBuildKittyKeyEvent(e, out var ev))
                 return false;
@@ -6155,7 +6213,15 @@ namespace Iciclecreek.Terminal
                     }
 
                     // Notify IME of cursor position change after terminal processes data
-                    Dispatcher.UIThread.Post(() => _inputMethodClient?.NotifyCursorRectangleChanged());
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        _inputMethodClient?.NotifyCursorRectangleChanged();
+
+                        // And the TEXT around it, which the client advertises support for and was
+                        // never told about. An IME asks once, caches, and waits to be told -- so it
+                        // was composing against whatever the line held the first time it looked.
+                        _inputMethodClient?.NotifySurroundingTextChanged();
+                    });
 
                     // Output is the only thing that can start or stop an animation, and the clock is
                     // a dispatcher timer, so the decision has to be made on the UI thread. The check
@@ -8407,7 +8473,12 @@ namespace Iciclecreek.Terminal
             // If Ctrl is pressed and this is a printable character, prefer the corresponding control code.
             // This improves compatibility for terminal apps that expect ^X (0x18), ^C (0x03), etc.
             // even when the underlying transport is Win32 INPUT_RECORD format.
-            if ((e.KeyModifiers & KeyModifiers.Control) != 0 && unicodeChar != 0)
+            //
+            // NOT for AltGr, which Windows spells as Ctrl+Alt and which composed this character on
+            // purpose. Folding it to a control code threw away the only thing the keystroke produced:
+            // under cmd.exe a German layout could not type @, and the process received NUL instead.
+            if ((e.KeyModifiers & KeyModifiers.Control) != 0 && unicodeChar != 0
+                && !IsAltGrComposed(e, out _))
             {
                 // Ctrl+A..Z => 0x01..0x1A
                 if (unicodeChar >= 'a' && unicodeChar <= 'z')
@@ -8435,6 +8506,15 @@ namespace Iciclecreek.Terminal
             // Build control key state flags
             var controlKeyState = GetWin32ControlKeyState(e.KeyModifiers, e.Key);
 
+            // AltGr is RIGHT alt plus left control on the wire -- that is how Windows reports it, and
+            // how a console application recognises it. Reporting left Alt described a chord the user
+            // had not pressed, and PSReadLine binds Alt+key.
+            if (IsAltGrComposed(e, out _))
+            {
+                controlKeyState &= ~Win32ControlKeyState.LeftAltPressed;
+                controlKeyState |= Win32ControlKeyState.RightAltPressed;
+            }
+
             return Win32Record(vk, scanCode, unicodeChar, isKeyDown, controlKeyState);
         }
 
@@ -8445,7 +8525,7 @@ namespace Iciclecreek.Terminal
         /// Split out from <see cref="GenerateWin32InputSequence"/> so a SYNTHETIC key — one this view
         /// presses on the user's behalf, with no <see cref="KeyEventArgs"/> behind it — is encoded by
         /// the same formatting as a real one rather than a second copy of the format string that can
-        /// drift from it. See <see cref="EncodeSyntheticKey"/>.
+        /// drift from it. See <see cref="EncodeSyntheticKey"/> and <see cref="Win32TextRecords"/>.
         /// </remarks>
         private static string Win32Record(int vk, int scanCode, int unicodeChar, bool isKeyDown,
                                           Win32ControlKeyState controlKeyState)
@@ -8456,6 +8536,36 @@ namespace Iciclecreek.Terminal
             // Format: ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _
             return $"\u001b[{vk};{scanCode};{unicodeChar};{(isKeyDown ? 1 : 0)};{(int)controlKeyState};{repeatCount}_";
         }
+
+        /// <summary>
+        /// Composed text as Win32 INPUT_RECORDs, one press and release per character.
+        /// </summary>
+        /// <remarks>
+        /// Through VK_PACKET, which exists for exactly this: a character with no key behind it.
+        /// Windows' own IME injection uses it, so a console application reading records already
+        /// knows what to do with one -- take the unicode field and ignore the virtual key.
+        /// </remarks>
+        private static string Win32TextRecords(string text)
+        {
+            var sb = new StringBuilder();
+
+            // By TEXT ELEMENT rather than by char, so a surrogate pair or a combining sequence is not
+            // split across records that each mean nothing on their own.
+            var e = System.Globalization.StringInfo.GetTextElementEnumerator(text);
+            while (e.MoveNext())
+            {
+                foreach (var rune in ((string)e.Current).EnumerateRunes())
+                {
+                    sb.Append(Win32Record(VirtualKeyPacket, 0, rune.Value, isKeyDown: true, Win32ControlKeyState.None));
+                    sb.Append(Win32Record(VirtualKeyPacket, 0, rune.Value, isKeyDown: false, Win32ControlKeyState.None));
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>VK_PACKET — "the unicode field is the whole of this event".</summary>
+        private const int VirtualKeyPacket = 0xE7;
 
         /// <summary>
         /// Converts Avalonia KeyModifiers to Win32 control key state flags.
@@ -8473,6 +8583,30 @@ namespace Iciclecreek.Terminal
             if (modifiers.HasFlag(KeyModifiers.Alt))
                 state |= Win32ControlKeyState.LeftAltPressed;
 
+            // The key ITSELF says which side, when the key is a modifier. Avalonia's KeyModifiers
+            // carries no handedness -- Alt is Alt whichever one is down -- so a right modifier was
+            // reported as the left one, and a program watching for RIGHT_ALT (which is how Windows
+            // spells AltGr) never saw it.
+            if (key == Key.RightAlt)
+            {
+                state &= ~Win32ControlKeyState.LeftAltPressed;
+                state |= Win32ControlKeyState.RightAltPressed;
+            }
+
+            if (key == Key.RightCtrl)
+            {
+                state &= ~Win32ControlKeyState.LeftCtrlPressed;
+                state |= Win32ControlKeyState.RightCtrlPressed;
+            }
+
+            // Lock state, which was never reported at all. A console application asking whether Caps
+            // Lock is on -- and readline-style line editors do -- got told it never is.
+            foreach (var (locked, flag) in LockStates())
+            {
+                if (locked)
+                    state |= flag;
+            }
+
             // Mark enhanced keys (navigation keys, etc.)
             if (IsEnhancedKey(key))
                 state |= Win32ControlKeyState.EnhancedKey;
@@ -8480,9 +8614,84 @@ namespace Iciclecreek.Terminal
             return state;
         }
 
+        /// <summary>The lock keys that are currently on, as the flags that report them.</summary>
+        /// <remarks>
+        /// Read from the platform rather than tracked, because a lock can be toggled while this
+        /// control does not have focus and a tracked copy would then be wrong until the next press.
+        /// Windows-only: the P/Invoke does not exist elsewhere, and neither does Win32 input mode.
+        /// </remarks>
+        private static IEnumerable<(bool On, Win32ControlKeyState Flag)> LockStates()
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                yield break;
+
+            yield return (IsToggled(VirtualKeyCapital), Win32ControlKeyState.CapsLockOn);
+            yield return (IsToggled(VirtualKeyNumLock), Win32ControlKeyState.NumLockOn);
+            yield return (IsToggled(VirtualKeyScroll), Win32ControlKeyState.ScrollLockOn);
+        }
+
+        private const int VirtualKeyCapital = 0x14;
+        private const int VirtualKeyNumLock = 0x90;
+        private const int VirtualKeyScroll = 0x91;
+
+        /// <summary>Whether a toggle key is currently ON, which is the LOW bit of its key state.</summary>
+        private static bool IsToggled(int virtualKey)
+        {
+            try { return (GetKeyState(virtualKey) & 1) != 0; }
+            catch (EntryPointNotFoundException) { return false; }
+            catch (DllNotFoundException) { return false; }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern short GetKeyState(int nVirtKey);
+
         /// <summary>
         /// Determines if a key is an "enhanced" key (extended keyboard keys).
         /// </summary>
+        /// <summary>
+        /// Whether this event is AltGr producing a character, rather than a real Ctrl+Alt chord.
+        /// </summary>
+        /// <remarks>
+        /// <para>Neither Windows nor X11 has a distinct AltGr modifier: both report it as Ctrl+Alt,
+        /// so the two are the same event as far as anything here can see. What tells them apart is
+        /// the CHARACTER. AltGr composes a different one -- AltGr+Q is @ on a German layout -- while
+        /// a genuine Ctrl+Alt+Q still reports q, because no composition happened.</para>
+        /// <para>So the test is: both modifiers held, no Meta, a single printable symbol, and that
+        /// symbol is not just the key's own unshifted character. That declines Ctrl+Alt+Q and accepts
+        /// AltGr+Q, which is exactly the distinction a user makes.</para>
+        /// <para>It cannot be perfect -- a layout where AltGr maps a key to itself is
+        /// indistinguishable, and so is Ctrl+Alt on a key with no AltGr mapping. Both of those end up
+        /// treated as the chord, which is the safer way to be wrong: a missing symbol is a nuisance,
+        /// a control code sent to a shell is not.</para>
+        /// </remarks>
+        private bool IsAltGrComposed(KeyEventArgs e, out char composed)
+        {
+            composed = '\0';
+
+            const KeyModifiers ctrlAlt = KeyModifiers.Control | KeyModifiers.Alt;
+            if ((e.KeyModifiers & ctrlAlt) != ctrlAlt)
+                return false;
+
+            // Meta is never part of AltGr on any platform that spells it this way.
+            if ((e.KeyModifiers & KeyModifiers.Meta) != 0)
+                return false;
+
+            if (e.KeySymbol is not { Length: 1 } symbol)
+                return false;
+
+            var c = symbol[0];
+            if (char.IsControl(c))
+                return false;
+
+            // The key's own character means nothing was composed, so this is the chord.
+            if (TryMapKeyToChar(e.Key, KeyModifiers.None, out var plain)
+                && char.ToLowerInvariant(plain) == char.ToLowerInvariant(c))
+                return false;
+
+            composed = c;
+            return true;
+        }
+
         private static bool IsEnhancedKey(Key key)
         {
             return key switch
@@ -8682,29 +8891,55 @@ namespace Iciclecreek.Terminal
             /// Returns the text content of the current line up to the cursor,
             /// providing context for the IME.
             /// </summary>
-            public override string SurroundingText
-            {
-                get
-                {
-                    try
-                    {
-                        var buffer = _view._terminal.Buffer;
-                        int absoluteY = buffer.YBase + buffer.Y;
-                        var line = buffer.GetLine(absoluteY);
-                        if (line == null) return string.Empty;
+            public override string SurroundingText => LineAndCaret().Text;
 
-                        var sb = new StringBuilder();
-                        for (int x = 0; x < line.Length; x++)
-                        {
-                            var cell = line[x];
-                            sb.Append(string.IsNullOrEmpty(cell.Content) ? " " : cell.Content);
-                        }
-                        return sb.ToString();
-                    }
-                    catch
+            /// <summary>
+            /// The cursor's line as one string, and where the caret sits INSIDE that string.
+            /// </summary>
+            /// <remarks>
+            /// <para>Both in one pass, because they have to agree and they did not. The text was
+            /// built a cell at a time while the caret was reported as a COLUMN, and the two index
+            /// spaces are only the same while every cell holds exactly one char. A grapheme cluster
+            /// does not: an e with a combining acute is one cell and two chars, so from the first one
+            /// on the line the IME was told the caret was somewhere it was not -- and an IME uses
+            /// exactly this to decide what it is composing over.</para>
+            /// <para>Counting the offset in the same loop that appends makes them agree by
+            /// construction rather than by both being derived carefully.</para>
+            /// </remarks>
+            private (string Text, int Caret) LineAndCaret()
+            {
+                try
+                {
+                    var buffer = _view._terminal.Buffer;
+                    int absoluteY = buffer.YBase + buffer.Y;
+                    var line = buffer.GetLine(absoluteY);
+                    if (line == null) return (string.Empty, 0);
+
+                    var cursorColumn = buffer.X;
+                    var sb = new StringBuilder();
+                    var caret = 0;
+
+                    for (int x = 0; x < line.Length; x++)
                     {
-                        return string.Empty;
+                        // Taken before appending, so a caret AT this column is the offset in front of
+                        // whatever this cell contributes.
+                        if (x == cursorColumn)
+                            caret = sb.Length;
+
+                        var cell = line[x];
+                        sb.Append(string.IsNullOrEmpty(cell.Content) ? " " : cell.Content);
                     }
+
+                    // A caret past the last cell is the end of the text, which is where it sits while
+                    // typing at the end of a line -- the common case.
+                    if (cursorColumn >= line.Length)
+                        caret = sb.Length;
+
+                    return (sb.ToString(), caret);
+                }
+                catch
+                {
+                    return (string.Empty, 0);
                 }
             }
 
@@ -8749,15 +8984,9 @@ namespace Iciclecreek.Terminal
             {
                 get
                 {
-                    try
-                    {
-                        int cursorX = _view._terminal.Buffer.X;
-                        return new TextSelection(cursorX, cursorX);
-                    }
-                    catch
-                    {
-                        return new TextSelection(0, 0);
-                    }
+                    // Into SurroundingText's index space, not the column space it used to report.
+                    var caret = LineAndCaret().Caret;
+                    return new TextSelection(caret, caret);
                 }
                 set { /* Terminal selection is managed separately */ }
             }
