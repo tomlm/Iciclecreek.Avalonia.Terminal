@@ -88,7 +88,13 @@ namespace Iciclecreek.Avalonia.Terminal
                 return new SolidColorBrush(bgColor.Value);
             }
 
-            if (defaultBrush is ISolidColorBrush)
+            // Only an OPAQUE host brush is replaced, matching the rule Render already applies when it
+            // paints the surface. A background carrying alpha is a host asking to be seen through,
+            // and no RGB palette entry can express that -- substituting one silently makes a
+            // deliberately translucent terminal opaque wherever a cell inverts or the block cursor
+            // lands. Two different answers to "is the default background the emulator's or the
+            // host's" in one renderer would be worse than either answer.
+            if (defaultBrush is ISolidColorBrush { Color.A: 255 })
                 return new SolidColorBrush(FromRgb(palette.Background));
 
             return defaultBrush;

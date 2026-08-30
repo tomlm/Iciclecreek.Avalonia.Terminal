@@ -196,6 +196,24 @@ public class ColorResolutionTests
     }
 
     [AvaloniaTest]
+    public void A_translucent_host_background_is_left_alone()
+    {
+        // The limit of the rule above. A background carrying alpha is a host asking to be seen
+        // through, and no RGB palette entry can express that -- so substituting one would make a
+        // deliberately translucent terminal opaque wherever a cell inverts. Render already draws
+        // this line when it paints the surface, and this is the same line in the same place.
+        var (view, window) = Realised();
+        try
+        {
+            var (cell, palette) = FirstCell(view, "X");
+            var translucent = new SolidColorBrush(Color.FromArgb(0x80, 0, 0, 0));
+
+            Assert.That(cell.GetBackgroundBrush(palette, translucent), Is.SameAs(translucent));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
     public void A_default_background_still_paints_nothing_of_its_own()
     {
         // The transparency behaviour is a SEPARATE decision, made by the renderer from
