@@ -3056,12 +3056,18 @@ namespace Iciclecreek.Terminal
         /// on the strength of a cut that then did not happen is swallowed for nothing. Both of those
         /// are answerable here, synchronously, so this asks all three of the questions CutAsync asks
         /// rather than the first one.</para>
+        /// <para>The last condition is the one that is easy to miss: the deletion has to be
+        /// ENCODABLE. EncodeSyntheticKey answers empty when the live protocol has no way to express
+        /// a synthetic Backspace, and a cut claimed past that point would have copied to the
+        /// clipboard and then removed nothing -- a cut that silently became a copy, which is the
+        /// outcome CutAsync exists to refuse.</para>
         /// <para>What is left is only the write itself failing, which nothing can predict.</para>
         /// </remarks>
         private bool CanCut
             => CanRemoveSelection
                && TopLevel.GetTopLevel(this)?.Clipboard is not null
-               && !string.IsNullOrEmpty(_terminal.Selection.GetSelectionText());
+               && !string.IsNullOrEmpty(_terminal.Selection.GetSelectionText())
+               && !string.IsNullOrEmpty(BuildKeyboardSelectionDeletion());
 
         /// <summary>
         /// The bytes for one press of a key this view is pressing on the user's behalf, encoded for
@@ -3129,7 +3135,17 @@ namespace Iciclecreek.Terminal
             return _terminal.GenerateKeyInput(xtermKey, XT.Input.KeyModifiers.None);
         }
 
-        private string TakeKeyboardSelectionDeletion()
+        /// <summary>
+        /// The keystrokes that would remove the current selection, WITHOUT clearing it.
+        /// </summary>
+        /// <remarks>
+        /// Split from <see cref="TakeKeyboardSelectionDeletion"/> so the question can be asked
+        /// without being answered. The taking version clears the selection as it goes, which is right
+        /// for a caller about to send the result and useless for one deciding whether it can -- and
+        /// deciding is now necessary, because a chord is claimed before the await that would find
+        /// out. Empty means this cannot be done, for any of the reasons below.
+        /// </remarks>
+        private string BuildKeyboardSelectionDeletion()
         {
             if (_kbSelAnchor is null || !_terminal.Selection.HasSelection)
                 return string.Empty;
@@ -3166,8 +3182,25 @@ namespace Iciclecreek.Terminal
                      + string.Concat(Enumerable.Repeat(backspace, count));
             }
 
-            _kbSelAnchor = null;
+            return keys;
+        }
 
+        /// <summary>
+        /// <see cref="BuildKeyboardSelectionDeletion"/>, and clears the selection when there is one
+        /// to give.
+        /// </summary>
+        /// <remarks>
+        /// The clearing is deliberately conditional on having produced something. A selection dropped
+        /// for a deletion that could not be built is a selection the user watched vanish with nothing
+        /// happening to the line.
+        /// </remarks>
+        private string TakeKeyboardSelectionDeletion()
+        {
+            var keys = BuildKeyboardSelectionDeletion();
+            if (keys.Length == 0)
+                return string.Empty;
+
+            _kbSelAnchor = null;
             _kbSelWholeInput = false;
             _terminal.Selection.ClearSelection();
             RequestPaint();
