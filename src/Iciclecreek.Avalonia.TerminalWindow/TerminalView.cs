@@ -3767,9 +3767,11 @@ namespace Iciclecreek.Terminal
                 // this branch exists to carry.
                 var alreadySent = _win32RecordSentForThisStroke;
                 _win32RecordSentForThisStroke = false;
+                // Either branch consumes this event: it is duplicate text already represented by
+                // KeyDown, or it is composed text that this control sends as VK_PACKET records.
+                e.Handled = true;
                 if (alreadySent)
                     return;
-                e.Handled = true;
                 await SendToPtyAsync(Win32TextRecords(e.Text!)).ConfigureAwait(false);
                 return;
             }

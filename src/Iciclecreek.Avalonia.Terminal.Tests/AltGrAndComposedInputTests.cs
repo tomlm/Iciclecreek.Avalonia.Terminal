@@ -48,8 +48,12 @@ public class AltGrAndComposedInputTests
             Key = k, KeyModifiers = m, KeySymbol = symbol,
         });
 
-    private static void TypeText(TerminalView v, string text)
-        => v.RaiseEvent(new TextInputEventArgs { RoutedEvent = InputElement.TextInputEvent, Text = text });
+    private static TextInputEventArgs TypeText(TerminalView v, string text)
+    {
+        var e = new TextInputEventArgs { RoutedEvent = InputElement.TextInputEvent, Text = text };
+        v.RaiseEvent(e);
+        return e;
+    }
 
     private static string Settled(RecordingConnection pty)
     {
@@ -157,11 +161,13 @@ public class AltGrAndComposedInputTests
             Press(view, Key.A, KeyModifiers.None, "a");
             var afterKey = Settled(pty);
 
-            TypeText(view, "a");
+            var textInput = TypeText(view, "a");
             Thread.Sleep(200);
 
             Assert.That(pty.Written, Is.EqualTo(afterKey),
                 "the keystroke was already reported; its text must not be sent again");
+            Assert.That(textInput.Handled, Is.True,
+                "duplicate text was consumed by the terminal and must not bubble to a parent");
         }
         finally { window.Close(); }
     }
