@@ -5582,8 +5582,16 @@ namespace Iciclecreek.Terminal
             // app to protect against losing a few bytes. Subscribing above already removes the part that
             // matters — an exit can no longer be missed — and for an attached connection the caller already
             // owned it, so output from before the attach was never ours to catch.
+            // The token is read HERE, not inside the lambda. Read there it is a field access that
+            // happens on the new thread whenever it gets scheduled -- and CleanupProcess nulls
+            // _processCts, so a relaunch or a close landing in that gap killed the reader with an
+            // unobserved NullReferenceException before it had read a byte. Nothing reports that: the
+            // task is discarded, so the exception goes nowhere and the terminal simply never shows
+            // output.
+            var readerToken = _processCts.Token;
+
             _ = Task.Factory.StartNew(
-                () => ReadPtyOutputAsync(connection, _processCts.Token),
+                () => ReadPtyOutputAsync(connection, readerToken),
                 CancellationToken.None,
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default);
@@ -6539,9 +6547,19 @@ namespace Iciclecreek.Terminal
                 // Only resize if dimensions have changed
                 if (newCols != _terminal.Cols || newRows != _terminal.Rows)
                 {
-                    _terminal.Resize(newCols, newRows);
+                    // Under the lock, like every other mutation of the emulator. A resize reflows the
+                    // whole buffer, and the pty reader can be inside Terminal.Write at the same
+                    // moment -- one thread rewriting the lines another is appending to. Layout runs
+                    // on the UI thread and output arrives on the reader thread, so the two meet
+                    // whenever a window is resized while anything is printing.
+                    lock (_terminalLock)
+                    {
+                        _terminal.Resize(newCols, newRows);
+                    }
 
-                    // Also resize the PTY connection if it exists
+                    // Outside it: this is a write to the pty, which has its own serialisation, and
+                    // holding the terminal lock across a call into the platform would block the
+                    // reader for no reason.
                     _ptyConnection?.Resize(newCols, newRows);
 
                     RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);

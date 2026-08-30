@@ -223,12 +223,29 @@ namespace Iciclecreek.Terminal
             }
 
             var styles = (IStyle)new global::Avalonia.Markup.Xaml.Styling.StyleInclude(uri) { Source = uri };
-            Application.Current.Styles.Add(styles);
+
+            // FIRST, not last. Later styles win in Avalonia, so appending put this library's default
+            // theme above everything the application had already set -- a host that styled
+            // TerminalControl in App.axaml, which is where an application's styles go, was overruled
+            // by the control it was styling. Inserting at the front makes it what it is meant to be:
+            // a default, there when nobody said otherwise and beaten by anybody who did.
+            Application.Current.Styles.Insert(0, styles);
             _stylesLoaded = true;
         }
 
         public TerminalControl()
         {
+            // The retry for a static constructor that ran before there was an Application to add
+            // styles to.
+            //
+            // It used to sit in OnApplyTemplate, where it could never run: this control's template
+            // COMES from those styles, so if they are missing there is no template, and a hook that
+            // fires when a template is applied never fires at all. The fallback was unreachable
+            // exactly when it was needed, which is the only time it was needed.
+            //
+            // A constructor runs either way, and runs before styling, which is early enough for the
+            // styles to be found.
+            LoadDefaultStyles();
         }
 
         /// <summary>
@@ -705,9 +722,6 @@ namespace Iciclecreek.Terminal
 
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
         {
-            // Ensure styles are loaded (handles case where static constructor ran before Application was ready)
-            LoadDefaultStyles();
-
             base.OnApplyTemplate(e);
 
             // Unsubscribe from old controls
