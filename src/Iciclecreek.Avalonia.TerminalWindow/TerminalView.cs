@@ -1107,8 +1107,23 @@ namespace Iciclecreek.Terminal
                     if (brush is null)
                         continue;
 
-                    var x1 = Snap(hit.Column * _charWidth * cellScale, scale);
-                    var x2 = Snap(hit.EndColumn * _charWidth * cellScale, scale);
+                    // Clamped to the grid. A hit is recorded against the buffer at the width the
+                    // line had when it was searched, and a resize narrower than that leaves hits
+                    // naming columns that no longer exist -- so the tint was painted hundreds of
+                    // pixels past the right edge of the control, over whatever the host had there.
+                    //
+                    // Clamped to the columns VISIBLE on this row, which on a doubled row is half of
+                    // them: each is drawn twice as wide, so the same count would reach twice the
+                    // width. Clamping to Cols and then scaling would put the right edge of a hit at
+                    // the far end of a control twice as wide as this one.
+                    var visibleCols = (int)(_terminal.Cols / cellScale);
+
+                    if (!ClampSpanToGrid(hit.Column, hit.EndColumn, visibleCols,
+                                         out var startCol, out var endCol))
+                        continue;
+
+                    var x1 = Snap(startCol * _charWidth * cellScale, scale);
+                    var x2 = Snap(endCol * _charWidth * cellScale, scale);
                     var y1 = Snap(screenY * _charHeight, scale);
                     var y2 = Snap((screenY + 1) * _charHeight, scale);
                     context.FillRectangle(brush, new Rect(x1, y1, Math.Max(0, x2 - x1), Math.Max(0, y2 - y1)));
@@ -6104,7 +6119,7 @@ namespace Iciclecreek.Terminal
         /// set no brush for that case. There is no built-in palette here on purpose: a terminal
         /// picking its own red and green would be picking them for every theme it ever runs under.
         /// </remarks>
-        private void DrawGutter(DrawingContext context, double gutter)
+        private void DrawGutter(DrawingContext context, double gutter, double scale)
         {
             if (gutter <= 0 || _charHeight <= 0)
                 return;
@@ -6165,10 +6180,45 @@ namespace Iciclecreek.Terminal
                 if (brush is null)
                     continue;
 
+                // SNAPPED, from the same arithmetic every text row uses. Raw row * _charHeight is a
+                // fractional pixel whenever the cell height is, and the rows themselves are snapped
+                // to the device grid -- so the bars drifted against the text they annotate, growing
+                // to nearly a pixel out by the bottom of the screen and landing between two rows.
+                var barTop = Snap(row * _charHeight, scale);
+                var barBottom = Snap((row + 1) * _charHeight, scale);
+
                 context.FillRectangle(brush,
-                    new Rect(0, row * _charHeight, gutter, _charHeight));
+                    new Rect(0, barTop, gutter, Math.Max(0, barBottom - barTop)));
             }
         }
+
+        /// <summary>
+        /// Narrows a column span to the columns that currently exist, answering false when nothing
+        /// of it is left.
+        /// </summary>
+        /// <remarks>
+        /// Spans outlive the grid they were measured against. A search hit is recorded at the width
+        /// the line had when it was searched, and a resize narrower than that leaves it naming
+        /// columns that are gone -- painted, in the old geometry, past the right edge of the control
+        /// and over whatever the host had beside it.
+        /// </remarks>
+        internal static bool ClampSpanToGrid(int start, int end, int cols, out int clampedStart, out int clampedEnd)
+        {
+            clampedStart = Math.Clamp(start, 0, cols);
+            clampedEnd = Math.Clamp(end, clampedStart, cols);
+            return clampedEnd > clampedStart;
+        }
+
+        /// <summary>
+        /// How much of something starting at <paramref name="x"/> fits before <paramref name="right"/>.
+        /// </summary>
+        /// <remarks>
+        /// For draws whose width is not decided by the grid. An IME composition is as long as the
+        /// user makes it -- a whole phrase before it commits -- and drawing it at its measured width
+        /// from the cursor ran it off the end of the control.
+        /// </remarks>
+        internal static double FitWidth(double x, double measured, double right)
+            => Math.Min(measured, Math.Max(0, right - x));
 
         /// <summary>
         /// The column a pointer position falls in, with the gutter taken off first.
@@ -6322,7 +6372,7 @@ namespace Iciclecreek.Terminal
             // a translation catches all of them at once and cannot be half-applied. The pointer maths
             // takes the offset off the other end -- see PointerColumn.
             var gutter = Math.Max(0, GutterWidth);
-            DrawGutter(context, gutter);
+            DrawGutter(context, gutter, scale);
 
             using var gutterShift = gutter > 0
                 ? context.PushTransform(Matrix.CreateTranslation(gutter, 0))
@@ -7244,6 +7294,20 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private void RenderSizedBlocks(DrawingContext context, double scale)
         {
+            if (_sizedBlockDraws.Count == 0)
+                return;
+
+            // Clipped to the content area, because a sized block is deliberately BIGGER than the
+            // cells it was placed in -- that is what OSC 66 is for. A block near the top row extends
+            // above it and one on the last row extends below, and both were painted outside the
+            // control entirely, over whatever the host had above or below the terminal.
+            //
+            // Around the whole pass rather than per block: they are drawn together, after every row,
+            // so one clip covers all of them for one push.
+            var content = new Rect(0, 0, _terminal.Cols * _charWidth, _terminal.Rows * _charHeight);
+
+            using var clip = context.PushClip(content);
+
             foreach (var draw in _sizedBlockDraws)
             {
                 var line = draw.Line;
@@ -7750,7 +7814,12 @@ namespace Iciclecreek.Terminal
 
             var typeface = new Typeface(FontFamily, FontStyle, FontWeight);
             var foreground = GetValue(ForegroundProperty) ?? Brushes.White;
-            var background = GetValue(BackgroundProperty) ?? Brushes.Black;
+
+            // The EMULATOR's background, not the styled one -- the same rule the cell renderer
+            // follows. A program that moved its default background with OSC 11 had the composition
+            // box painted in the host's original colour, a rectangle of the wrong shade sitting in
+            // the middle of its own screen.
+            var background = (IBrush)new SolidColorBrush(BufferCellExtensions.FromRgb(_palette.Background));
 
             var formattedText = new FormattedText(
                 preeditText,
@@ -7760,32 +7829,46 @@ namespace Iciclecreek.Terminal
                 FontSize,
                 foreground);
 
-            double textWidth = formattedText.Width * cellScale;
+            // Bounded by the right edge, and CLIPPED to it. A composition is as long as the user
+            // makes it -- an IME buffers a whole phrase before committing -- and this drew it at its
+            // full measured width from the cursor, so a long one ran off the end of the control and
+            // painted over whatever the host had beside the terminal.
+            //
+            // The SCALED width is what gets bounded: on a doubled row the composition is drawn twice
+            // as wide, so bounding its unscaled measurement would let the drawn glyphs run past an
+            // edge the box stopped at.
+            double textWidth = FitWidth(posX, formattedText.Width * cellScale, _terminal.Cols * _charWidth);
+            if (textWidth <= 0)
+                return;
 
-            // Draw background behind preedit text to cover existing content
-            context.FillRectangle(background, new Rect(posX, posY, textWidth, cellHeight));
+            using (context.PushClip(new Rect(posX, posY, textWidth, cellHeight)))
+            {
+                // Draw background behind preedit text to cover existing content
+                context.FillRectangle(background, new Rect(posX, posY, textWidth, cellHeight));
 
-            // Draw the preedit text
-            if (cellScale == 1.0)
-            {
-                context.DrawText(formattedText, new Point(posX, posY));
-            }
-            else
-            {
-                // The row's text is drawn under the same horizontal scale. This overlay is outside
-                // that row transform, so apply it around the preedit origin as well; scaling only
-                // the background geometry would leave the composing glyphs at half width.
-                var toOrigin = Matrix.CreateTranslation(-posX, -posY);
-                var widen = Matrix.CreateScale(cellScale, 1.0);
-                var back = Matrix.CreateTranslation(posX, posY);
-                using (context.PushTransform(toOrigin * widen * back))
+                // Draw the preedit text
+                if (cellScale == 1.0)
+                {
                     context.DrawText(formattedText, new Point(posX, posY));
-            }
+                }
+                else
+                {
+                    // The row's text is drawn under the same horizontal scale. This overlay is
+                    // outside that row transform, so apply it around the preedit origin as well;
+                    // scaling only the background geometry would leave the composing glyphs at half
+                    // width. Inside the clip, so a doubled composition is still bounded by the edge.
+                    var toOrigin = Matrix.CreateTranslation(-posX, -posY);
+                    var widen = Matrix.CreateScale(cellScale, 1.0);
+                    var back = Matrix.CreateTranslation(posX, posY);
+                    using (context.PushTransform(toOrigin * widen * back))
+                        context.DrawText(formattedText, new Point(posX, posY));
+                }
 
-            // Draw underline to indicate uncommitted composition text
-            double underlineY = posY + cellHeight - Math.Max(1.0, scale);
-            var pen = new Pen(foreground, Math.Max(1.0, scale));
-            context.DrawLine(pen, new Point(posX, underlineY), new Point(posX + textWidth, underlineY));
+                // Draw underline to indicate uncommitted composition text
+                double underlineY = posY + cellHeight - Math.Max(1.0, scale);
+                var pen = new Pen(foreground, Math.Max(1.0, scale));
+                context.DrawLine(pen, new Point(posX, underlineY), new Point(posX + textWidth, underlineY));
+            }
         }
 
         #region Win32 Input Mode Support
