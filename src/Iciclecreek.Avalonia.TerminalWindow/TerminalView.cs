@@ -7045,34 +7045,115 @@ namespace Iciclecreek.Terminal
         {
             // Try to use cached text runs for this line (but not when ReverseVideo mode is active as it affects all cells)
             var textRuns = !_terminal.ReverseVideo ? line.Cache as List<CachedTextRun> : null;
-            if (textRuns != null)
+
+            textRuns ??= CollectLineRuns(line, startYPos, rowHeight);
+
+            DrawLineRuns(context, textRuns, startYPos, rowHeight, scale);
+        }
+
+        /// <summary>
+        /// Paints a row from its runs -- the same list whether it was cached or collected a moment ago.
+        /// </summary>
+        /// <remarks>
+        /// One draw path rather than two. Collecting used to paint as it went, so every change had to be
+        /// made in both places and the two drifted: styled underlines were wired into the replay and
+        /// missing from a freshly built row until something else invalidated it. Collecting now only
+        /// READS, which is also what lets it be retried -- see <see cref="CollectLineRuns"/>.
+        /// </remarks>
+        private void DrawLineRuns(DrawingContext context, List<CachedTextRun> textRuns,
+                                  double startYPos, double rowHeight, double scale)
+        {
+            foreach (var run in textRuns)
             {
-                foreach (var run in textRuns)
-                {
-                    // Recalculate position based on current screen row
-                    var startX = Snap(run.StartX * _charWidth, scale);
-                    var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);
-                    var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
-                    var position = new Point(startX, startYPos);
+                // Recalculate position based on current screen row
+                var startX = Snap(run.StartX * _charWidth, scale);
+                var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);
+                var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
+                var position = new Point(startX, startYPos);
 
-                    // The background goes down first either way: a Sixel drawn with background select 1 leaves
-                    // its unset pixels transparent, and the cell's own background is meant to show through them.
-                    if (run.Background is not null)
-                        context.FillRectangle(run.Background, rect);
+                // The background goes down first either way: a Sixel drawn with background select 1 leaves
+                // its unset pixels transparent, and the cell's own background is meant to show through them.
+                if (run.Background is not null)
+                    context.FillRectangle(run.Background, rect);
 
-                    if (run.IsImage)
-                        DrawImageRun(context, run, startYPos, rowHeight, scale);
-                    else if (run.Text is not null)
-                        context.DrawText(run.Text, position);
+                if (run.IsImage)
+                    DrawImageRun(context, run, startYPos, rowHeight, scale);
+                else if (run.Text is not null)
+                    context.DrawText(run.Text, position);
 
-                    if (run.UnderlineStyle != XT.Common.UnderlineStyle.None)
-                        DrawUnderline(context, run, position, rect.Width, rowHeight);
-                }
-                return;
+                if (run.UnderlineStyle != XT.Common.UnderlineStyle.None)
+                    DrawUnderline(context, run, position, rect.Width, rowHeight);
             }
+        }
 
-            // Build and cache text runs for this line
-            textRuns = new List<CachedTextRun>();
+        /// <summary>
+        /// Reads a row's cells into runs, and publishes them as the line's cache only if the line held
+        /// still while they were read.
+        /// </summary>
+        /// <remarks>
+        /// <para>The pty reader thread writes into the buffer while this runs on the UI thread. It holds
+        /// <c>_terminalLock</c> to do it and this does not take it, so a row can be REWRITTEN mid-read and
+        /// the runs then describe a row that never existed -- part of it as it was, the rest as it became.
+        /// Taking the lock here would be safe now that the reader no longer waits on the UI thread while
+        /// holding it, but the reader would then be stopped for the length of every frame, which is a
+        /// third of the clock at 30 FPS and is paid on every frame rather than on the rare torn one.</para>
+        /// <para>A sprite moving LEFT is where that shows, because ncurses moves one with DCH: a delete
+        /// that shifts the whole rest of the line at once. Read across that shift, the row comes out with
+        /// fragments of the sprite smeared along it rather than one blurred cell -- the trail of leftover
+        /// glyphs asciiquarium leaves behind.</para>
+        /// <para>Worse than the frame it happened on: the mixture was then stored as the line's cache, and
+        /// a cache is dropped only by the next WRITE to that line. A sprite that has moved away leaves a
+        /// row nothing writes to again, so the smear stayed on screen until something else touched it.</para>
+        /// <para>Every write to a line clears its <c>Cache</c>, which makes that field a read stamp as well
+        /// as a cache: park a token in it, read the row, and a token still there means no write landed.
+        /// Retried a couple of times, because a re-read costs only the read. When it will not settle the
+        /// row is still drawn from what was read -- one frame of tearing is what any terminal does -- but
+        /// it is NOT cached, and another frame is asked for.</para>
+        /// </remarks>
+        private List<CachedTextRun> CollectLineRuns(BufferLine line, double startYPos, double rowHeight)
+        {
+            // Three reads of one row, on the rare frame a write lands in the middle of one. Unbounded
+            // retries would let a row being written continuously stall the whole frame.
+            const int Attempts = 3;
+
+            var deferredBefore = _sizedBlockDraws.Count;
+
+            for (var attempt = 1; ; attempt++)
+            {
+                // Whatever an abandoned read deferred came from the row it misread, so it goes with it.
+                if (_sizedBlockDraws.Count > deferredBefore)
+                    _sizedBlockDraws.RemoveRange(deferredBefore, _sizedBlockDraws.Count - deferredBefore);
+
+                var stamp = new object();
+                line.Cache = stamp;
+
+                var runs = BuildLineRuns(line, startYPos, rowHeight, out var hasSizedRuns);
+
+                if (!ReferenceEquals(line.Cache, stamp))
+                {
+                    if (attempt < Attempts)
+                        continue;
+
+                    line.Cache = null;
+                    RequestPaint();
+                    return runs;
+                }
+
+                // Sized lines are not cached: the cache stores finished draw calls and the blocks are
+                // deliberately not among them -- they are painted in the deferred pass after every row.
+                line.Cache = hasSizedRuns || _terminal.ReverseVideo ? null : runs;
+                return runs;
+            }
+        }
+
+        /// <summary>
+        /// Reads one row into runs. Reads ONLY -- see <see cref="CollectLineRuns"/> for why nothing here
+        /// may paint or publish.
+        /// </summary>
+        private List<CachedTextRun> BuildLineRuns(BufferLine line, double startYPos, double rowHeight,
+                                                  out bool hasSizedRuns)
+        {
+            var textRuns = new List<CachedTextRun>();
 
             // The line's own runs, back to front. Every picture on the line is already one run per
             // line, so there is nothing to collect and nothing to coalesce -- the emulator's storage
@@ -7087,8 +7168,7 @@ namespace Iciclecreek.Terminal
 
             for (; nextPlacement < placements.Count && placements[nextPlacement].ZIndex < 0; nextPlacement++)
             {
-                AppendImageRun(context, line, placements[nextPlacement], startYPos, rowHeight, scale,
-                               textRuns, painted);
+                AppendImageRun(line, placements[nextPlacement], textRuns, painted);
                 painted.Add(placements[nextPlacement]);
             }
 
@@ -7098,9 +7178,7 @@ namespace Iciclecreek.Terminal
             // anchor cell's Width spans the whole block, so drawing it as a normal run would put
             // the text at base size in a corner of the box. Sized lines are not cached: the
             // cache stores finished draw calls, and the blocks are deliberately NOT drawn here.
-            var hasSizedRuns = line.HasSizedRuns;
-            if (hasSizedRuns)
-                line.Cache = null;
+            hasSizedRuns = line.HasSizedRuns;
 
             for (int x = 0; x < _terminal.Cols;)
             {
@@ -7197,9 +7275,6 @@ namespace Iciclecreek.Terminal
                 // people. Applies to both branches: ❤️‍🔥 starts in a width-1 cell and continues into a wide one.
                 text = GraphemeRuns.AbsorbJoinedCells(line, _terminal.Cols, cell, text, ref x, ref cellCount);
 
-                var startX = Snap(runStartX * _charWidth, scale);
-                var endX = Snap((runStartX + cellCount) * _charWidth, scale);
-                var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                 var background = cell.GetBackgroundBrush(_palette, this.Background);
                 var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
                 // Apply cell-level inverse attribute
@@ -7246,11 +7321,7 @@ namespace Iciclecreek.Terminal
                 // substance of it rather than a detail.
                 foreground = cell.ApplyConceal(foreground);
 
-                var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
-                var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
                 var td = cell.GetTextDecorations();
-                if (td != null)
-                    formattedText.SetTextDecorations(td);
 
                 // Underlines are drawn by hand below rather than through TextDecorations, because
                 // Avalonia has no curly decoration and SGR 58 gives the underline a colour of its own.
@@ -7263,7 +7334,31 @@ namespace Iciclecreek.Terminal
                         : foreground;
                 }
 
-                var position = new Point(startX, startYPos);
+                // A run of blanks with no decoration has nothing to draw. Most of a terminal is exactly
+                // that -- the grid is blank to the right of every line -- and each of those runs was
+                // shaping a string of spaces and issuing a DrawText for it. Spaces have no ink, so the
+                // call could only ever produce nothing.
+                //
+                // Carried by giving the run NO FormattedText rather than by a test at the draw call: the
+                // string is then never shaped either, and because the draw path already skips a run with
+                // no text the saving holds for every later frame the row is replayed from the cache. It
+                // did not before -- the skip lived on the build path, so a blank run was skipped on the
+                // frame it was built and drawn on all the rest.
+                //
+                // The DECORATION check is what makes it safe: an underline or a strikethrough on blanks
+                // is visible, and an underline is drawn by hand rather than by DrawText. A fill is safe
+                // too -- it is a run of its own business, drawn whether or not there is text, which is
+                // why swapped runs and coloured backgrounds are unaffected.
+                FormattedText? formattedText = null;
+                if (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null)
+                {
+                    var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
+                    formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                                                      typeface, FontSize, foreground);
+                    if (td != null)
+                        formattedText.SetTextDecorations(td);
+                }
+
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
                 var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
@@ -7283,41 +7378,15 @@ namespace Iciclecreek.Terminal
                 var run = new CachedTextRun(formattedText, runStartX, cellCount, fill,
                                             UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush);
                 textRuns.Add(run);
-
-                if (fill is not null)
-                    context.FillRectangle(fill, rect);
-
-                // A run of blanks with no fill and no decoration has nothing to draw. Most of a
-                // terminal is exactly that -- the grid is blank to the right of every line -- and
-                // each of those runs was shaping a string of spaces and issuing a DrawText for it
-                // every frame. Spaces have no ink, so the call could only ever produce nothing.
-                //
-                // The DECORATION check is what makes it safe: an underline or a strikethrough on
-                // blanks is visible, and is drawn by hand below rather than by DrawText, so it has to
-                // survive this. So does a fill, which is handled above and is why swapped runs and
-                // coloured backgrounds are unaffected.
-                if (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null)
-                    context.DrawText(formattedText, position);
-
-                // Drawn on the BUILD path as well as the cached replay below. A line is painted here
-                // on the frame it changes and replayed afterwards, so wiring only the replay leaves
-                // every newly written underline missing until something else invalidates the line.
-                if (underlineStyle != XT.Common.UnderlineStyle.None)
-                    DrawUnderline(context, run, position, rect.Width, rowHeight);
             }
 
             // And the pictures that cover the text, still back to front, now that it is down.
             for (; nextPlacement < placements.Count; nextPlacement++)
             {
-                AppendImageRun(context, line, placements[nextPlacement], startYPos, rowHeight, scale,
-                               textRuns, painted);
+                AppendImageRun(line, placements[nextPlacement], textRuns, painted);
                 painted.Add(placements[nextPlacement]);
             }
-
-            // Cache the text runs (but not when ReverseVideo mode is active)
-            if (!_terminal.ReverseVideo)
-                if (!hasSizedRuns)
-                    line.Cache = textRuns;
+            return textRuns;
         }
 
         /// <summary>
@@ -7365,16 +7434,15 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Draws one picture run and adds it to the row's cache.
+        /// Adds one picture run to the row's runs.
         /// </summary>
         /// <remarks>
         /// One blit per run, which is one per row of a picture. There is no coalescing to do and no
         /// tile arithmetic left: the run already carries the source rectangle and the columns it
         /// covers, so the whole strip goes down in a single call.
         /// </remarks>
-        private void AppendImageRun(DrawingContext context, BufferLine line,
+        private void AppendImageRun(BufferLine line,
                                     XT.Graphics.LinePlacement placement,
-                                    double startYPos, double rowHeight, double scale,
                                     List<CachedTextRun> textRuns,
                                     List<XT.Graphics.LinePlacement> alreadyPainted)
         {
@@ -7405,18 +7473,7 @@ namespace Iciclecreek.Terminal
                        ? background
                        : null;
 
-            var run = new CachedTextRun(null, start, cellCount, fill, placement, image);
-            textRuns.Add(run);
-
-            if (fill is not null)
-            {
-                var fillStart = Snap(start * _charWidth, scale);
-                var fillEnd = Snap(end * _charWidth, scale);
-                context.FillRectangle(fill, new Rect(fillStart, startYPos,
-                                                     Math.Max(0, fillEnd - fillStart), rowHeight));
-            }
-
-            DrawImageRun(context, run, startYPos, rowHeight, scale);
+            textRuns.Add(new CachedTextRun(null, start, cellCount, fill, placement, image));
         }
 
         /// <summary>
@@ -8154,10 +8211,15 @@ namespace Iciclecreek.Terminal
 
                     for (; dwNext < dwPlacements.Count && dwPlacements[dwNext].ZIndex < 0; dwNext++)
                     {
-                        AppendImageRun(context, line, dwPlacements[dwNext], startYPos, rowHeight, scale,
-                                       dwScratch, dwPainted);
+                        AppendImageRun(line, dwPlacements[dwNext], dwScratch, dwPainted);
                         dwPainted.Add(dwPlacements[dwNext]);
                     }
+
+                    // Drawn on the spot rather than left to a later pass: collecting no longer paints
+                    // anything by itself, and these have to go down inside the transform that doubles
+                    // them, before the text that sits on top of them.
+                    DrawLineRuns(context, dwScratch, startYPos, rowHeight, scale);
+                    dwScratch.Clear();
 
                     for (int x = 0; x < effectiveCols && x < line.Length;)
                     {
@@ -8270,10 +8332,11 @@ namespace Iciclecreek.Terminal
                     // thing here as it does on an ordinary row.
                     for (; dwNext < dwPlacements.Count; dwNext++)
                     {
-                        AppendImageRun(context, line, dwPlacements[dwNext], startYPos, rowHeight, scale,
-                                       dwScratch, dwPainted);
+                        AppendImageRun(line, dwPlacements[dwNext], dwScratch, dwPainted);
                         dwPainted.Add(dwPlacements[dwNext]);
                     }
+
+                    DrawLineRuns(context, dwScratch, startYPos, rowHeight, scale);
                 }
             }
         }
