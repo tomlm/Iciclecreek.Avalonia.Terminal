@@ -2665,6 +2665,11 @@ namespace Iciclecreek.Terminal
 
         protected override async void OnKeyDown(KeyEventArgs e)
         {
+            // A TextInput belongs to the current stroke only. A previous non-text key may have
+            // produced a Win32 record without ever producing TextInput, so do not let its marker
+            // suppress a later IME commit.
+            _win32RecordSentForThisStroke = false;
+
             // Only process input if this terminal has focus
             if (!IsFocused)
             {
@@ -3714,6 +3719,12 @@ namespace Iciclecreek.Terminal
             catch (Exception ex)
             {
                 Debug.WriteLine($"[{_instanceId}] Error handling key up: {ex.Message}");
+            }
+            finally
+            {
+                // KeyDown -> TextInput -> KeyUp is the ordinary text-key lifecycle. Once KeyUp has
+                // arrived, a marker left by a key with no TextInput cannot belong to future text.
+                _win32RecordSentForThisStroke = false;
             }
         }
 
@@ -8538,7 +8549,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Composed text as Win32 INPUT_RECORDs, one press and release per character.
+        /// Composed text as Win32 INPUT_RECORDs, one press and release per UTF-16 code unit.
         /// </summary>
         /// <remarks>
         /// Through VK_PACKET, which exists for exactly this: a character with no key behind it.
@@ -8549,16 +8560,13 @@ namespace Iciclecreek.Terminal
         {
             var sb = new StringBuilder();
 
-            // By TEXT ELEMENT rather than by char, so a surrogate pair or a combining sequence is not
-            // split across records that each mean nothing on their own.
-            var e = System.Globalization.StringInfo.GetTextElementEnumerator(text);
-            while (e.MoveNext())
+            // KEY_EVENT_RECORD.UnicodeChar is a WCHAR, not a Unicode scalar. Non-BMP characters
+            // therefore travel as two records containing the UTF-16 surrogate pair, just as they do
+            // through the Windows console APIs.
+            foreach (var codeUnit in text)
             {
-                foreach (var rune in ((string)e.Current).EnumerateRunes())
-                {
-                    sb.Append(Win32Record(VirtualKeyPacket, 0, rune.Value, isKeyDown: true, Win32ControlKeyState.None));
-                    sb.Append(Win32Record(VirtualKeyPacket, 0, rune.Value, isKeyDown: false, Win32ControlKeyState.None));
-                }
+                sb.Append(Win32Record(VirtualKeyPacket, 0, codeUnit, isKeyDown: true, Win32ControlKeyState.None));
+                sb.Append(Win32Record(VirtualKeyPacket, 0, codeUnit, isKeyDown: false, Win32ControlKeyState.None));
             }
 
             return sb.ToString();
@@ -8646,9 +8654,6 @@ namespace Iciclecreek.Terminal
         private static extern short GetKeyState(int nVirtKey);
 
         /// <summary>
-        /// Determines if a key is an "enhanced" key (extended keyboard keys).
-        /// </summary>
-        /// <summary>
         /// Whether this event is AltGr producing a character, rather than a real Ctrl+Alt chord.
         /// </summary>
         /// <remarks>
@@ -8692,6 +8697,9 @@ namespace Iciclecreek.Terminal
             return true;
         }
 
+        /// <summary>
+        /// Determines if a key is an "enhanced" key (extended keyboard keys).
+        /// </summary>
         private static bool IsEnhancedKey(Key key)
         {
             return key switch
@@ -8927,7 +8935,19 @@ namespace Iciclecreek.Terminal
                             caret = sb.Length;
 
                         var cell = line[x];
-                        sb.Append(string.IsNullOrEmpty(cell.Content) ? " " : cell.Content);
+                        // Width-zero cells are the continuation half of a wide glyph. They occupy a
+                        // terminal column but contribute no text, so inserting a space here shifts
+                        // every subsequent IME offset. Preserve content only for the defensive case
+                        // of an independently populated zero-width cell.
+                        if (cell.Width == 0)
+                        {
+                            if (!string.IsNullOrEmpty(cell.Content))
+                                sb.Append(cell.Content);
+                        }
+                        else
+                        {
+                            sb.Append(string.IsNullOrEmpty(cell.Content) ? " " : cell.Content);
+                        }
                     }
 
                     // A caret past the last cell is the end of the text, which is where it sits while

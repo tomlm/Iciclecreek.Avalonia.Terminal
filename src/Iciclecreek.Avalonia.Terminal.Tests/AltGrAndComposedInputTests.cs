@@ -41,6 +41,13 @@ public class AltGrAndComposedInputTests
             Key = k, KeyModifiers = m, KeySymbol = symbol,
         });
 
+    private static void Release(TerminalView v, Key k, KeyModifiers m, string? symbol)
+        => v.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyUpEvent,
+            Key = k, KeyModifiers = m, KeySymbol = symbol,
+        });
+
     private static void TypeText(TerminalView v, string text)
         => v.RaiseEvent(new TextInputEventArgs { RoutedEvent = InputElement.TextInputEvent, Text = text });
 
@@ -160,6 +167,47 @@ public class AltGrAndComposedInputTests
     }
 
     [AvaloniaTest]
+    public void A_non_text_key_does_not_hide_a_later_IME_commit_under_Win32()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?9001h");
+            Dispatcher.UIThread.RunJobs();
+
+            Press(view, Key.Left, KeyModifiers.None, null);
+            Release(view, Key.Left, KeyModifiers.None, null);
+            _ = Settled(pty);
+            var beforeComposition = pty.Written;
+
+            TypeText(view, "は");
+            var composed = Settled(pty)[beforeComposition.Length..];
+
+            Assert.That(composed, Does.Contain($"{Esc}[231;0;{(int)'は'};1;0;1_"));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Non_BMP_composed_text_uses_UTF16_Win32_records()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?9001h");
+            Dispatcher.UIThread.RunJobs();
+
+            TypeText(view, "😀");
+            var sent = Settled(pty);
+
+            Assert.That(sent, Does.Contain($"{Esc}[231;0;{(int)'\ud83d'};1;0;1_"));
+            Assert.That(sent, Does.Contain($"{Esc}[231;0;{(int)'\ude00'};1;0;1_"));
+            Assert.That(sent, Does.Not.Contain("128512"), "UnicodeChar is a 16-bit WCHAR");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
     public void Composed_text_is_still_plain_text_outside_Win32_mode()
     {
         var (view, pty, window) = LiveView();
@@ -230,6 +278,26 @@ public class AltGrAndComposedInputTests
             // Two cells written, so the caret is at cell 2 -- which is offset 3 in the text, not 2.
             Assert.That(start, Is.EqualTo(3),
                 "the caret must be an offset into the surrounding text, not a column number");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_wide_glyph_has_no_phantom_character_in_IME_text()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write("界");
+            Dispatcher.UIThread.RunJobs();
+
+            var client = InputMethodClient(view);
+            var text = (string)client.GetType().GetProperty("SurroundingText")!.GetValue(client)!;
+            var selection = client.GetType().GetProperty("Selection")!.GetValue(client)!;
+            var start = (int)selection.GetType().GetProperty("Start")!.GetValue(selection)!;
+
+            Assert.That(text, Does.StartWith("界"));
+            Assert.That(start, Is.EqualTo(1), "the continuation cell contributes no text");
         }
         finally { window.Close(); }
     }
