@@ -304,6 +304,16 @@ namespace Iciclecreek.Terminal
         // the several call sites that pass it to a non-null parameter, none of which could answer it either.
         private XT.Common.ColorSnapshot _palette;
 
+        /// <summary>
+        /// The emulator's <c>DrawBoldTextInBrightColors</c>, snapshotted per frame beside the palette.
+        /// </summary>
+        /// <remarks>
+        /// A RENDERER option that XTerm.NET carries and cannot act on -- it has no renderer -- so this
+        /// host is the only place it can mean anything, and until now it meant nothing here either.
+        /// True is both the emulator's default and xterm.js's.
+        /// </remarks>
+        private bool _boldIsBright = true;
+
         public static readonly DirectProperty<TerminalView, bool> IsAlternateBufferProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, bool>(
                 nameof(IsAlternateBuffer),
@@ -6245,6 +6255,11 @@ namespace Iciclecreek.Terminal
             // while it is being drawn.
             _palette = _terminal.Colors.Take();
 
+            // Snapshotted with it, and for the same reason: one answer for the whole frame. It is an
+            // ordinary settable option, so a program or a host can move it between frames, and half a
+            // screen drawn under each rule would be worse than either.
+            _boldIsBright = _terminal.Options.DrawBoldTextInBrightColors;
+
             var surface = GetValue(BackgroundProperty);
             if (surface is ISolidColorBrush opaque && opaque.Color.A == 255)
             {
@@ -6544,7 +6559,7 @@ namespace Iciclecreek.Terminal
                 var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                 var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                 var background = cell.GetBackgroundBrush(_palette, this.Background);
-                var foreground = cell.GetForegroundBrush(_palette, this.Foreground);
+                var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
                 // Apply cell-level inverse attribute
                 // Whether this run ends up drawn with the colours swapped. Once they are, the fill is no
                 // longer optional: the "background" being painted is the text colour.
@@ -7209,7 +7224,7 @@ namespace Iciclecreek.Terminal
                         Math.Max(0, boxRight - boxX), draw.RowHeight * run.Rows);
 
                     var background = cell.GetBackgroundBrush(_palette, this.Background);
-                    var foreground = cell.GetForegroundBrush(_palette, this.Foreground);
+                    var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
                     // The same swap ladder the normal run path applies: inverse, DECSCNM, blink.
                     bool swapped = false;
                     if (cell.Attributes.IsInverse())
@@ -7353,7 +7368,7 @@ namespace Iciclecreek.Terminal
                         var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                         var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                         var background = cell.GetBackgroundBrush(_palette, this.Background);
-                        var foreground = cell.GetForegroundBrush(_palette, this.Foreground);
+                        var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
                         // Apply cell-level inverse attribute
                         bool swapped = false;
                         if (cell.Attributes.IsInverse())
