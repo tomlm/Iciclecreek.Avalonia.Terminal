@@ -252,7 +252,15 @@ public class ReaderOwnershipTests
             view.DetachConnection();
 
             pty.ReleaseWrites();
-            Task.WaitAll(new[] { first, second }, TimeSpan.FromSeconds(5));
+
+            // Asserted, not ignored. WaitAll reports a timeout by returning false, and swallowing
+            // that would let a send that never completes read as "nothing was written" -- which is
+            // exactly what this test asserts, so a deadlock would have passed it. It would also
+            // leave both tasks running past the end of the test, in a fixture that shares one
+            // application with the whole assembly.
+            Assert.That(Task.WaitAll(new[] { first, second }, TimeSpan.FromSeconds(5)), Is.True,
+                "a send that never finished would make the assertion below vacuously true");
+
             Thread.Sleep(100);
 
             Assert.That(pty.Written, Does.Not.Contain("TYPED AFTER THE HANDOVER"),
