@@ -116,7 +116,7 @@ public class KittyDispatchOrderTests
         try
         {
             Press(view, Key.Left, KeyModifiers.Alt, PhysicalKey.ArrowLeft);
-            var sent = Settled(pty);
+            var sent = AwaitAfter(pty, 0);
 
             Assert.That(sent, Does.Not.Contain(Esc + "b"),
                 "ESC-b is the shell translation and must not survive the negotiation: " + Readable(sent));
@@ -136,7 +136,7 @@ public class KittyDispatchOrderTests
         try
         {
             Press(view, Key.Left, KeyModifiers.Alt, PhysicalKey.ArrowLeft);
-            var sent = Settled(pty);
+            var sent = AwaitAfter(pty, 0);
 
             Assert.That(sent, Is.EqualTo(Esc + "b"), "got: " + Readable(sent));
         }
@@ -153,7 +153,12 @@ public class KittyDispatchOrderTests
         try
         {
             Press(view, Key.Left, KeyModifiers.Meta, PhysicalKey.ArrowLeft);
-            var sent = Settled(pty);
+
+            // AwaitAfter, not Settled. Settled gives the FIRST byte one second and then answers with
+            // whatever it has -- which for a send that has not started yet is the empty string, and
+            // "nothing yet" reads exactly like "nothing sent". A cold macOS runner spinning up a
+            // thread pool takes longer than that, so this failed there and nowhere else.
+            var sent = AwaitAfter(pty, 0);
 
             Assert.That(sent, Is.Not.Empty, "the negotiated protocol must receive the Meta chord");
             Assert.That(sent, Does.StartWith(Esc + "["),
@@ -203,7 +208,7 @@ public class KittyDispatchOrderTests
         try
         {
             Press(view, Key.A, KeyModifiers.None, PhysicalKey.A, "a");
-            var afterPress = Settled(pty);
+            var afterPress = AwaitAfter(pty, 0);
             Assert.That(afterPress, Is.Not.Empty, "sanity: the press went out");
 
             Release(view, Key.A, KeyModifiers.None, PhysicalKey.A, "a");
@@ -231,7 +236,7 @@ public class KittyDispatchOrderTests
         try
         {
             Press(view, Key.Escape, KeyModifiers.None, PhysicalKey.Escape);
-            var sent = Settled(pty);
+            var sent = AwaitAfter(pty, 0);
 
             Assert.That(sent, Does.Contain("27"),
                 "Escape is keycode 27 in CSI-u: " + Readable(sent));
