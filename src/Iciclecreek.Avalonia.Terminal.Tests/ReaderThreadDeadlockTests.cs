@@ -113,7 +113,11 @@ public class ReaderThreadDeadlockTests
         var (view, window) = Realised();
         try
         {
-            WriteReturnsWithoutTheUIThread(view, $"{Esc}]7;file:///tmp/elsewhere{Esc}\\");
+            // Asserted, not ignored. If the write hangs, the poll below still runs and the failure
+            // arrives as "the directory never turned up" -- which is true but describes the wrong
+            // thing, and leaves a blocked background thread behind for the rest of the fixture.
+            Assert.That(WriteReturnsWithoutTheUIThread(view, $"{Esc}]7;file:///tmp/elsewhere{Esc}\\"),
+                Is.True, "the write blocked, so what follows would be measuring the wrong failure");
 
             var clock = Stopwatch.StartNew();
             while (clock.Elapsed < Patience && string.IsNullOrEmpty(view.CurrentDirectory))
