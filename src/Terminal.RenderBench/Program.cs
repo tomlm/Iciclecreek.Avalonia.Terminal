@@ -33,6 +33,9 @@ internal static class Program
     private const int Cols = 120;
     private const int Rows = 40;
 
+    // As on every other entry point in the repo. The bench runs headless, but the platform is
+    // still initialised for real, and Windows expects an Avalonia Main to be STA.
+    [STAThread]
     private static int Main(string[] args)
     {
         var iterations = args.Length > 0 && int.TryParse(args[0], out var n) ? n : 200;
@@ -212,8 +215,13 @@ internal static class Program
         var point = new Point(0, 0);
 
         Console.WriteLine();
-        Console.WriteLine($"{"draw call",-38} {"ns/call",10} {"bytes/call",12}");
+        Console.WriteLine($"{"draw call",-38} {"ns/call",10} {"B/call*",12}");
         Console.WriteLine(new string('-', 64));
+        // The * on the allocation column: the number is GC.GetAllocatedBytesForCurrentThread,
+        // deliberately -- the bench is single-threaded, so scoping to this thread excludes GC and
+        // JIT noise from other threads. It is NOT process-wide allocation; the label says so
+        // because a reader who takes it for the total will over-trust it.
+        Console.WriteLine("  * bytes allocated on the bench thread only");
 
         // Run BOTH orders. The first reading of a pair on a cold context flattered whichever ran
         // first, which would have turned an ordering artefact into a recommendation.
@@ -373,8 +381,13 @@ internal static class Program
     private static void Report(List<Result> results)
     {
         Console.WriteLine();
-        Console.WriteLine($"{"corpus",-12} {"ms/frame",10} {"bytes/frame",14}   description");
+        Console.WriteLine($"{"corpus",-12} {"ms/frame",10} {"B/frame*",14}   description");
         Console.WriteLine(new string('-', 78));
+        // The * on the allocation column: the number is GC.GetAllocatedBytesForCurrentThread,
+        // deliberately -- the bench is single-threaded, so scoping to this thread excludes GC and
+        // JIT noise from other threads. It is NOT process-wide allocation; the label says so
+        // because a reader who takes it for the total will over-trust it.
+        Console.WriteLine("  * bytes allocated on the bench thread only");
 
         foreach (var r in results)
             Console.WriteLine($"{r.Name,-12} {r.MsPerFrame,10:F3} {r.BytesPerFrame,14:N0}   {r.Description}");

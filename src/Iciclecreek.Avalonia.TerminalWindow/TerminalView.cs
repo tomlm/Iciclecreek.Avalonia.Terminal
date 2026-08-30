@@ -7230,7 +7230,7 @@ namespace Iciclecreek.Terminal
             // is not. An empty list per line per rebuild is one allocation per row per frame to hold
             // nothing. The shared empty instance is never written to -- the loop below only adds to
             // it after OrderedPlacements has returned something.
-            var painted = placements.Count > 0 ? new List<XT.Graphics.LinePlacement>() : EmptyPlacements;
+            var painted = placements.Count > 0 ? new List<XT.Graphics.LinePlacement>(placements.Count) : EmptyPlacements;
 
             for (; nextPlacement < placements.Count && placements[nextPlacement].ZIndex < 0; nextPlacement++)
             {
