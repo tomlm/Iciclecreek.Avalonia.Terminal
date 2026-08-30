@@ -107,10 +107,36 @@ public class KittyKeyboardTests
     private static int Mark(RecordingConnection pty) => Settle(pty).Length;
 
     /// <summary>Everything sent since <paramref name="mark"/>.</summary>
+    /// <remarks>
+    /// For assertions that expect NOTHING. Settle's quiet window is what bounds how long "nothing"
+    /// is watched for; a test expecting output must use <see cref="AwaitSince"/> instead, or a slow
+    /// machine turns it into a race -- see there.
+    /// </remarks>
     private static string Since(RecordingConnection pty, int mark)
     {
         var all = Settle(pty);
         return mark <= all.Length ? all.Substring(mark) : all;
+    }
+
+    /// <summary>Everything sent since <paramref name="mark"/>, waiting for it to BEGIN first.</summary>
+    /// <remarks>
+    /// Settle answers "has it stopped", and an empty stream that stays empty for its quiet window
+    /// answers yes -- so a read that expects output raced the async key handler's FIRST byte, and
+    /// lost on a cold CI runner where the thread pool had not spun up. It only ever failed in the
+    /// one test with no prior traffic: every other test negotiates first, which primes the same
+    /// pipeline it then reads. This waits for growth past the mark before asking Settle when the
+    /// growth has finished; the deadline keeps a genuinely-broken implementation failing.
+    /// </remarks>
+    private static string AwaitSince(RecordingConnection pty, int mark)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && Settle(pty).Length <= mark)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(10);
+        }
+
+        return Since(pty, mark);
     }
 
     [AvaloniaTest]
@@ -124,7 +150,7 @@ public class KittyKeyboardTests
 
             Press(view, Key.Up, p: PhysicalKey.ArrowUp);
 
-            var sent = Since(pty, mark);
+            var sent = AwaitSince(pty, mark);
             Assert.That(sent, Does.StartWith($"{Esc}["), $"observed {Escape(sent)}");
             Assert.That(sent, Does.EndWith("u").Or.EndWith("A"),
                 $"a CSI-u form, or the CSI-A the protocol keeps for an unmodified arrow: {Escape(sent)}");
@@ -143,7 +169,7 @@ public class KittyKeyboardTests
 
             Press(view, Key.Up, p: PhysicalKey.ArrowUp);
 
-            Assert.That(Since(pty, mark), Is.EqualTo($"{Esc}[A"));
+            Assert.That(AwaitSince(pty, mark), Is.EqualTo($"{Esc}[A"));
         }
         finally { window.Close(); }
     }
@@ -163,7 +189,7 @@ public class KittyKeyboardTests
 
             Release(view, Key.A, p: PhysicalKey.A, symbol: "a");
 
-            Assert.That(Since(pty, mark), Is.Not.Empty, "a release the flags asked for must be reported");
+            Assert.That(AwaitSince(pty, mark), Is.Not.Empty, "a release the flags asked for must be reported");
         }
         finally { window.Close(); }
     }
@@ -219,11 +245,11 @@ public class KittyKeyboardTests
             var start = Mark(pty);
 
             Press(view, Key.A, p: PhysicalKey.A, symbol: "a");
-            var first = Since(pty, start);
+            var first = AwaitSince(pty, start);
 
             var mark = Mark(pty);
             Press(view, Key.A, p: PhysicalKey.A, symbol: "a");
-            var second = Since(pty, mark);
+            var second = AwaitSince(pty, mark);
 
             Assert.That(second, Is.Not.EqualTo(first),
                 $"a repeat must not encode identically to the press: {Escape(first)} vs {Escape(second)}");
@@ -241,7 +267,7 @@ public class KittyKeyboardTests
             var start = Mark(pty);
 
             Press(view, Key.A, p: PhysicalKey.A, symbol: "a");
-            var first = Since(pty, start);
+            var first = AwaitSince(pty, start);
 
             Release(view, Key.A, p: PhysicalKey.A, symbol: "a");
             Dispatcher.UIThread.RunJobs();
@@ -249,7 +275,7 @@ public class KittyKeyboardTests
             var mark = Mark(pty);
             Press(view, Key.A, p: PhysicalKey.A, symbol: "a");
 
-            Assert.That(Since(pty, mark), Is.EqualTo(first),
+            Assert.That(AwaitSince(pty, mark), Is.EqualTo(first),
                 "the key was let go, so this is a fresh press rather than a repeat");
         }
         finally { window.Close(); }
