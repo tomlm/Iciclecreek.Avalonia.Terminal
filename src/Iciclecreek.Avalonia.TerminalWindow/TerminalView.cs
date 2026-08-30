@@ -1590,12 +1590,28 @@ namespace Iciclecreek.Terminal
             SyncAnimationClock();
         }
 
+        /// <summary>
+        /// OSC 7: the shell reporting its working directory.
+        /// </summary>
+        /// <remarks>
+        /// POSTED, never Invoked. This is raised from <c>Terminal.Write</c>, which the read loop calls
+        /// from inside <c>lock (_terminalLock)</c> on the pty reader thread -- and the UI thread takes
+        /// that same lock in <see cref="ClearScreen"/>, <see cref="CurrentLineText"/> and
+        /// <c>WriteOwnLine</c>. A blocking Invoke here is therefore a DEADLOCK and not merely a stall:
+        /// the reader waits for the UI thread while the UI thread waits for the lock the reader holds.
+        /// The application freezes with no exception to look for.
+        ///
+        /// Nothing waits on the result -- it updates a property and notifies -- so posting costs a
+        /// frame's latency and removes one half of the deadlock outright.
+        /// </remarks>
         private void OnTerminalDirectoryChanged(object? sender, TerminalEvents.DirectoryChangeEventArgs e)
         {
-            Dispatcher.UIThread.Invoke(() =>
+            var directory = e.Directory;
+
+            Dispatcher.UIThread.Post(() =>
             {
                 var oldValue = _currentDirectory;
-                _currentDirectory = e.Directory;
+                _currentDirectory = directory;
                 RaisePropertyChanged(CurrentDirectoryProperty, oldValue, _currentDirectory);
             });
         }
@@ -3992,9 +4008,42 @@ namespace Iciclecreek.Terminal
         /// is delivered by posting, and input is written asynchronously. Invoke also runs inline when this
         /// is already the UI thread, so a host driving the terminal directly does not deadlock on itself.</para>
         /// </remarks>
+        /// <summary>How long the reader waits for the UI thread to answer a window query.</summary>
+        /// <remarks>
+        /// Generous for a handler that only reads window state, and short enough that a wedged UI
+        /// thread costs a pause rather than the session. See <see cref="OnTerminalWindowInfoRequested"/>.
+        /// </remarks>
+        private static readonly TimeSpan WindowInfoPatience = TimeSpan.FromMilliseconds(250);
+
         private void OnTerminalWindowInfoRequested(object? sender, XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
         {
-            Dispatcher.UIThread.Invoke(() =>
+            // BOUNDED, because the unbounded version was a deadlock rather than a stall.
+            //
+            // This is raised from Terminal.Write, which the read loop calls inside
+            // lock (_terminalLock) on the pty reader thread. The UI thread takes that same lock in
+            // ClearScreen, CurrentLineText and WriteOwnLine -- so a plain Invoke waits for a thread
+            // that is waiting for the lock this one holds, and the application freezes with no
+            // exception to look for. The comment that used to sit here asserted the opposite,
+            // "nothing on the UI thread waits on it", which was the assumption that made it a bug.
+            //
+            // A timeout keeps the normal path exactly as it was -- an idle UI thread answers in
+            // microseconds -- while making the pathological one survivable. Leaving Handled false is
+            // not a guess: it is the answer the emulator already documents for a terminal that
+            // cannot say, and applications handle it. A wrong number would be worse than none.
+            if (!Dispatcher.UIThread.CheckAccess())
+            {
+                var pending = Dispatcher.UIThread.InvokeAsync(() => AnswerWindowInfo(e));
+                if (!pending.GetTask().Wait(WindowInfoPatience))
+                    Debug.WriteLine("[TerminalView] window-info query timed out; answering unhandled");
+
+                return;
+            }
+
+            AnswerWindowInfo(e);
+        }
+
+        private void AnswerWindowInfo(XT.Events.TerminalEvents.WindowInfoRequestedEventArgs e)
+        {
             {
                 // Raise routed event so any parent can handle it without custom plumbing.
                 var args = new WindowInfoRequestedEventArgs(e.Request)
@@ -4020,7 +4069,7 @@ namespace Iciclecreek.Terminal
                     e.CellHeight = args.CellHeight;
                     e.Title = args.Title;
                 }
-            });
+            }
         }
 
         private async void OnTerminalDataReceived(object? sender, XT.Events.TerminalEvents.DataEventArgs e)
