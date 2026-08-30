@@ -5213,8 +5213,20 @@ namespace Iciclecreek.Terminal
             Dispatcher.UIThread.Post(() => _ = QueueClipboardWriteAsync(text));
         }
 
-        /// <summary>Serialises clipboard writes so they land in the order they were requested.</summary>
-        private readonly SemaphoreSlim _clipboardWriteGate = new(1, 1);
+        /// <summary>
+        /// The clipboard writes still to happen, chained so each waits for the one before it.
+        /// </summary>
+        /// <remarks>
+        /// A Task chain rather than a semaphore. SemaphoreSlim does not promise FIFO fairness -- it
+        /// releases A waiter, not the LONGEST-waiting one -- so under contention two queued writes
+        /// could still resume out of order, which is the very thing the gate was added to prevent.
+        /// A chain has the ordering in its shape: each write is appended to the tail, so it cannot
+        /// begin until its predecessor has finished.
+        ///
+        /// Only ever touched on the UI thread, which is where the posts land, so the field needs no
+        /// lock of its own.
+        /// </remarks>
+        private Task _clipboardWrites = Task.CompletedTask;
 
         /// <summary>
         /// Puts <paramref name="text"/> on the clipboard, after everything asked for before it.
@@ -5229,17 +5241,21 @@ namespace Iciclecreek.Terminal
         /// keep them in it. Waiting here rather than at the post keeps the ordering without blocking
         /// the UI thread.
         /// </remarks>
-        private async Task QueueClipboardWriteAsync(string text)
+        private Task QueueClipboardWriteAsync(string text)
         {
-            await _clipboardWriteGate.WaitAsync().ConfigureAwait(true);
-            try
-            {
-                await WriteToClipboardAsync(text).ConfigureAwait(true);
-            }
-            finally
-            {
-                _clipboardWriteGate.Release();
-            }
+            // Appended to the tail and the tail replaced, both on the UI thread, so the order this
+            // runs in is the order the posts arrived in.
+            //
+            // ContinueWith rather than awaiting the predecessor, because a predecessor that FAULTED
+            // must not take its successors with it: one clipboard write failing is not a reason to
+            // stop making the next one.
+            _clipboardWrites = _clipboardWrites.ContinueWith(
+                _ => WriteToClipboardAsync(text),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.FromCurrentSynchronizationContext()).Unwrap();
+
+            return _clipboardWrites;
         }
 
         private async Task WriteToClipboardAsync(string text)

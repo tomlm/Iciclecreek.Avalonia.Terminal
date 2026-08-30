@@ -547,12 +547,22 @@ public class HostSeamTests
         {
             view.Terminal.Write($"{Esc}]52;c;{B64("first")}{Bel}");
             view.Terminal.Write($"{Esc}]52;c;{B64("second")}{Bel}");
-            Dispatcher.UIThread.RunJobs();
-            Thread.Sleep(200);
-            Dispatcher.UIThread.RunJobs();
 
+            // Polled rather than slept. A fixed wait is a bet on machine speed that loses silently on
+            // a slow runner, and wastes the difference on a fast one -- the same lesson #109 drew for
+            // the key paths.
             var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
-            Assert.That(clipboard.TryGetTextAsync().GetAwaiter().GetResult(), Is.EqualTo("second"));
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            string? held = null;
+            while (DateTime.UtcNow < deadline && held != "second")
+            {
+                Dispatcher.UIThread.RunJobs();
+                held = clipboard.TryGetTextAsync().GetAwaiter().GetResult();
+                if (held == "second") break;
+                Thread.Sleep(10);
+            }
+
+            Assert.That(held, Is.EqualTo("second"));
         }
         finally { window.Close(); }
     }
