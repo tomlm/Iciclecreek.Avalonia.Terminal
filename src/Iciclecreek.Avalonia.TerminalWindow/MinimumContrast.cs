@@ -38,8 +38,17 @@ namespace Iciclecreek.Terminal
         private const int MaxEntries = 1024;
 
         /// <summary>Points the enforcer at this frame's ratio, clearing the cache when it changed.</summary>
+        /// <remarks>
+        /// Sanitised here, at the one door a ratio comes in through: the option is a bare settable
+        /// double, so a host can write anything into it. NaN means off — and it must be caught
+        /// explicitly, because every comparison with it answers false, including the "did it
+        /// change" one, which would otherwise leave a stale ratio in force forever. Everything
+        /// else clamps to the 1..21 the model defines, 21 being black-on-white.
+        /// </remarks>
         public void SnapshotRatio(double ratio)
         {
+            ratio = double.IsNaN(ratio) ? 1 : Math.Clamp(ratio, 1, 21);
+
             if (Math.Abs(ratio - _ratio) > double.Epsilon)
             {
                 _ratio = ratio;
@@ -53,20 +62,29 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// The foreground to paint <paramref name="fg"/> as, over <paramref name="bg"/>.
         /// </summary>
+        /// <remarks>
+        /// The foreground's ALPHA rides through untouched, and is part of the cache key. A
+        /// translucent solid can reach this path — a translucent host background swapped into the
+        /// foreground by inverse — and the contrast model has nothing to say about alpha: it moves
+        /// a colour's channels, and how much of that colour the host wants shown is a separate,
+        /// already-made decision. Keying on it too keeps two foregrounds that share RGB but not
+        /// alpha from answering for each other.
+        /// </remarks>
         public Color Apply(Color fg, Color bg)
         {
             if (!Active)
                 return fg;
 
-            var key = ((ulong)Pack(fg) << 32) | Pack(bg);
+            var key = ((ulong)PackArgb(fg) << 24) | Pack(bg);
             if (_cache.TryGetValue(key, out var cached))
-                return Unpack(cached);
+                return UnpackArgb(cached);
 
             var adjusted = Adjust(fg, bg, _ratio);
+            adjusted = Color.FromArgb(fg.A, adjusted.R, adjusted.G, adjusted.B);
 
             if (_cache.Count >= MaxEntries)
                 _cache.Clear();
-            _cache[key] = Pack(adjusted);
+            _cache[key] = PackArgb(adjusted);
 
             return adjusted;
         }
@@ -130,7 +148,9 @@ namespace Iciclecreek.Terminal
             (byte)(from.B + (to.B - from.B) * t));
 
         private static uint Pack(Color c) => ((uint)c.R << 16) | ((uint)c.G << 8) | c.B;
-        private static Color Unpack(uint v) => Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v);
+        private static uint PackArgb(Color c) => ((uint)c.A << 24) | Pack(c);
+        private static Color UnpackArgb(uint v)
+            => Color.FromArgb((byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v);
 
         /// <summary>
         /// Codepoints exempt from adjustment: box drawing, block elements, and the Powerline glyphs.

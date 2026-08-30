@@ -7567,6 +7567,29 @@ namespace Iciclecreek.Terminal
         private static bool CoveredByBackdrop(List<XT.Graphics.LinePlacement> painted, int start, int end)
             => OverlapsAny(painted, start, end);
 
+        /// <summary>
+        /// The line's negative-z placements — the pictures its text sits ON TOP of. The row pass
+        /// accumulates this list as it paints; the deferred sized-block pass runs after every row
+        /// and has no such running state, so it derives the same set from the line directly.
+        /// OrderedPlacements sorts by z, which is why the walk can stop at the first non-negative.
+        /// </summary>
+        private static List<XT.Graphics.LinePlacement> BackdropPlacements(BufferLine line)
+        {
+            var ordered = OrderedPlacements(line);
+            if (ordered.Count == 0 || ordered[0].ZIndex >= 0)
+                return EmptyPlacements;
+
+            var backdrops = new List<XT.Graphics.LinePlacement>();
+            foreach (var placement in ordered)
+            {
+                if (placement.ZIndex >= 0)
+                    break;
+                backdrops.Add(placement);
+            }
+
+            return backdrops;
+        }
+
         private static bool OverlapsAny(List<XT.Graphics.LinePlacement> earlier, int start, int end)
         {
             foreach (var placement in earlier)
@@ -7862,6 +7885,9 @@ namespace Iciclecreek.Terminal
                 var run = draw.Run;
                 var sizing = run.Sizing;
 
+                // Once per block, and only when the floor is on — the common frame pays nothing.
+                var blockBackdrops = _minimumContrast.Active ? BackdropPlacements(line) : EmptyPlacements;
+
                 var fraction = sizing.Numerator > 0 && sizing.Denominator > 0
                     ? sizing.Numerator / (double)sizing.Denominator
                     : 1.0;
@@ -7897,8 +7923,10 @@ namespace Iciclecreek.Terminal
 
                     // The contrast floor applies wherever a cell's text is drawn, in the same slot:
                     // after the swaps, before conceal. A sized block is one cell's glyph, so the
-                    // exemption test sees just that.
+                    // exemption test sees just that. The backdrop check is the run path's rule,
+                    // rebuilt from the line because this deferred pass has no running painted list.
                     if (_minimumContrast.Active
+                        && !CoveredByBackdrop(blockBackdrops, x, x + cell.Width)
                         && !MinimumContrast.IsExemptRun(cell.Content)
                         && foreground is ISolidColorBrush blockFgSolid
                         && background is ISolidColorBrush blockBgSolid

@@ -103,6 +103,51 @@ public class MinimumContrastTests
             $"got {adjusted}; the endpoint is the only honest answer");
     }
 
+    [AvaloniaTest]
+    public void The_foreground_alpha_rides_through()
+    {
+        // A translucent solid can reach the floor: a translucent host background swapped into
+        // the foreground by inverse. The model moves channels; how much of the colour is shown
+        // is the host's already-made decision, and making it opaque overrules the host.
+        var mc = new MinimumContrast();
+        mc.SnapshotRatio(4.5);
+
+        var translucent = Color.FromArgb(0x80, 40, 40, 40);
+        var adjusted = mc.Apply(translucent, Colors.Black);
+
+        Assert.That(adjusted.A, Is.EqualTo(0x80), "the computed path must keep the alpha");
+
+        // And the CACHE must not alias the same RGB at a different alpha -- the second call is
+        // the cache-hit path, which packed the colour separately from the first.
+        var opaque = mc.Apply(Color.FromRgb(40, 40, 40), Colors.Black);
+        Assert.That(opaque.A, Is.EqualTo(255), "an opaque twin must not inherit the translucent answer");
+        Assert.That((opaque.R, opaque.G, opaque.B), Is.EqualTo((adjusted.R, adjusted.G, adjusted.B)),
+            "while the channels agree, because the contrast maths saw the same RGB");
+
+        var translucentAgain = mc.Apply(translucent, Colors.Black);
+        Assert.That(translucentAgain, Is.EqualTo(adjusted), "and the cache-hit path returns alpha intact");
+    }
+
+    [AvaloniaTest]
+    public void The_ratio_is_sanitised_at_the_door()
+    {
+        // The option is a bare settable double, so a host can write anything into it. NaN must
+        // mean off -- and it needs catching explicitly, because NaN also answers false to the
+        // "did the ratio change" comparison and would otherwise leave a stale ratio in force.
+        var mc = new MinimumContrast();
+        mc.SnapshotRatio(4.5);
+        mc.SnapshotRatio(double.NaN);
+        Assert.That(mc.Active, Is.False, "NaN is off, not 'whatever was set before'");
+
+        // Out-of-range values clamp to the 1..21 the model defines.
+        mc.SnapshotRatio(500);
+        var adjusted = mc.Apply(Color.FromRgb(100, 100, 100), Colors.Black);
+        Assert.That(adjusted, Is.EqualTo(Colors.White), "500 behaves as 21: black-on-white");
+
+        mc.SnapshotRatio(-3);
+        Assert.That(mc.Active, Is.False, "below 1 clamps to 1, which is off");
+    }
+
     // --------------------------------------------------------- the exemption
 
     [AvaloniaTest]
