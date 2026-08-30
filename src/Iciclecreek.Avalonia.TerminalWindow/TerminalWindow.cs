@@ -695,6 +695,13 @@ namespace Iciclecreek.Terminal
 
             Content = _terminalControl;
 
+            // Setting Content attaches the control and runs its initialisation right here, so the
+            // redirect onto the emulator's own options may ALREADY have happened -- and it happened
+            // while the bridge above was watching, but before this window had a value of its own to
+            // be corrected. Seeding closes that gap; the bridge keeps the two in step afterwards.
+            if (_terminalControl.Options != null)
+                SetCurrentValue(OptionsProperty, _terminalControl.Options);
+
             return _terminalControl;
         }
 
@@ -848,6 +855,24 @@ namespace Iciclecreek.Terminal
             if (e.Property == TerminalControl.CurrentDirectoryProperty)
             {
                 RaisePropertyChanged(CurrentDirectoryProperty, e.OldValue as string, e.NewValue as string);
+            }
+
+            // The third link in the same chain the view and the control already form. XTerm.NET
+            // snapshots the options it is constructed with, so the object handed downwards stops
+            // being the one the emulator reads the moment the terminal exists; the view redirects to
+            // the emulator's own instance and the control follows it. Without this the window did
+            // not, and TerminalWindow.Options -- the property a host is most likely to hold, since
+            // most hosts hold the window -- went on accepting writes into an abandoned copy.
+            //
+            // Silently: no exception, nothing in the log, the setting simply stops working. The
+            // binding below runs the other way (window to control), so it could never have carried
+            // this back on its own.
+            //
+            // SetCurrentValue, as in the two below it: this is a redirect rather than a claim of
+            // ownership, and a host that bound Options keeps its binding.
+            if (e.Property == TerminalControl.OptionsProperty)
+            {
+                SetCurrentValue(OptionsProperty, e.NewValue as XTerm.Options.TerminalOptions);
             }
         }
 

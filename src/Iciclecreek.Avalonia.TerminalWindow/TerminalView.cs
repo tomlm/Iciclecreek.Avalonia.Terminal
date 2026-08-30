@@ -2362,8 +2362,27 @@ namespace Iciclecreek.Terminal
             //
             // They are the rest of the leak all the same: a host holding the terminal after
             // disposing the view would otherwise keep calling into it through these two.
-            _terminal.OscReceived -= OnTerminalOscReceived;
-            _terminal.Colors.ColorChanged -= OnTerminalColorChanged;
+            //
+            // Null-guarded, which the two lines below it were not. Everything OnInitialized builds
+            // is absent on a view that was constructed and then dropped without ever being shown --
+            // a host that decides against a tab it had already made, or any test that news up a view
+            // and disposes it. UnsubscribeTerminalEvents guards for exactly this and so does the
+            // _terminal?.Dispose() further down; these two did not, and threw between them. The
+            // NullReferenceException was the smaller half of the damage: _disposed is already true
+            // by then, so the rest of Dispose never ran and a second call could not run it either,
+            // leaving the pty and the emulator held by a view the host believed it had released.
+            if (_terminal != null)
+            {
+                _terminal.OscReceived -= OnTerminalOscReceived;
+                _terminal.Colors.ColorChanged -= OnTerminalColorChanged;
+            }
+
+            // Both timers, because Dispose is not Unloaded. A view disposed while still on the tree
+            // never gets an Unloaded, and DispatcherTimer holds its target through the Tick handler
+            // -- so the timers keep the disposed view alive, and keep asking it to blink a cursor
+            // and advance animations on an emulator that is about to be disposed underneath them.
+            _cursorBlinkTimer?.Stop();
+            _animationTimer?.Stop();
 
             _atomicUpdateTimeout?.Dispose();
             _atomicUpdateTimeout = null;
@@ -2653,9 +2672,17 @@ namespace Iciclecreek.Terminal
                         // Only claimed when it actually cuts. A selection it cannot remove — one made with
                         // the mouse, or sitting up in the scrollback — is left alone rather than quietly
                         // copied, so nothing looks like it moved when it did not.
-                        if (await CutAsync().ConfigureAwait(false))
+                        //
+                        // Asked SYNCHRONOUSLY, and claimed before the await rather than after it. This
+                        // handler is async void: the first await returns to the caller and the routed
+                        // event finishes bubbling with Handled still false, so the old placement claimed
+                        // an event that had already gone -- Cmd+X cut the selection and reached the
+                        // program as well. CanRemoveSelection is the same question CutAsync asks first,
+                        // which is what makes it safe to ask it here instead.
+                        if (CanRemoveSelection)
                         {
                             e.Handled = true;
+                            await CutAsync().ConfigureAwait(false);
                             return;
                         }
                     }
@@ -2699,9 +2726,15 @@ namespace Iciclecreek.Terminal
                                 // Only when there is something to cut, and only when it can actually be
                                 // removed. Otherwise the chord falls through to the program — where it is
                                 // readline's prefix, and worth more than a cut that silently became a copy.
-                                if (await CutAsync().ConfigureAwait(false))
+                                //
+                                // Same correction as the macOS Cmd+X above: the question is asked
+                                // synchronously so the claim can be made before the first await, which is
+                                // the last moment anything is still listening for it. Here the old
+                                // placement meant Ctrl+X cut the line AND handed readline its prefix.
+                                if (CanRemoveSelection)
                                 {
                                     e.Handled = true;
+                                    await CutAsync().ConfigureAwait(false);
                                     return;
                                 }
                                 break;
@@ -2785,6 +2818,16 @@ namespace Iciclecreek.Terminal
                     if (willType || willErase)
                         NoteInputStart();
 
+                    // Taken HERE and sent LATER, which makes every early return between this line
+                    // and the senders a place the deletion can be lost -- while the selection it
+                    // belonged to has already gone from the screen. Two of them were losing it: the
+                    // Win32 and Kitty paths both claim the key and return, and both now carry it.
+                    //
+                    // The rest are safe by arithmetic rather than by luck: every other return in
+                    // between requires Ctrl, Alt or Meta, and a modified keystroke neither types nor
+                    // erases, so `unmodified` is false and this line has already stored empty. That
+                    // is also why a value cannot go stale for long -- any non-modifier key
+                    // reassigns it on the way past.
                     _pendingReplaceKeys = willType || willErase ? TakeKeyboardSelectionDeletion() : string.Empty;
                     if (_pendingReplaceKeys.Length == 0)
                     {
@@ -2871,7 +2914,19 @@ namespace Iciclecreek.Terminal
                     {
                         e.Handled = true;
 
-                        await SendToPtyAsync(sequence).ConfigureAwait(false);
+                        // Carrying the pending deletion, for the reason given where it is taken: the
+                        // selection was consumed several branches above, and an exit that sends the
+                        // keystroke WITHOUT it types over a selection that silently never went away.
+                        // Backspace and Delete replace their own sequence rather than adding to it --
+                        // the selection is what they were asked to remove, not one character past it.
+                        var erase = _pendingReplaceKeys;
+                        _pendingReplaceKeys = string.Empty;
+
+                        var toSend = erase.Length > 0 && e.Key is Key.Back or Key.Delete
+                            ? erase
+                            : erase + sequence;
+
+                        await SendToPtyAsync(toSend).ConfigureAwait(false);
                         return;
                     }
                     // If we couldn't generate a Win32 sequence, fall through to normal handling
@@ -2883,8 +2938,18 @@ namespace Iciclecreek.Terminal
                 // the application is reading any more -- it asked for CSI-u and the terminal accepted
                 // on this host's behalf. Behind the Win32 path above, which is a different protocol
                 // for a different transport and keeps its precedence.
-                if (await TrySendKittyKeyAsync(e, XT.Input.KittyKeyboardEventType.Press).ConfigureAwait(false))
+                //
+                // The pending deletion travels WITH it. Kitty claims the key and returns, so a
+                // deletion left behind here is one the shell never receives -- while the selection
+                // it belonged to has already been cleared on screen. Handed over rather than taken
+                // first, because this can also decline the key, and a deletion consumed by a call
+                // that declined is one the legacy paths below would then send without.
+                if (await TrySendKittyKeyAsync(e, XT.Input.KittyKeyboardEventType.Press,
+                                               _pendingReplaceKeys).ConfigureAwait(false))
+                {
+                    _pendingReplaceKeys = string.Empty;
                     return;
+                }
 
                 // Convert Avalonia key to XTerm key
                 var xtermKey = ConvertAvaloniaKeyToXTermKey(e.Key);
@@ -2979,6 +3044,64 @@ namespace Iciclecreek.Terminal
                && !_terminal.IsAlternateBufferActive
                && _kbSelAnchor.Value != _kbSelFocus;
 
+        /// <summary>
+        /// The bytes for one press of a key this view is pressing on the user's behalf, encoded for
+        /// whichever keyboard protocol is live right now.
+        /// </summary>
+        /// <remarks>
+        /// <para>The selection deletion is made of keystrokes nobody typed: Backspaces and right
+        /// arrows standing in for an edit this view cannot perform itself, because the shell owns
+        /// the line. They have to be encoded the way the application is currently READING
+        /// keystrokes, and there are three answers to that, not one.</para>
+        /// <para>Generating the legacy byte unconditionally — which is what this did first — is
+        /// wrong twice over. Under Win32 input mode the process is reading INPUT_RECORDs and a bare
+        /// 0x08 is not one, so cmd.exe and PSReadLine see nothing. Under a negotiated Kitty
+        /// protocol the application asked for CSI-u and stopped reading the legacy encodings the
+        /// terminal had been accepting on its behalf.</para>
+        /// <para>Empty means this protocol cannot express the key, and the caller must then leave
+        /// the selection ALONE rather than clearing it: a deletion that cannot be sent must not be
+        /// drawn as though it happened.</para>
+        /// </remarks>
+        private string EncodeSyntheticKey(Key avaloniaKey, XT.Input.Key xtermKey, string kittyName)
+        {
+            // Win32 first, matching the precedence the real key path uses a few hundred lines up:
+            // it is a different transport rather than a competing encoding, so it wins.
+            if (_terminal.Win32InputMode)
+            {
+                var vk = ConvertAvaloniaKeyToVirtualKey(avaloniaKey);
+                if (vk == 0)
+                    return string.Empty;
+
+                // A real key produces a down record and an up record, so a synthetic one has to as
+                // well -- PSReadLine reads the pair. Scan code 0 for the same reason the real path
+                // uses 0: there is no hardware event here to take one from.
+                var unicode = avaloniaKey == Key.Back ? 0x08 : 0;
+                return Win32Record(vk, 0, unicode, isKeyDown: true, Win32ControlKeyState.None)
+                     + Win32Record(vk, 0, unicode, isKeyDown: false, Win32ControlKeyState.None);
+            }
+
+            if (_terminal.KittyKeyboardActive)
+            {
+                // Both keys this is called with are in the protocol's fixed name table, so the name
+                // is passed in rather than reached for through KittyKeyName -- that one needs a
+                // KeyEventArgs for its KeySymbol fallback, and there is no event here.
+                var ev = new XT.Options.KeyEvent { Key = kittyName, Code = kittyName };
+
+                // Null is the generator saying the negotiated flags do not change this key, and the
+                // legacy encoding is still what the application reads -- not that it sends nothing.
+                var press = _terminal.GenerateKittyKeyInput(ev, XT.Input.KittyKeyboardEventType.Press)
+                            ?? _terminal.GenerateKeyInput(xtermKey, XT.Input.KeyModifiers.None);
+
+                // A release only if the flags asked for one. Sending it unconditionally would give
+                // an application that never opted in a key-up it has no encoding for.
+                var release = _terminal.GenerateKittyKeyInput(ev, XT.Input.KittyKeyboardEventType.Release);
+
+                return press + release;
+            }
+
+            return _terminal.GenerateKeyInput(xtermKey, XT.Input.KeyModifiers.None);
+        }
+
         private string TakeKeyboardSelectionDeletion()
         {
             if (_kbSelAnchor is null || !_terminal.Selection.HasSelection)
@@ -2991,7 +3114,7 @@ namespace Iciclecreek.Terminal
             if (count == 0)
                 return string.Empty;
 
-            var backspace = _terminal.GenerateKeyInput(XT.Input.Key.Backspace, XT.Input.KeyModifiers.None);
+            var backspace = EncodeSyntheticKey(Key.Back, XT.Input.Key.Backspace, "Backspace");
             if (string.IsNullOrEmpty(backspace))
                 return string.Empty;
 
@@ -3009,7 +3132,7 @@ namespace Iciclecreek.Terminal
             }
             else
             {
-                var right = _terminal.GenerateKeyInput(XT.Input.Key.RightArrow, XT.Input.KeyModifiers.None);
+                var right = EncodeSyntheticKey(Key.Right, XT.Input.Key.RightArrow, "ArrowRight");
                 if (string.IsNullOrEmpty(right))
                     return string.Empty;
                 keys = string.Concat(Enumerable.Repeat(right, count))
@@ -3498,6 +3621,19 @@ namespace Iciclecreek.Terminal
                     // Right-click: copy if selection exists, otherwise paste
                     if (props.IsRightButtonPressed)
                     {
+                        // Claimed BEFORE the await, not after it.
+                        //
+                        // This handler is async void. The first await returns to the caller, and the
+                        // routed event finishes bubbling right then -- with Handled still false,
+                        // because the line that sets it has not run yet. It runs afterwards, on an
+                        // event nothing is listening to any more. So the press was consumed here AND
+                        // delivered to everything upstream: a host with its own context menu on
+                        // right-click got both.
+                        //
+                        // Unconditional because both branches below claim it: copy when there is a
+                        // selection, paste when there is not. There is no path here that declines.
+                        e.Handled = true;
+
                         if (_terminal.Selection.HasSelection)
                         {
                             await CopyAsync();
@@ -3508,7 +3644,6 @@ namespace Iciclecreek.Terminal
                         {
                             await PasteAsync();
                         }
-                        e.Handled = true;
                         return;
                     }
 
@@ -4298,7 +4433,15 @@ namespace Iciclecreek.Terminal
         /// was no longer reading. So the event is consumed either way, which also stops a TextInput
         /// from arriving afterwards and sending the character down the legacy path behind our back.
         /// </remarks>
-        private async Task<bool> TrySendKittyKeyAsync(KeyEventArgs e, XT.Input.KittyKeyboardEventType eventType)
+        /// <param name="pendingErase">
+        /// Keystrokes that must go out AHEAD of this key — the deletion of a keyboard selection the
+        /// caller has already consumed. Prepended rather than sent separately, so the deletion and
+        /// the character that replaces it are one write: sent as two, the next keystroke races in
+        /// between and "there" typed over a selection arrives as "heret". Ignored when this returns
+        /// false, since the key was not claimed and the caller still owns the deletion.
+        /// </param>
+        private async Task<bool> TrySendKittyKeyAsync(KeyEventArgs e, XT.Input.KittyKeyboardEventType eventType,
+                                                      string pendingErase = "")
         {
             if (!_terminal.KittyKeyboardActive)
                 return false;
@@ -4317,6 +4460,14 @@ namespace Iciclecreek.Terminal
             var sequence = _terminal.GenerateKittyKeyInput(ev, eventType);
 
             e.Handled = true;
+
+            // Backspace and Delete over a selection remove the SELECTION, not one character beyond
+            // it, so for those two the deletion replaces the key's own sequence instead of preceding
+            // it -- the same rule the legacy path below applies.
+            if (pendingErase.Length > 0 && e.Key is Key.Back or Key.Delete)
+                sequence = pendingErase;
+            else
+                sequence = pendingErase + sequence;
 
             if (!string.IsNullOrEmpty(sequence))
                 await SendToPtyAsync(sequence).ConfigureAwait(false);
@@ -7385,6 +7536,21 @@ namespace Iciclecreek.Terminal
             // Build control key state flags
             var controlKeyState = GetWin32ControlKeyState(e.KeyModifiers, e.Key);
 
+            return Win32Record(vk, scanCode, unicodeChar, isKeyDown, controlKeyState);
+        }
+
+        /// <summary>
+        /// One Win32 INPUT_RECORD, in the wire form ConPTY reads.
+        /// </summary>
+        /// <remarks>
+        /// Split out from <see cref="GenerateWin32InputSequence"/> so a SYNTHETIC key — one this view
+        /// presses on the user's behalf, with no <see cref="KeyEventArgs"/> behind it — is encoded by
+        /// the same formatting as a real one rather than a second copy of the format string that can
+        /// drift from it. See <see cref="EncodeSyntheticKey"/>.
+        /// </remarks>
+        private static string Win32Record(int vk, int scanCode, int unicodeChar, bool isKeyDown,
+                                          Win32ControlKeyState controlKeyState)
+        {
             // Repeat count (always 1 for our purposes)
             var repeatCount = 1;
 
