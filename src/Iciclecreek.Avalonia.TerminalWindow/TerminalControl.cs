@@ -255,11 +255,33 @@ namespace Iciclecreek.Terminal
         public XTerm.Terminal Terminal => _terminalView!.Terminal;
 
         /// <inheritdoc cref="TerminalView.InputSent"/>
+        /// <remarks>
+        /// Handlers added before the template is applied are HELD, not dropped. Subscribing early is
+        /// the ordinary case rather than the exotic one -- it is what a XAML attribute does, and what
+        /// any host that news up the control and wires it does -- and the previous form threw those
+        /// handlers away in an if with no else. Silently: no exception, and += appears to have
+        /// worked, so the event simply never fires.
+        /// </remarks>
         public event EventHandler<string>? InputSent
         {
-            add { if (_terminalView != null) _terminalView.InputSent += value; }
-            remove { if (_terminalView != null) _terminalView.InputSent -= value; }
+            add
+            {
+                if (_terminalView != null)
+                    _terminalView.InputSent += value;
+                else
+                    _pendingInputSent += value;
+            }
+            remove
+            {
+                if (_terminalView != null)
+                    _terminalView.InputSent -= value;
+                else
+                    _pendingInputSent -= value;
+            }
         }
+
+        /// <summary>Handlers that arrived before there was a view to put them on.</summary>
+        private EventHandler<string>? _pendingInputSent;
 
 
         /// <summary>
@@ -718,10 +740,18 @@ namespace Iciclecreek.Terminal
             _terminalView = e.NameScope.Find<TerminalView>("PART_TerminalView");
             _scrollBar = e.NameScope.Find<ScrollBar>("PART_ScrollBar");
 
-            // Wire up scrollbar
+            // The scrollbar, and ONLY the scrollbar. It used to gate everything below it too, so a
+            // template without a PART_ScrollBar -- a host that does not want one, which is a
+            // reasonable thing to want -- lost every event this control forwards, the Options bridge
+            // and the current directory along with it. All of that belongs to the view; none of it
+            // has anything to do with whether there is a scrollbar next to it.
             if (_scrollBar != null && _terminalView != null)
             {
                 _scrollBar.Scroll += OnScrollBarScroll;
+            }
+
+            if (_terminalView != null)
+            {
                 _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
@@ -736,7 +766,14 @@ namespace Iciclecreek.Terminal
                 // anything listening for it. Seeding here catches the case where the view was already
                 // initialised; the bridge keeps the two in step from this point on.
                 SetCurrentValue(OptionsProperty, _terminalView.Options);
-                // (no window event hooking needed)
+
+                // Anything that subscribed before this view existed, moved onto it now. Cleared as
+                // it is handed over so a second template application cannot attach them twice.
+                if (_pendingInputSent != null)
+                {
+                    _terminalView.InputSent += _pendingInputSent;
+                    _pendingInputSent = null;
+                }
             }
         }
 

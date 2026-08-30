@@ -759,8 +759,16 @@ namespace Iciclecreek.Terminal
             set => SetValue(EnvironmentVariablesProperty, value);
         }
 
+        /// <summary>The emulator options this view reads. See the property for the identity rules.</summary>
+        /// <remarks>
+        /// Owned by TerminalView, which it was not: it was registered against TerminalControl, which
+        /// registers an Options of its OWN under that same owner and name. Two different
+        /// StyledProperty objects then claimed one entry in the registry, so a style or a setter
+        /// aimed at TerminalControl.Options could resolve to whichever was reached first, and nothing
+        /// aimed at TerminalView.Options was aimed at this view at all.
+        /// </remarks>
         public static readonly StyledProperty<XTerm.Options.TerminalOptions?> OptionsProperty =
-            AvaloniaProperty.Register<TerminalControl, XTerm.Options.TerminalOptions?>(
+            AvaloniaProperty.Register<TerminalView, XTerm.Options.TerminalOptions?>(
                 nameof(Options),
                 defaultValue: null);
 
@@ -1475,43 +1483,25 @@ namespace Iciclecreek.Terminal
             // index shifts down with it. A view parked in the scrollback has to move with the eviction or the
             // content slides upward under the user while output keeps arriving.
             //
-            // Subscribed HERE and not in OnAttachedToLogicalTree with the others, because the buffer object
-            // outlives detach/re-attach and this is the one point that runs exactly once. The instance is
-            // remembered rather than re-read later: it is BALANCED on detach and re-armed on re-attach
-            // against this same object, so a re-parent can neither double the handler — which would move a
-            // parked viewport by a multiple of the evicted count — nor leave one behind. Leaving one behind
-            // is not merely untidy: Terminal is public, so a host holding the emulator keeps the whole view
-            // alive through the subscription and goes on calling back into a control that is off the tree.
+            // The INSTANCE is captured here, and only here, because this point runs exactly once and
+            // the buffer object outlives detach/re-attach. The handler itself goes on through
+            // SubscribeTerminalEvents with the rest: it is balanced on detach and re-armed on
+            // re-attach against this same remembered object, so a re-parent can neither double the
+            // handler — which would move a parked viewport by a MULTIPLE of the evicted count — nor
+            // leave one behind. Leaving one behind is not merely untidy: Terminal is public, so a
+            // host holding the emulator keeps the whole view alive through the subscription and goes
+            // on calling back into a control that is off the tree.
+            //
+            // Both of those are what a second copy of this line cost while it was here as well: the
+            // shared method subscribes it too, so the handler ran twice per eviction.
             _scrollbackBuffer = _terminal.Buffer;
-            _scrollbackBuffer.Trimmed += OnBufferTrimmed;
 
             // Shell integration. A shell that emits OSC 133 says exactly where its prompt ends, which is the
             // one thing the input-start heuristic can only infer. Subscribed here for the same reason as
             // Trimmed above: this point runs exactly once, and the emulator outlives a detach/re-attach.
             _terminal.OscReceived += OnTerminalOscReceived;
 
-            _terminal.DataReceived += OnTerminalDataReceived;
-            _terminal.BufferChanged += OnTerminalBufferChanged;
-            _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
-            // window events
-            _terminal.TitleChanged += OnTerminalTitleChanged;
-            _terminal.WindowMoved += OnTerminalWindowMoved;
-            _terminal.WindowResized += OnTerminalWindowResized;
-            _terminal.WindowMinimized += OnTerminalWindowMinimized;
-            _terminal.WindowMaximized += OnTerminalWindowMaximized;
-            _terminal.WindowRestored += OnTerminalWindowRestored;
-            _terminal.WindowRaised += OnTerminalWindowRaised;
-            _terminal.WindowLowered += OnTerminalWindowLowered;
-            _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
-            _terminal.BellRang += OnTerminalBellRang;
-            _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
-            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
-            _terminal.ClipboardWriteRequested += OnTerminalClipboardWriteRequested;
-            _terminal.ClipboardReadRequested += OnTerminalClipboardReadRequested;
-            _terminal.NotificationReceived += OnTerminalNotificationReceived;
-            _terminal.AttentionRequested += OnTerminalAttentionRequested;
-            _terminal.PointerShapeChanged += OnTerminalPointerShapeChanged;
-            // end window events
+            SubscribeTerminalEvents();
 
             // Setup cursor blink timer
             _cursorBlinkTimer = new DispatcherTimer
@@ -2374,6 +2364,53 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Puts this view's handlers on the emulator.
+        /// </summary>
+        /// <remarks>
+        /// <para>The exact mirror of <see cref="UnsubscribeTerminalEvents"/>, and it exists for the
+        /// reason that one already gave for itself: a second copy of a list is a list that goes
+        /// stale. There were two copies of the SUBSCRIBE list -- one for the first attach, one for a
+        /// re-attach -- and they had drifted by exactly one entry.</para>
+        /// <para>SynchronizedOutputChanged was in the re-attach copy and not the other, so DEC mode
+        /// 2026 did nothing until a view had been detached and put back. A terminal that was never
+        /// re-parented, which is nearly all of them, tore on every atomic update an application
+        /// asked it not to tear on.</para>
+        /// <para>What is deliberately NOT here: OscReceived and Colors.ColorChanged. Those are
+        /// subscribed once, in OnInitialized, because a detach must not drop them -- see Dispose,
+        /// which is the only thing that does.</para>
+        /// </remarks>
+        private void SubscribeTerminalEvents()
+        {
+            if (_terminal == null)
+                return;
+
+            if (_scrollbackBuffer != null)
+                _scrollbackBuffer.Trimmed += OnBufferTrimmed;
+
+            _terminal.DataReceived += OnTerminalDataReceived;
+            _terminal.BufferChanged += OnTerminalBufferChanged;
+            _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
+            _terminal.TitleChanged += OnTerminalTitleChanged;
+            _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
+            _terminal.WindowMoved += OnTerminalWindowMoved;
+            _terminal.WindowResized += OnTerminalWindowResized;
+            _terminal.WindowMinimized += OnTerminalWindowMinimized;
+            _terminal.WindowMaximized += OnTerminalWindowMaximized;
+            _terminal.WindowRestored += OnTerminalWindowRestored;
+            _terminal.WindowRaised += OnTerminalWindowRaised;
+            _terminal.WindowLowered += OnTerminalWindowLowered;
+            _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
+            _terminal.BellRang += OnTerminalBellRang;
+            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
+            _terminal.ClipboardWriteRequested += OnTerminalClipboardWriteRequested;
+            _terminal.ClipboardReadRequested += OnTerminalClipboardReadRequested;
+            _terminal.NotificationReceived += OnTerminalNotificationReceived;
+            _terminal.AttentionRequested += OnTerminalAttentionRequested;
+            _terminal.PointerShapeChanged += OnTerminalPointerShapeChanged;
+            _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
+        }
+
+        /// <summary>
         /// Drops every handler this view put on the emulator.
         /// </summary>
         /// <remarks>
@@ -2462,57 +2499,10 @@ namespace Iciclecreek.Terminal
             // Only re-subscribe when re-parenting after a prior detach.
             if (_terminal == null) return;
 
-            // Re-subscribe terminal events that were unsubscribed on detach.
-            // Use -= before += to avoid double-subscription.
-            if (_scrollbackBuffer != null)
-            {
-                _scrollbackBuffer.Trimmed -= OnBufferTrimmed;
-                _scrollbackBuffer.Trimmed += OnBufferTrimmed;
-            }
-
-            _terminal.DataReceived -= OnTerminalDataReceived;
-            _terminal.BufferChanged -= OnTerminalBufferChanged;
-            _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
-            _terminal.TitleChanged -= OnTerminalTitleChanged;
-            _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
-            _terminal.WindowMoved -= OnTerminalWindowMoved;
-            _terminal.WindowResized -= OnTerminalWindowResized;
-            _terminal.WindowMinimized -= OnTerminalWindowMinimized;
-            _terminal.WindowMaximized -= OnTerminalWindowMaximized;
-            _terminal.WindowRestored -= OnTerminalWindowRestored;
-            _terminal.WindowRaised -= OnTerminalWindowRaised;
-            _terminal.WindowLowered -= OnTerminalWindowLowered;
-            _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
-            _terminal.BellRang -= OnTerminalBellRang;
-            _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
-            _terminal.ClipboardWriteRequested -= OnTerminalClipboardWriteRequested;
-            _terminal.ClipboardReadRequested -= OnTerminalClipboardReadRequested;
-            _terminal.NotificationReceived -= OnTerminalNotificationReceived;
-            _terminal.AttentionRequested -= OnTerminalAttentionRequested;
-            _terminal.PointerShapeChanged -= OnTerminalPointerShapeChanged;
-            _terminal.WindowInfoRequested -= OnTerminalWindowInfoRequested;
-
-            _terminal.DataReceived += OnTerminalDataReceived;
-            _terminal.BufferChanged += OnTerminalBufferChanged;
-            _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
-            _terminal.TitleChanged += OnTerminalTitleChanged;
-            _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
-            _terminal.WindowMoved += OnTerminalWindowMoved;
-            _terminal.WindowResized += OnTerminalWindowResized;
-            _terminal.WindowMinimized += OnTerminalWindowMinimized;
-            _terminal.WindowMaximized += OnTerminalWindowMaximized;
-            _terminal.WindowRestored += OnTerminalWindowRestored;
-            _terminal.WindowRaised += OnTerminalWindowRaised;
-            _terminal.WindowLowered += OnTerminalWindowLowered;
-            _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
-            _terminal.BellRang += OnTerminalBellRang;
-            _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
-            _terminal.ClipboardWriteRequested += OnTerminalClipboardWriteRequested;
-            _terminal.ClipboardReadRequested += OnTerminalClipboardReadRequested;
-            _terminal.NotificationReceived += OnTerminalNotificationReceived;
-            _terminal.AttentionRequested += OnTerminalAttentionRequested;
-            _terminal.PointerShapeChanged += OnTerminalPointerShapeChanged;
-            _terminal.WindowInfoRequested += OnTerminalWindowInfoRequested;
+            // The same list the once-only path uses, because it IS the same list. Unsubscribe
+            // first, so a re-attach that follows an attach cannot double-subscribe.
+            UnsubscribeTerminalEvents();
+            SubscribeTerminalEvents();
         }
 
         private void OnCursorBlinkTick(object? sender, EventArgs e)
@@ -5763,11 +5753,36 @@ namespace Iciclecreek.Terminal
                 ? Math.Max(0, (int)((x - Math.Max(0, GutterWidth)) / _charWidth))
                 : 0;
 
+        /// <remarks>
+        /// A terminal takes whatever it is given, so handing the constraint straight back is right
+        /// for a container that offers a real one -- and wrong for the several that do not. A
+        /// ScrollViewer measures its content with an INFINITE dimension to ask how big it wants to
+        /// be, and so do StackPanel, an auto-sized Grid row and a WrapPanel. Returning that infinity
+        /// as a desired size makes Avalonia throw out of the layout pass, which is a crash rather
+        /// than a bad layout: the view could not be put inside any of them.
+        ///
+        /// Asked what it WANTS, it answers with the grid it is currently showing. Nothing else here
+        /// knows a preferred size -- there is no content to measure, only a cell grid whose size is
+        /// chosen by whatever space it was last given.
+        /// </remarks>
         protected override Size MeasureOverride(Size availableSize)
         {
             UpdateTextMetrics();
 
-            return availableSize;
+            // 80x24 before the emulator exists, which is the only size a terminal has ever defaulted
+            // to. MeasureOverride can run before OnInitialized has built it.
+            var cols = _terminal?.Cols ?? 80;
+            var rows = _terminal?.Rows ?? 24;
+
+            var width = double.IsInfinity(availableSize.Width)
+                ? cols * _charWidth + Math.Max(0, GutterWidth)
+                : availableSize.Width;
+
+            var height = double.IsInfinity(availableSize.Height)
+                ? rows * _charHeight
+                : availableSize.Height;
+
+            return new Size(width, height);
         }
 
         protected override Size ArrangeOverride(Size finalSize)
