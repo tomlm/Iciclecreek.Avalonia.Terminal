@@ -77,6 +77,66 @@ public class ControlSurfaceTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void A_handler_survives_the_template_being_re_applied()
+    {
+        // The other end of the same problem, and the one that made buffering pending handlers the
+        // wrong fix rather than an incomplete one. A handler added AFTER the template went straight
+        // onto that view, so re-applying the template left it on an orphan: leaked, and no longer
+        // firing for the control.
+        //
+        // The control now owns the event and forwards from whichever view is current, which is how
+        // the four events beside it already worked.
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+        try
+        {
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var seen = new System.Text.StringBuilder();
+            control.InputSent += (_, data) => { lock (seen) seen.Append(data); };
+
+            // A second template application, which OnApplyTemplate explicitly supports -- it
+            // unsubscribes the old parts at the top.
+            control.Template = ScrollBarlessTemplate();
+            control.ApplyTemplate();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            control.SendInputAsync("hello").GetAwaiter().GetResult();
+            Thread.Sleep(150);
+
+            lock (seen)
+                Assert.That(seen.ToString(), Does.Contain("hello"),
+                    "a handler must follow the control, not the view it happened to be added under");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void The_control_is_the_sender_of_its_own_event()
+    {
+        // Consequence of owning the event rather than forwarding the subscription, and worth
+        // asserting because it is a visible change: the sender used to be the view.
+        var control = new TerminalControl { Process = "" };
+        object? sender = null;
+        control.InputSent += (s, _) => sender ??= s;
+
+        var window = TerminalHost.Show(control);
+        try
+        {
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            control.SendInputAsync("hello").GetAwaiter().GetResult();
+            Thread.Sleep(150);
+
+            Assert.That(sender, Is.SameAs(control), "matching ProcessExited, ShellReady and the rest");
+        }
+        finally { window.Close(); }
+    }
+
     // --------------------------------------------- a template with no scrollbar
 
     [AvaloniaTest]

@@ -256,32 +256,23 @@ namespace Iciclecreek.Terminal
 
         /// <inheritdoc cref="TerminalView.InputSent"/>
         /// <remarks>
-        /// Handlers added before the template is applied are HELD, not dropped. Subscribing early is
-        /// the ordinary case rather than the exotic one -- it is what a XAML attribute does, and what
-        /// any host that news up the control and wires it does -- and the previous form threw those
-        /// handlers away in an if with no else. Silently: no exception, and += appears to have
-        /// worked, so the event simply never fires.
+        /// <para>The control's OWN event, forwarded from whichever view is current -- the same shape
+        /// as ProcessExited, ShellReady, OutputReceived and UrlClicked beside it, and it should
+        /// always have been.</para>
+        /// <para>It used to add and remove straight onto <c>_terminalView</c>, which failed at both
+        /// ends of that view's life. A handler added BEFORE the template was dropped by an if with no
+        /// else -- silently, since += appears to have worked -- and subscribing early is the ordinary
+        /// case, being what a XAML attribute does. A handler added AFTER stayed on the view it was
+        /// added to, so re-applying the template left it on an orphan: leaked, and no longer firing
+        /// for the control.</para>
+        /// <para>Owning the list fixes both, and needs no buffering of pending handlers: there is
+        /// nothing to buffer when the subscription was never on the view to begin with.</para>
+        /// <para>Note the sender is the CONTROL, not the view -- again matching the four events
+        /// beside it.</para>
         /// </remarks>
-        public event EventHandler<string>? InputSent
-        {
-            add
-            {
-                if (_terminalView != null)
-                    _terminalView.InputSent += value;
-                else
-                    _pendingInputSent += value;
-            }
-            remove
-            {
-                if (_terminalView != null)
-                    _terminalView.InputSent -= value;
-                else
-                    _pendingInputSent -= value;
-            }
-        }
+        public event EventHandler<string>? InputSent;
 
-        /// <summary>Handlers that arrived before there was a view to put them on.</summary>
-        private EventHandler<string>? _pendingInputSent;
+        private void OnTerminalViewInputSent(object? sender, string data) => InputSent?.Invoke(this, data);
 
 
         /// <summary>
@@ -732,6 +723,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.ShellReady -= OnTerminalViewShellReady;
                 _terminalView.OutputReceived -= OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
+                _terminalView.InputSent -= OnTerminalViewInputSent;
             }
 
             SetCurrentDirectory(null);
@@ -758,6 +750,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.ShellReady += OnTerminalViewShellReady;
                 _terminalView.OutputReceived += OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
+                _terminalView.InputSent += OnTerminalViewInputSent;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
 
                 // Adopt whatever the view is pointing at NOW, having subscribed above. The assignment
@@ -766,14 +759,6 @@ namespace Iciclecreek.Terminal
                 // anything listening for it. Seeding here catches the case where the view was already
                 // initialised; the bridge keeps the two in step from this point on.
                 SetCurrentValue(OptionsProperty, _terminalView.Options);
-
-                // Anything that subscribed before this view existed, moved onto it now. Cleared as
-                // it is handed over so a second template application cannot attach them twice.
-                if (_pendingInputSent != null)
-                {
-                    _terminalView.InputSent += _pendingInputSent;
-                    _pendingInputSent = null;
-                }
             }
         }
 
