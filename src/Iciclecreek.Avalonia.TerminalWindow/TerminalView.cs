@@ -3363,8 +3363,13 @@ namespace Iciclecreek.Terminal
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: false);
                     if (!string.IsNullOrEmpty(sequence))
                     {
-                        await SendToPtyAsync(sequence).ConfigureAwait(false);
+                        // Marked BEFORE the await, not after. This handler is async void, so it
+                        // returns to the routing at the first await and the event goes on bubbling
+                        // while still marked unhandled -- the flag would arrive after whoever was
+                        // going to act on it already had. Nothing between here and the send can
+                        // decide not to send, so there is nothing to be premature about.
                         e.Handled = true;
+                        await SendToPtyAsync(sequence).ConfigureAwait(false);
                     }
 
                     return;
@@ -3430,8 +3435,13 @@ namespace Iciclecreek.Terminal
             try
             {
                 Debug.WriteLine($"[TerminalView] OnTextInput: Sending '{e.Text}' to PTY");
-                await SendToPtyAsync(replaceKeys + e.Text).ConfigureAwait(false);
+
+                // Before the await, for the reason given on the key-up path: this handler is async
+                // void, so it returns to the routing at the await and the event goes on bubbling
+                // while still marked unhandled. Found by review of that other site and fixed here
+                // too rather than left as its twin.
                 e.Handled = true;
+                await SendToPtyAsync(replaceKeys + e.Text).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
