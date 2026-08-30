@@ -216,6 +216,29 @@ public class MouseAndSelectionTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void A_modifier_change_in_one_cell_is_still_a_distinct_report()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?1003h");
+            Dispatcher.UIThread.RunJobs();
+
+            Move(view, 40.0, 40.0);
+            Thread.Sleep(80);
+            var afterPlain = pty.Written.Length;
+            Assert.That(afterPlain, Is.GreaterThan(0), "sanity: the first move was reported");
+
+            Move(view, 40.0, 40.0, KeyModifiers.Shift);
+            Thread.Sleep(120);
+
+            Assert.That(pty.Written.Length, Is.GreaterThan(afterPlain),
+                "modifier state is part of the mouse report even when the cell is unchanged");
+        }
+        finally { window.Close(); }
+    }
+
     // -------------------------------------------------- Shift owns the wheel
 
     [AvaloniaTest]
@@ -290,13 +313,14 @@ public class MouseAndSelectionTests
         Dispatcher.UIThread.RunJobs();
     }
 
-    private static void Move(TerminalView view, double x, double y)
+    private static void Move(TerminalView view, double x, double y,
+                             KeyModifiers modifiers = KeyModifiers.None)
     {
         var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
         view.RaiseEvent(new PointerEventArgs(InputElement.PointerMovedEvent, view, pointer, view,
             new global::Avalonia.Point(x, y), 0,
             new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.Other),
-            KeyModifiers.None));
+            modifiers));
         Dispatcher.UIThread.RunJobs();
     }
 

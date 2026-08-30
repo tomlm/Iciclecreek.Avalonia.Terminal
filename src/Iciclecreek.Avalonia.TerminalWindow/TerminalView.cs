@@ -138,7 +138,8 @@ namespace Iciclecreek.Terminal
         private (int Col, int Row)? _pendingSelectionStart = null;
 
         /// <summary>The last motion reported to the application, so an unchanged one is not re-sent.</summary>
-        private (int Col, int Row, XT.Input.MouseEventType Type, XT.Input.MouseTrackingMode Mode)? _lastReportedMotion;
+        private (int Col, int Row, XT.Input.MouseEventType Type, XT.Input.MouseTrackingMode Mode,
+                 XT.Input.MouseButton Button, XT.Input.KeyModifiers Modifiers)? _lastReportedMotion;
 
         // Wheel accumulator. A notched mouse delivers Delta.Y = ±1 per detent, but a trackpad (and any
         // precision mouse) delivers a stream of FRACTIONS — on macOS a slow two-finger drag is dozens of
@@ -4020,7 +4021,7 @@ namespace Iciclecreek.Terminal
                 //
                 // Remembered per button state as well as position: a drag and a hover at the same
                 // cell are different reports, and collapsing them would swallow the button change.
-                var here = (col, row, eventType, _terminal.MouseTrackingMode);
+                var here = (col, row, eventType, _terminal.MouseTrackingMode, button, modifiers);
                 if (_lastReportedMotion == here)
                     return;
 
