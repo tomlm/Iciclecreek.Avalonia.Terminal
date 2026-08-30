@@ -56,15 +56,29 @@ public class ReaderThreadDeadlockTests
     private static bool WriteReturnsWithoutTheUIThread(TerminalView view, string data)
     {
         var done = new ManualResetEventSlim(false);
+        Exception? failure = null;
 
         var worker = new Thread(() =>
         {
-            view.Terminal.Write(data);
-            done.Set();
+            // Caught and re-thrown on the calling thread, and the event set in a FINALLY.
+            //
+            // Without either, a write that THREW looked exactly like a write that blocked: the
+            // event was never set, the wait timed out, and the test reported "the seam blocked on
+            // the UI thread" about an exception it had swallowed. The one failure this fixture
+            // exists to detect and the one failure that has nothing to do with it, reported
+            // identically.
+            try { view.Terminal.Write(data); }
+            catch (Exception ex) { failure = ex; }
+            finally { done.Set(); }
         }) { IsBackground = true };
 
         worker.Start();
-        return done.Wait(Patience);      // deliberately no RunJobs
+        var finished = done.Wait(Patience);   // deliberately no RunJobs
+
+        if (failure != null)
+            throw new InvalidOperationException("the write threw rather than blocking", failure);
+
+        return finished;
     }
 
     [AvaloniaTest]
