@@ -21,6 +21,9 @@ namespace Demo.Views
     public partial class ManagedTerminalWindow : ManagedWindow
     {
         private TerminalControl? _terminalControl;
+
+        /// <summary>Forwarded to the hosted control at construction; the demo turns them on.</summary>
+        public bool Ligatures { get; set; }
         private bool _restoringFocus;
 
         // Window-related events are now exposed by `TerminalView` as bubbling attached events.
@@ -180,6 +183,7 @@ namespace Demo.Views
                 Options = this.Options,
                 FontFamily = this.FontFamily,
                 FontSize = this.FontSize,
+                Ligatures = this.Ligatures,
             };
 
             // Subscribe to terminal events.
