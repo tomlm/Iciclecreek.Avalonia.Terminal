@@ -8003,7 +8003,20 @@ namespace Iciclecreek.Terminal
             // srcWidth and srcHeight are in image pixels and cell/cellHigh say how many of those make
             // one cell, which is the same conversion the offsets above already use.
             var drawnWidth = stretched ? shown * charWidth : sourceWidth / pxPerCellX * charWidth;
-            var drawnHeight = stretched ? rowHeight : placement.SrcHeight / pxPerCellY * charHeight;
+
+            // rowHeight, NOT charHeight, and that is the whole of the hairline bug on Windows.
+            // The row's box is snapped to device pixels -- startYPos and startYPos + rowHeight are
+            // both Snap() results -- while charHeight is the unsnapped ideal. At a fractional
+            // display scale the two disagree: 13.0 at 1.25 makes rows alternate 16 and 17 device
+            // pixels, so on every stretched row a strip measured in charHeight stops one pixel short
+            // of the row it fills, the next row's clip starts at the row boundary, and the terminal
+            // background shows through the gap. Measured: pure black 1px lines every fourth row,
+            // 65 device pixels apart, on natural placements only -- the stretched branch has filled
+            // rowHeight since the c/r-box fix and never showed them.
+            //
+            // Only the CLIP moves. mapScaleY below stays on charHeight, because that is the shared
+            // transform every row of the placement draws through, and rowHeight varies row to row.
+            var drawnHeight = stretched ? rowHeight : placement.SrcHeight / pxPerCellY * rowHeight;
 
             // Clip the shifted destination to the cell box. Cropping the source by the same
             // proportions is essential: merely shortening the destination would squeeze the full

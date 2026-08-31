@@ -576,6 +576,48 @@ public class SixelRenderingTests
             "the source must be cropped with the destination, not squeezed into it");
     }
 
+    /// <summary>
+    /// Consecutive rows of a natural picture must meet exactly at a FRACTIONAL display scale.
+    /// </summary>
+    /// <remarks>
+    /// The rows a frame draws are snapped to device pixels, so at 13.0 and 1.25 they alternate 16 and
+    /// 17 device pixels while charHeight stays 13.0. A strip measured in charHeight then stops one
+    /// pixel short of the row it fills, and the terminal background shows through: pure black 1px
+    /// lines every fourth row, 65 device pixels apart. Asserted across enough rows to see the beat --
+    /// one pair would have passed throughout, which is why this went unnoticed.
+    /// </remarks>
+    [AvaloniaTest]
+    public void Natural_rows_meet_exactly_at_a_fractional_scale()
+    {
+        var image = EvenImage();
+        const double charHeight = 13.0;
+        const double scale = 1.25;
+
+        static double Snap(double value, double scale) =>
+            Math.Round(value * scale, MidpointRounding.AwayFromZero) / scale;
+
+        double? previousBottom = null;
+
+        for (var row = 0; row < 24; row++)
+        {
+            var startYPos = Snap(row * charHeight, scale);
+            var rowHeight = Snap((row + 1) * charHeight, scale) - startYPos;
+
+            Assert.That(TerminalView.TryPlanImageBlit(
+                Run(image, 0, 4, 0, row * CellPixelHeight, 8, CellPixelHeight),
+                startYPos, rowHeight, 10, charHeight, scale,
+                out _, out var destination), Is.True, $"row {row} planned nothing");
+
+            if (previousBottom is { } bottom)
+            {
+                Assert.That(destination.Y * scale, Is.EqualTo(bottom * scale).Within(0.001),
+                    $"row {row} starts where row {row - 1} ended, or the background shows through");
+            }
+
+            previousBottom = destination.Bottom;
+        }
+    }
+
     [AvaloniaTest]
     public void An_empty_run_is_refused()
     {
