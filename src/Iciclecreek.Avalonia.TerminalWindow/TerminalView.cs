@@ -474,19 +474,21 @@ namespace Iciclecreek.Terminal
                 defaultValue: Colors.White);
 
         /// <summary>
-        /// Whether the font's programming ligatures are drawn. On by default.
+        /// Whether the font's programming ligatures are drawn. Off by default — a host that wants
+        /// them opts in.
         /// </summary>
         /// <remarks>
         /// <para>A switch because a ligature is a taste people hold opinions about: a joined
         /// ligature hides how many characters are actually there, which some people want and
-        /// others find intolerable in code they are editing.</para>
+        /// others find intolerable in code they are editing. Off by default so the terminal
+        /// behaves exactly as it always has until a host decides otherwise.</para>
         /// <para>A font without them is unaffected either way — nothing to turn off, and nothing
         /// is spent looking: see <see cref="LigatureProbe"/>.</para>
         /// </remarks>
         public static readonly StyledProperty<bool> LigaturesProperty =
             AvaloniaProperty.Register<TerminalView, bool>(
                 nameof(Ligatures),
-                defaultValue: true);
+                defaultValue: false);
 
         /// <summary>Whether the font's programming ligatures are drawn. See <see cref="LigaturesProperty"/>.</summary>
         public bool Ligatures
@@ -532,8 +534,17 @@ namespace Iciclecreek.Terminal
             if (!Ligatures)
                 return false;
 
-            var alphabet = LigatureProbe.Alphabet(new Typeface(FontFamily, style, weight));
-            return alphabet is not null && LigatureProbe.ContainsCandidate(text, alphabet);
+            // The probe runs in the background on the first ask — never on this thread, which is
+            // mid-paint. Until it answers, runs build exactly as they would with ligatures off;
+            // when a real alphabet lands, the cached runs are stale by definition, so drop them
+            // and the next frame rebuilds with the answer. A null answer changes nothing and never
+            // calls back.
+            var known = LigatureProbe.TryGetAlphabet(
+                new Typeface(FontFamily, style, weight),
+                _ => global::Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateRunCaches),
+                out var alphabet);
+
+            return known && alphabet is not null && LigatureProbe.ContainsCandidate(text, alphabet);
         }
 
         public static readonly StyledProperty<XT.Common.CursorStyle> CursorStyleProperty =
@@ -1733,17 +1744,10 @@ namespace Iciclecreek.Terminal
             }
             else if (change.Property == LigaturesProperty)
             {
-                // Every line's cached runs were built with the old setting, and the cache is replayed
-                // rather than rebuilt — so without this the switch takes effect only on lines that
-                // happen to change afterwards, which looks like it half worked.
-                for (int y = 0; y < _terminal.Buffer.Length; y++)
-                {
-                    var line = _terminal.Buffer.GetLine(y);
-                    if (line != null)
-                        line.Cache = null;
-                }
-
-                InvalidateVisual();
+                // Every line's cached runs were built with the old setting, and the cache is
+                // replayed rather than rebuilt — without the purge the switch would only reach
+                // lines that happen to change afterwards, which looks like it half worked.
+                InvalidateRunCaches();
             }
             else if (change.Property == CursorStyleProperty)
             {

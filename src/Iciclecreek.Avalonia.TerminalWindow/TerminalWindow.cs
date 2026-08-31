@@ -93,16 +93,16 @@ namespace Iciclecreek.Terminal
                 nameof(TextDecorations),
                 defaultValue: null);
 
-        public static readonly StyledProperty<Color> CursorColorProperty =
-            AvaloniaProperty.Register<TerminalWindow, Color>(
-                nameof(CursorColor),
-                defaultValue: Colors.White);
-
         /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
         public static readonly StyledProperty<bool> LigaturesProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
                 nameof(Ligatures),
-                defaultValue: true);
+                defaultValue: false);
+
+        public static readonly StyledProperty<Color> CursorColorProperty =
+            AvaloniaProperty.Register<TerminalWindow, Color>(
+                nameof(CursorColor),
+                defaultValue: Colors.White);
 
         public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalWindow, XTerm.Common.CursorStyle>(

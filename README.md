@@ -105,6 +105,7 @@ public partial class MainWindow : Window
 | `Background` | `IBrush` | `Black` | Terminal background color |
 | `SelectionBrush` | `IBrush` | Semi-transparent blue | Text selection highlight color |
 | `TextDecorations` | `TextDecorationLocation?` | `null` | Text decorations applied to terminal text |
+| `Ligatures` | `bool` | `false` | Draw the font's programming ligatures (`->`, `=>`, `!=` joining, in Fira Code, Cascadia Code and friends). Opt-in; fonts without ligatures are unaffected either way |
 | `CursorColor` | `Color` | `White` | Cursor color |
 | `CursorStyle` | `CursorStyle` | `Bar` | Cursor shape — `Bar`, `Block` or `Underline` |
 | `CursorBlink` | `bool` | `true` | Whether the cursor blinks |

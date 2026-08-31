@@ -1888,6 +1888,7 @@ namespace Iciclecreek.Terminal
                 typeface,
                 FontSize,
                 foreground);
+            ApplyLigatureSetting(formattedText);
 
             // Bounded by the right edge, and CLIPPED to it. A composition is as long as the user
             // makes it -- an IME buffers a whole phrase before committing -- and this drew it at its

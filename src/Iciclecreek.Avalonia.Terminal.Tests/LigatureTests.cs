@@ -1,3 +1,5 @@
+using System;
+using System.Threading;
 using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
 using Avalonia.Media;
@@ -58,24 +60,37 @@ public class LigatureTests
 
     /// <summary>
     /// The headless platform shapes one glyph per character with no substitutions, which is
-    /// exactly what a real font without ligatures looks like — so the probe must come back null,
+    /// exactly what a real font without ligatures looks like — so the probe must resolve to null,
     /// and the renderer then declines nothing and keeps the fast path everywhere. This is also the
-    /// safety property: a face the probe cannot read must never slow the terminal down.
+    /// safety property: a face the probe cannot read must never slow the terminal down. The first
+    /// ask reports not-known (the probe runs in the background, never on the asking thread) and
+    /// later asks converge on the answer.
     /// </summary>
     [AvaloniaTest]
-    public void A_face_without_ligatures_has_no_alphabet()
+    public void A_face_without_ligatures_resolves_to_no_alphabet()
     {
-        Assert.That(LigatureProbe.Alphabet(new Typeface(TerminalView.DefaultFontFamily)), Is.Null);
+        var typeface = new Typeface(TerminalView.DefaultFontFamily);
+
+        bool[]? alphabet = null;
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!LigatureProbe.TryGetAlphabet(typeface, _ => { }, out alphabet))
+        {
+            if (DateTime.UtcNow > deadline)
+                Assert.Fail("the probe never resolved");
+            Thread.Sleep(10);
+        }
+
+        Assert.That(alphabet, Is.Null);
     }
 
     // ---- the switch -----------------------------------------------------------------------------
 
     [AvaloniaTest]
-    public void Ligatures_default_on()
+    public void Ligatures_default_off()
     {
         var view = new TerminalView { Process = "" };
 
-        Assert.That(view.Ligatures, Is.True);
+        Assert.That(view.Ligatures, Is.False);
     }
 
     /// <summary>
@@ -96,7 +111,7 @@ public class LigatureTests
             var line = view.Terminal.Buffer.Lines[0]!;
             line.Cache = new object();
 
-            view.Ligatures = false;
+            view.Ligatures = true;
 
             Assert.That(line.Cache, Is.Null, "the cached runs were built under the old setting");
         }

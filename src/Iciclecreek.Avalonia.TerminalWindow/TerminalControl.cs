@@ -84,6 +84,12 @@ namespace Iciclecreek.Terminal
                 nameof(EnvironmentVariables),
                 defaultValue: null);
 
+        /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
+        public static readonly StyledProperty<bool> LigaturesProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(Ligatures),
+                defaultValue: false);
+
         // Cursor appearance. Real StyledProperties with the same defaults as TerminalView's, reaching the
         // view through the template — a forwarder would drop anything set before the template applied, which
         // for appearance properties is most of the time.
@@ -91,12 +97,6 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalControl, Color>(
                 nameof(CursorColor),
                 defaultValue: Colors.White);
-
-        /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
-        public static readonly StyledProperty<bool> LigaturesProperty =
-            AvaloniaProperty.Register<TerminalControl, bool>(
-                nameof(Ligatures),
-                defaultValue: true);
 
         public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalControl, XTerm.Common.CursorStyle>(

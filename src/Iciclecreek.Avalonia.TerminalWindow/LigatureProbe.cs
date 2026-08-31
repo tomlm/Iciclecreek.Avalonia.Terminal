@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Threading.Tasks;
 using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 
@@ -20,8 +21,14 @@ namespace Iciclecreek.Terminal
     /// three-of-a-kind probe. Still missed: a ligature needing three DIFFERENT characters with no
     /// two-character signal, which means parsing GSUB coverage tables — a great deal of OpenType
     /// parsing for a case yet to be seen.</para>
-    /// <para>Paid once per typeface, on the first run that asks, and cached forever after. A font
-    /// with no ligatures — most of them — returns null, and the caller then declines nothing.</para>
+    /// <para>Probed once per typeface, OFF the UI thread: the full scan is ~9,400 shapes, which
+    /// is far too much to pay inside a paint. The first ask kicks the probe off in the background
+    /// and reports "not known yet"; the caller keeps the fast path — drawing exactly as it would
+    /// with ligatures off — and is told when the answer arrives so it can invalidate. A font with
+    /// no ligatures — most of them — resolves to null and nothing needed invalidating. Shaping off
+    /// the UI thread is safe for the same reason Avalonia's own render thread may shape while the
+    /// UI thread measures: HarfBuzz objects are immutable once created, and each ShapeText call
+    /// builds its own buffer.</para>
     /// </remarks>
     internal static class LigatureProbe
     {
@@ -29,12 +36,19 @@ namespace Iciclecreek.Terminal
         private const int Last = '~';
 
         private static readonly ConcurrentDictionary<GlyphTypeface, bool[]?> _alphabets = new();
+        private static readonly ConcurrentDictionary<GlyphTypeface, byte> _probing = new();
 
         /// <summary>
         /// The characters that participate in ligatures for this typeface, indexed by char code up
-        /// to <c>'~'</c> — or null when the font has none, or shapes too strangely to trust.
+        /// to <c>'~'</c> — null when the font has none, or shapes too strangely to trust.
         /// </summary>
-        public static bool[]? Alphabet(Typeface typeface)
+        /// <returns>
+        /// True when the answer is known and in <paramref name="alphabet"/>. False while the probe
+        /// is still running in the background — the caller should behave as if the font had no
+        /// ligatures, and <paramref name="whenKnown"/> fires (once, on an arbitrary thread) when
+        /// the real answer lands, but only if that answer is one the caller would act on.
+        /// </returns>
+        public static bool TryGetAlphabet(Typeface typeface, Action<bool[]?> whenKnown, out bool[]? alphabet)
         {
             GlyphTypeface glyphTypeface;
             try
@@ -45,13 +59,37 @@ namespace Iciclecreek.Terminal
             {
                 // A font that cannot produce a glyph typeface takes the FormattedText path anyway;
                 // there is nothing here to decide.
-                return null;
+                alphabet = null;
+                return true;
             }
 
-            return _alphabets.GetOrAdd(glyphTypeface, face =>
+            if (_alphabets.TryGetValue(glyphTypeface, out alphabet))
+                return true;
+
+            // First asker starts the probe; everyone else just hears "not yet". The callback is
+            // only invoked for a non-null alphabet, because a null one changes nothing the caller
+            // has already drawn.
+            if (_probing.TryAdd(glyphTypeface, 0))
             {
-                try
+                var face = glyphTypeface;
+                Task.Run(() =>
                 {
+                    var result = Probe(face);
+                    _alphabets[face] = result;
+                    _probing.TryRemove(face, out _);
+                    if (result is not null)
+                        whenKnown(result);
+                });
+            }
+
+            alphabet = null;
+            return false;
+        }
+
+        private static bool[]? Probe(GlyphTypeface face)
+        {
+            try
+            {
                     var options = new TextShaperOptions(face, 16);
                     var shaper = TextShaper.Current;
 
@@ -94,7 +132,8 @@ namespace Iciclecreek.Terminal
                             continue;
 
                         var triple = shaper.ShapeText(new string((char)c, 3).AsMemory(), options);
-                        if (triple.Length != 3 || triple[0].GlyphIndex != alone[c] || triple[1].GlyphIndex != alone[c])
+                        if (triple.Length != 3 || triple[0].GlyphIndex != alone[c] || triple[1].GlyphIndex != alone[c]
+                            || triple[2].GlyphIndex != alone[c])
                             participates[c] = any = true;
                     }
 
@@ -106,7 +145,6 @@ namespace Iciclecreek.Terminal
                     // Drawing per cell is both the safe answer and the existing one.
                     return null;
                 }
-            });
         }
 
         /// <summary>
