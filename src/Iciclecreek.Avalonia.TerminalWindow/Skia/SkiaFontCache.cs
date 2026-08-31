@@ -70,7 +70,30 @@ namespace Iciclecreek.Terminal.Skia
                 var weight = (key.Style & SnapshotFlags.Bold) != 0 ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
                 var slant = (key.Style & SnapshotFlags.Italic) != 0 ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
 
-                return SKTypeface.FromFamilyName(key.Family, weight, SKFontStyleWidth.Normal, slant)
+                // A FAMILY CHAIN, not one name. Avalonia's FontFamily is comma-separated -- the
+                // library's own default is such a chain, and a host that names a ligature face
+                // usually appends fallbacks after it -- and FromFamilyName knows nothing about
+                // that syntax: handed the whole string it matched nothing and quietly returned the
+                // platform default, which is how a chain naming Cascadia Code drew in a
+                // proportional system face with no ligatures at all.
+                //
+                // A real hit is the name that comes back: FromFamilyName never returns null, it
+                // returns the default face under whatever name the default has.
+                foreach (var candidate in key.Family.Split(','))
+                {
+                    var name = candidate.Trim();
+                    if (name.Length == 0)
+                        continue;
+
+                    var face = SKTypeface.FromFamilyName(name, weight, SKFontStyleWidth.Normal, slant);
+                    if (face is not null && string.Equals(face.FamilyName, name, StringComparison.OrdinalIgnoreCase))
+                        return face;
+                }
+
+                // Nothing in the chain is installed: take the first name's answer, which is the
+                // platform substitute, exactly as before.
+                var first = key.Family.Split(',')[0].Trim();
+                return SKTypeface.FromFamilyName(first.Length > 0 ? first : key.Family, weight, SKFontStyleWidth.Normal, slant)
                        ?? SKTypeface.CreateDefault();
             });
         }
@@ -125,7 +148,14 @@ namespace Iciclecreek.Terminal.Skia
 
             if (font.ContainsGlyph(codePoint))
             {
-                canvas.DrawText(span.ToString(), x, y, font, paint);
+                // The span overload, not span.ToString(): this runs per visible codepoint per
+                // frame, so a string apiece was thousands of short-lived allocations a frame --
+                // exactly what the scratch buffer above exists to avoid.
+                // The string for this codepoint, remembered rather than rebuilt. This runs once per
+                // visible cell per frame, so span.ToString() was thousands of short-lived
+                // allocations a frame; a terminal draws from a small alphabet, so the cache settles
+                // at a few hundred entries and never allocates again.
+                canvas.DrawText(TextFor(codePoint, span), x, y, font, paint);
                 return;
             }
 
@@ -351,6 +381,15 @@ namespace Iciclecreek.Terminal.Skia
         }
 
         /// <summary>
+        /// The one-character string for a codepoint, built once and kept. Shared across caches and
+        /// threads because it is immutable and tiny, and because a terminal's alphabet is small.
+        /// </summary>
+        private static readonly ConcurrentDictionary<int, string> _texts = new();
+
+        private static string TextFor(int codePoint, ReadOnlySpan<char> span)
+            => _texts.TryGetValue(codePoint, out var text) ? text : _texts[codePoint] = span.ToString();
+
+        /// <summary>
         /// The placeholder face a matcher returns when it has nothing: it draws a box for every
         /// codepoint and claims to contain them all, so only its name gives it away.
         /// </summary>
@@ -373,6 +412,11 @@ namespace Iciclecreek.Terminal.Skia
                         var face = SKTypeface.FromFamilyName(family);
                         if (face is not null && !IsLastResort(face) && face.ContainsGlyph(codePoint))
                             return face;
+
+                        // Every rejected candidate is dropped here rather than left for a
+                        // finaliser: this walks every installed family, so a miss on a machine with
+                        // hundreds of fonts held hundreds of native faces alive for nothing.
+                        face?.Dispose();
                     }
                 }
 

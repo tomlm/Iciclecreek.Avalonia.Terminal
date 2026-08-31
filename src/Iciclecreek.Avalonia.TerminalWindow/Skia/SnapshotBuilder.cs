@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using Avalonia.Media;
 using XTerm.Buffer;
@@ -54,7 +55,11 @@ namespace Iciclecreek.Terminal.Skia
             string fontFamily,
             IBrush? defaultForeground,
             IBrush? defaultBackground,
-            bool ligatures)
+            bool ligatures,
+            bool reverseVideo,
+            bool blinkOn,
+            bool boldIsBright,
+            MinimumContrast? minimumContrast)
         {
             var snapshot = _pool[_next];
             _next = (_next + 1) % PoolDepth;
@@ -91,8 +96,36 @@ namespace Iciclecreek.Terminal.Skia
 
                 // A NEW row, never a rewrite of the cached one: the render thread may be reading that
                 // one right now, and a row mutated mid-composite draws as half of two frames.
+                // A line the direct path cannot express goes to the classic renderer instead of
+                // being drawn wrong: a doubled row (DECDWL/DECDHL) has a transform this snapshot has
+                // no field for, and a line carrying OSC 66 sized runs is painted by the deferred
+                // block pass. Null here means "not mine"; TerminalView draws exactly these rows.
+                if (line.HasSizedRuns || line.LineAttribute != LineAttribute.Normal)
+                {
+                    snapshot.Rows[row] = null;
+                    snapshot.Deferred[row] = true;
+                    continue;
+                }
+
+                // Same stamp-and-retry the classic path uses (see CollectLineRuns): the line is read
+                // without a lock, and a writer that clears Cache mid-read must not have its
+                // invalidation overwritten by the row this read produced -- that would cache a
+                // mixture of the old line and the new one, permanently.
+                var stamp = new object();
+                line.Cache = stamp;
+
                 var built = new SnapshotRow(cols);
-                Fill(built, line, palette, cols, fallbackForeground, snapshot.Surface);
+                Fill(built, line, palette, cols, fallbackForeground, snapshot.Surface,
+                     reverseVideo, blinkOn, boldIsBright, minimumContrast);
+
+                if (!ReferenceEquals(line.Cache, stamp))
+                {
+                    // The line moved under the read. Publish nothing, draw what we have this frame,
+                    // and let the write that interrupted us request the next one.
+                    line.Cache = null;
+                    snapshot.Rows[row] = built;
+                    continue;
+                }
 
                 line.Cache = built;
                 snapshot.Rows[row] = built;
@@ -102,7 +135,9 @@ namespace Iciclecreek.Terminal.Skia
         }
 
         private static void Fill(SnapshotRow row, BufferLine line, ColorSnapshot palette,
-                                 int cols, uint fallbackForeground, uint surface)
+                                 int cols, uint fallbackForeground, uint surface,
+                                 bool reverseVideo, bool blinkOn, bool boldIsBright,
+                                 MinimumContrast? minimumContrast)
         {
             var col = 0;
             while (col < cols)
@@ -123,15 +158,31 @@ namespace Iciclecreek.Terminal.Skia
 
                 var cell = line[col];
 
-                var foreground = cell.GetForegroundColor(palette) is { } fg ? Argb(fg) : fallbackForeground;
+                var foreground = cell.GetForegroundColor(palette, boldIsBright) is { } fg ? Argb(fg) : fallbackForeground;
                 var background = cell.GetBackgroundColor(palette) is { } bg ? Argb(bg) : 0u;
 
-                // Inverse swaps the two, and once swapped the background is no longer optional —
-                // what it paints is the text colour.
-                if (cell.Attributes.IsInverse())
+                // The same three swaps the classic path applies, in the same order: a cell's own
+                // inverse, then DECSCNM for the whole screen, then the blink phase. Each is its own
+                // toggle -- two of them cancel -- so they are counted rather than short-circuited.
+                var swapped = cell.Attributes.IsInverse();
+                if (reverseVideo) swapped = !swapped;
+                if (cell.Attributes.IsBlink() && blinkOn) swapped = !swapped;
+
+                if (swapped)
                 {
-                    var swapped = background == 0 ? surface : background;
-                    (foreground, background) = (swapped, foreground);
+                    // Once swapped the background is no longer optional: what it paints is the text
+                    // colour, so a cell with no background of its own takes the surface.
+                    var behind = background == 0 ? surface : background;
+                    (foreground, background) = (behind, foreground);
+                }
+
+                // The readability floor, applied where the classic path applies it -- after the
+                // swaps, against the colour actually behind the glyph, so an inverse cell is
+                // measured against what it really sits on.
+                if (minimumContrast is { Active: true })
+                {
+                    var behind = background == 0 ? surface : background;
+                    foreground = Argb(minimumContrast.Apply(FromArgb(foreground), FromArgb(behind)));
                 }
 
                 target.CodePoint = cell.CodePoint;
@@ -213,9 +264,20 @@ namespace Iciclecreek.Terminal.Skia
             // picture alive even if the buffer drops it a moment later.
             if (line.HasImages)
             {
-                foreach (var placement in line.Placements)
+                // Ordered by z the way the classic renderer's OrderedPlacements does, and stable
+                // within a z so equal placements keep their age order.
+                var placements = line.Placements;
+                var ordered = placements.Count > 1
+                    ? placements.OrderBy(p => p.ZIndex).ToList()
+                    : (System.Collections.Generic.IReadOnlyList<XTerm.Graphics.LinePlacement>)placements;
+
+                foreach (var placement in ordered)
                 {
-                    if (!line.TryGetImageAt(placement.Column, out var image))
+                    // By ID, not by column: two placements can overlap, and asking the line what
+                    // image sits at a column answers with the topmost one -- which is how a run
+                    // ended up pointing at another placement's pixels.
+                    var image = ImageFor(line, placement);
+                    if (image is null)
                         continue;
 
                     row.AddRun(new SnapshotImageRun(
@@ -225,10 +287,27 @@ namespace Iciclecreek.Terminal.Skia
                         placement.SrcX,
                         placement.SrcY,
                         placement.SrcWidth,
-                        placement.SrcHeight));
+                        placement.SrcHeight,
+                        placement.ZIndex));
                 }
             }
 
+        }
+
+        /// <summary>
+        /// The image a placement names, found among the ones its line holds -- the same by-id lookup
+        /// the classic renderer's ImageFor does, for the same reason: a line holds one or two images
+        /// and a placement refers to one of them by name, not by position.
+        /// </summary>
+        private static XTerm.Graphics.TerminalImage? ImageFor(BufferLine line, XTerm.Graphics.LinePlacement placement)
+        {
+            foreach (var image in line.Images)
+            {
+                if (image.Id == placement.ImageId)
+                    return image;
+            }
+
+            return null;
         }
 
         /// <summary>True when the cell's text is not simply its codepoint rendered.</summary>
@@ -245,11 +324,19 @@ namespace Iciclecreek.Terminal.Skia
         {
             var flags = SnapshotFlags.None;
             if (cell.Attributes.IsBold()) flags |= SnapshotFlags.Bold;
+            if (cell.Attributes.IsInvisible()) flags |= SnapshotFlags.Conceal;
+            if (cell.Attributes.IsDim()) flags |= SnapshotFlags.Dim;
+            if (cell.Attributes.IsOverline()) flags |= SnapshotFlags.Overline;
             if (cell.Attributes.IsItalic()) flags |= SnapshotFlags.Italic;
             if (cell.Attributes.IsUnderline()) flags |= SnapshotFlags.Underline;
             if (cell.Attributes.IsStrikethrough()) flags |= SnapshotFlags.Strikethrough;
             return flags;
         }
+
+        /// <summary>The inverse of <see cref="Argb(Color)"/>, for handing a packed colour back to a
+        /// helper that works in Avalonia colours -- the contrast floor being the one that does.</summary>
+        private static Color FromArgb(uint argb) =>
+            Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
 
         private static uint Argb(Color color) =>
             ((uint)color.A << 24) | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;

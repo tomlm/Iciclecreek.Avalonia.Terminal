@@ -338,15 +338,36 @@ namespace Iciclecreek.Terminal
             // The snapshot is taken HERE, on the UI thread. The operation runs during compositing, on
             // another thread, while the pty read loop may be writing to the buffer; it must never
             // touch the buffer or the palette itself.
-            if (UseSkiaRenderer && _charWidth > 0 && _charHeight > 0)
+            // Null unless the direct path both applies and can run; the row loop below consults it
+            // to draw exactly the rows the snapshot declined.
+            Skia.TerminalSnapshot? skiaSnapshot = null;
+
+            // A custom draw operation only runs where Avalonia is on its Skia backend. Asking the
+            // compositor first, rather than discovering it inside the operation, is what keeps the
+            // opt-in from blanking the grid on any other backend: without this the classic loop was
+            // suppressed and the layer then declined to draw, leaving surface and overlays only.
+            // _skiaUnsupported latches when a layer reports the backend would not lease a canvas.
+            if (UseSkiaRenderer && !_skiaUnsupported && _charWidth > 0 && _charHeight > 0)
             {
                 var snapshot = _snapshotBuilder.Build(
                     _terminal, _palette, startLine, viewportLines, _terminal.Cols,
                     _charWidth, _charHeight, FontSize, FontFamily?.Name ?? "monospace",
-                    GetValue(ForegroundProperty), surface, Ligatures);
+                    GetValue(ForegroundProperty), surface, Ligatures,
+                    _terminal.ReverseVideo, _cursorBlinkOn, _boldIsBright, _minimumContrast);
 
-                context.Custom(new Skia.TerminalSkiaLayer(snapshot, _skiaFonts,
-                    new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight)));
+                var layer = new Skia.TerminalSkiaLayer(snapshot, _skiaFonts,
+                    new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight));
+                context.Custom(layer);
+
+                skiaSnapshot = snapshot;
+                _lastSkiaLayer = layer;
+            }
+            else if (_lastSkiaLayer is { Unsupported: true })
+            {
+                // Learned last frame: this backend cannot lease a Skia canvas, so the direct path
+                // is off for the life of this view and the classic loop below draws everything.
+                _skiaUnsupported = true;
+                _lastSkiaLayer = null;
             }
 
             try
@@ -388,8 +409,14 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
-                for (int y = startLine; y < endLine && !UseSkiaRenderer; y++)
+                for (int y = startLine; y < endLine; y++)
                 {
+                    // With the direct path running, this loop draws only what the snapshot declined:
+                    // a doubled row, or one carrying OSC 66 sized runs. Both need what the snapshot
+                    // has no field for, and drawing them wrong is worse than not drawing them fast.
+                    if (skiaSnapshot is not null && !skiaSnapshot.IsDeferred(y - startLine))
+                        continue;
+
                     // The buffer can SHRINK underneath a render. CSI 3 J — what cmd.exe's `cls` sends —
                     // discards the entire scrollback, and it arrives on the PTY thread, so the bounds
                     // captured above can point past the end by the time we reach this line.

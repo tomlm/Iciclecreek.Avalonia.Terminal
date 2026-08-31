@@ -59,11 +59,18 @@ namespace Iciclecreek.Terminal.Skia
         public readonly int Cols;
         public readonly int SrcX, SrcY, SrcWidth, SrcHeight;
 
-        public SnapshotImageRun(int imageIndex, int column, int cols, int srcX, int srcY, int srcWidth, int srcHeight)
+        /// <summary>
+        /// The placement's z-index, carried so the draw can order as the classic path does: negative
+        /// z goes under the text, non-negative over it, and equal z keeps placement order.
+        /// </summary>
+        public readonly int ZIndex;
+
+        public SnapshotImageRun(int imageIndex, int column, int cols, int srcX, int srcY, int srcWidth, int srcHeight, int zIndex = 0)
         {
             ImageIndex = imageIndex;
             Column = column;
             Cols = cols;
+            ZIndex = zIndex;
             SrcX = srcX;
             SrcY = srcY;
             SrcWidth = srcWidth;
@@ -72,13 +79,22 @@ namespace Iciclecreek.Terminal.Skia
     }
 
     [Flags]
-    internal enum SnapshotFlags : byte
+    internal enum SnapshotFlags : ushort
     {
         None = 0,
         Bold = 1 << 0,
         Italic = 1 << 1,
         Underline = 1 << 2,
         Strikethrough = 1 << 3,
+
+        /// <summary>SGR 8. The cell keeps its background and its column; the glyph is not drawn.</summary>
+        Conceal = 1 << 4,
+
+        /// <summary>SGR 2, drawn as the classic path draws it: the foreground at 40% alpha.</summary>
+        Dim = 1 << 5,
+
+        /// <summary>SGR 53.</summary>
+        Overline = 1 << 6,
     }
 
     /// <summary>
@@ -215,13 +231,31 @@ namespace Iciclecreek.Terminal.Skia
         /// <summary>Whether to draw the font's ligatures. See <c>TerminalView.Ligatures</c>.</summary>
         public bool Ligatures = true;
 
-        /// <summary>The surface colour, painted before anything else. 0 leaves it untouched.</summary>
+        /// <summary>The surface colour behind the grid, as resolved for the frame. Never painted
+        /// here -- TerminalView.Render has already filled it -- but inverse cells resolve against
+        /// it, so the value has to travel with the frame.</summary>
         public uint Surface;
+
+        /// <summary>
+        /// Rows this snapshot declined, which the classic renderer draws instead: a doubled row
+        /// (DECDWL/DECDHL) whose transform has no field here, or a line carrying OSC 66 sized runs,
+        /// which the deferred block pass owns. Indexed by screen row.
+        /// </summary>
+        public bool[] Deferred = new bool[0];
+
+        /// <summary>Whether the classic path should draw <paramref name="screenRow"/> itself.</summary>
+        public bool IsDeferred(int screenRow) =>
+            screenRow >= 0 && screenRow < RowCount && screenRow < Deferred.Length && Deferred[screenRow];
 
         public void EnsureCapacity(int rows, int cols)
         {
             if (Rows.Length < rows)
                 Rows = new SnapshotRow?[rows];
+
+            if (Deferred.Length < rows)
+                Deferred = new bool[rows];
+            else
+                Array.Clear(Deferred, 0, rows);
 
             RowCount = rows;
             Cols = cols;

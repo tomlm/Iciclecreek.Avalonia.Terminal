@@ -67,16 +67,13 @@ namespace Iciclecreek.Terminal
             set => SetValue(UseSkiaRendererProperty, value);
         }
 
-        /// <summary>
-        /// Releases the Skia faces and fonts when the view leaves the tree. They are native handles,
-        /// and a host that opens and closes terminals would otherwise hold one set per terminal until
-        /// the finalisers happened to run.
-        /// </summary>
-        protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
-        {
-            _skiaFonts.Dispose();
-            base.OnDetachedFromVisualTree(e);
-        }
+        /// <summary>Latched once a layer reports the backend will not lease a Skia canvas.</summary>
+        private bool _skiaUnsupported;
+
+        /// <summary>The layer enqueued last frame, asked afterwards whether it could draw.</summary>
+        private Skia.TerminalSkiaLayer? _lastSkiaLayer;
+
+
         private FormattedText _measureText;
         private string? _currentDirectory;
         private double _charWidth;
@@ -1905,6 +1902,13 @@ namespace Iciclecreek.Terminal
                 return;
 
             _disposed = true;
+
+            // The Skia faces and fonts go HERE and not on visual detach. Detachment is not an
+            // ownership boundary for this view -- it happens during ordinary initialisation and
+            // during supported reparenting, both of which are followed by more painting -- and a
+            // custom draw operation already queued still holds this cache on the render thread, so
+            // disposing on detach could pull native handles out from under an in-flight composite.
+            _skiaFonts.Dispose();
 
             UnsubscribeTerminalEvents();
 

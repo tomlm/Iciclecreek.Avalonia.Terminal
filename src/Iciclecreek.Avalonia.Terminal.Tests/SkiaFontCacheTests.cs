@@ -65,14 +65,20 @@ public class SkiaFontCacheTests
         Assume.That(primary.ContainsGlyph(codePoint), Is.False,
             $"U+{codePoint:X4} would not exercise fallback if {Mono} already had it");
 
-        var fallback = SKFontManager.Default.MatchCharacter(codePoint);
+        // The system's own answer is the ENVIRONMENT check only: a runner without CJK fonts has
+        // nothing to offer, which is a fact about the machine rather than a defect. The macOS leg
+        // always has them, so the assertions below run on every CI run.
+        Assume.That(SKFontManager.Default.MatchCharacter(codePoint), Is.Not.Null,
+                    "the system offers no face for this codepoint; nothing to verify");
 
-        // Assume, not Assert: a runner without CJK fonts installed has nothing to offer, and that
-        // is a fact about the machine, not a defect in the cache. The macOS leg always has them,
-        // so the fallback path stays covered somewhere on every CI run.
-        Assume.That(fallback, Is.Not.Null, "the system offers no face for this codepoint; nothing to verify");
+        // What is under test is the CACHE's resolver -- ResolveFallback and the family search
+        // behind it -- not SKFontManager. Asserting on the system's answer left every regression
+        // in our own resolution passing.
+        var fallback = cache.FallbackFace(codePoint);
+
+        Assert.That(fallback, Is.Not.Null, "the cache should resolve a face for this codepoint");
         using var sized = new SKFont(fallback!, 12);
-        Assert.That(sized.ContainsGlyph(codePoint), Is.True, "the face offered should actually have the glyph");
+        Assert.That(sized.ContainsGlyph(codePoint), Is.True, "the face the cache chose should have the glyph");
     }
 
     /// <summary>
