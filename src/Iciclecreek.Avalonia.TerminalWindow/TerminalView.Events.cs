@@ -310,6 +310,51 @@ namespace Iciclecreek.Terminal
             });
         }
 
+        /// <summary>
+        /// The grid changed size because a PROGRAM asked it to -- DECCOLM's 80/132 switch, in
+        /// practice -- rather than because the host laid this control out at a new size.
+        /// </summary>
+        /// <remarks>
+        /// <para>The emulator has always announced this: Terminal.Resize raises Resized, and
+        /// SetColumnMode goes through Resize like any other resize. Nothing here listened, so
+        /// switching to 132 columns re-gridded the buffer while the window kept its 80-column pixel
+        /// width, and columns 81 onwards were drawn past the right edge and clipped -- with the
+        /// application believing all 132 were visible.</para>
+        /// <para>Reported as the same window-resize this control already raises for
+        /// <c>CSI 8 t</c>, so a host that sizes itself for one sizes itself for the other and a host
+        /// that declines keeps declining. Declining is still a real answer: what a host must not do
+        /// is silently show 80 of 132 columns.</para>
+        /// </remarks>
+        private void OnTerminalResized(object? sender, XT.Events.TerminalEvents.ResizeEventArgs e)
+        {
+            // Synchronously, before the post: Resized is raised inside Terminal.Resize, so this is
+            // the only moment the flag set around the layout re-grid is still standing.
+            if (_regridFromLayout)
+                return;
+
+            var cols = e.Cols;
+            var rows = e.Rows;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                // The metrics are the UI thread's to read, and a resize can arrive on the pty reader
+                // thread before this control has ever measured a cell.
+                if (_charWidth <= 0 || _charHeight <= 0)
+                    return;
+
+                var width = (int)Math.Ceiling(cols * _charWidth + Math.Max(0, GutterWidth));
+                var height = (int)Math.Ceiling(rows * _charHeight);
+
+                var args = new WindowResizedEventArgs(width, height)
+                {
+                    RoutedEvent = WindowResizedEvent
+                };
+
+                RaiseEvent(args);
+                WindowResized?.Invoke(this, args);
+            });
+        }
+
         private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
         {
             Dispatcher.UIThread.Post(() =>

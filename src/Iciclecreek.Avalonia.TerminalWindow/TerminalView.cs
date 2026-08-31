@@ -160,6 +160,13 @@ namespace Iciclecreek.Terminal
         private DispatcherTimer _cursorBlinkTimer;
         private bool _cursorBlinkOn = true;
 
+        /// <summary>
+        /// Set while ArrangeOverride is re-gridding the emulator to match the size the host already
+        /// gave this control, so <see cref="OnTerminalResized"/> can tell that resize from the ones a
+        /// program asks for with DECCOLM.
+        /// </summary>
+        private bool _regridFromLayout;
+
         // Selection state - tracks whether terminal is handling selection vs forwarding mouse to app
         private bool _isSelecting = false;
         // When non-null, a single left-click has been pressed but the selection hasn't started yet.
@@ -1989,6 +1996,7 @@ namespace Iciclecreek.Terminal
             _terminal.TitleChanged += OnTerminalTitleChanged;
             _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
             _terminal.WindowMoved += OnTerminalWindowMoved;
+            _terminal.Resized += OnTerminalResized;
             _terminal.WindowResized += OnTerminalWindowResized;
             _terminal.WindowMinimized += OnTerminalWindowMinimized;
             _terminal.WindowMaximized += OnTerminalWindowMaximized;
@@ -2030,6 +2038,7 @@ namespace Iciclecreek.Terminal
             _terminal.TitleChanged -= OnTerminalTitleChanged;
             _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
+            _terminal.Resized -= OnTerminalResized;
             _terminal.WindowResized -= OnTerminalWindowResized;
             _terminal.WindowMinimized -= OnTerminalWindowMinimized;
             _terminal.WindowMaximized -= OnTerminalWindowMaximized;
@@ -3174,7 +3183,21 @@ namespace Iciclecreek.Terminal
                     // whenever a window is resized while anything is printing.
                     lock (_terminalLock)
                     {
-                        _terminal.Resize(newCols, newRows);
+                        // Marked as OURS for the duration. Terminal.Resize raises Resized
+                        // synchronously, and OnTerminalResized answers a program's resize by asking
+                        // the host for a new window size -- which is right for DECCOLM and wrong
+                        // here, where the grid was derived FROM the window size a moment ago.
+                        // Without the flag every drag of the window edge would bounce back as a
+                        // request to snap the window to an exact multiple of the cell.
+                        _regridFromLayout = true;
+                        try
+                        {
+                            _terminal.Resize(newCols, newRows);
+                        }
+                        finally
+                        {
+                            _regridFromLayout = false;
+                        }
                     }
 
                     // Outside it: this is a write to the pty, which has its own serialisation, and
