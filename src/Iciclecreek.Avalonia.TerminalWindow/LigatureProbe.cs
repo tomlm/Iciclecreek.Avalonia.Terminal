@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
@@ -36,7 +37,21 @@ namespace Iciclecreek.Terminal
         private const int Last = '~';
 
         private static readonly ConcurrentDictionary<GlyphTypeface, bool[]?> _alphabets = new();
-        private static readonly ConcurrentDictionary<GlyphTypeface, byte> _probing = new();
+        private static readonly ConcurrentDictionary<GlyphTypeface, List<Action<bool[]?>>> _waiters = new();
+
+        /// <summary>Test seam: replaces the real shaping probe, which tests cannot hold still.</summary>
+        internal static Func<GlyphTypeface, bool[]?>? ProbeOverride;
+
+        /// <summary>
+        /// Test seam: forgets every cached answer. The headless font manager can hand different
+        /// FontFamily names the same glyph typeface, so without this a test inherits what an
+        /// earlier one cached.
+        /// </summary>
+        internal static void ResetForTests()
+        {
+            _alphabets.Clear();
+            _waiters.Clear();
+        }
 
         /// <summary>
         /// The characters that participate in ligatures for this typeface, indexed by char code up
@@ -66,19 +81,49 @@ namespace Iciclecreek.Terminal
             if (_alphabets.TryGetValue(glyphTypeface, out alphabet))
                 return true;
 
-            // First asker starts the probe; everyone else just hears "not yet". The callback is
-            // only invoked for a non-null alphabet, because a null one changes nothing the caller
-            // has already drawn.
-            if (_probing.TryAdd(glyphTypeface, 0))
+            // EVERY waiter is remembered, not just the one whose ask started the probe: two views
+            // sharing a face both cache unshaped runs while the probe runs, so both must hear the
+            // answer or the loser keeps displaying unligated text until its lines happen to
+            // change. Deduplicated by delegate equality, because a view asks once per run it
+            // builds and its callback is a stable instance -- see the caller.
+            var waiters = _waiters.GetOrAdd(glyphTypeface, _ => new List<Action<bool[]?>>());
+            var startProbe = false;
+            lock (waiters)
+            {
+                // Re-checked under the lock: the probe can complete between the read above and
+                // here, and a callback registered after completion would never fire.
+                if (_alphabets.TryGetValue(glyphTypeface, out alphabet))
+                    return true;
+
+                startProbe = waiters.Count == 0;
+                if (!waiters.Contains(whenKnown))
+                    waiters.Add(whenKnown);
+            }
+
+            if (startProbe)
             {
                 var face = glyphTypeface;
                 Task.Run(() =>
                 {
-                    var result = Probe(face);
-                    _alphabets[face] = result;
-                    _probing.TryRemove(face, out _);
+                    var result = ProbeOverride?.Invoke(face) ?? Probe(face);
+
+                    Action<bool[]?>[] toCall;
+                    lock (waiters)
+                    {
+                        // The answer is published INSIDE the lock, so a late registrant either
+                        // sees it in its own locked re-check or made it into this snapshot.
+                        _alphabets[face] = result;
+                        _waiters.TryRemove(face, out _);
+                        toCall = waiters.ToArray();
+                        waiters.Clear();
+                    }
+
+                    // Only a real alphabet is announced: a null one changes nothing anyone drew.
                     if (result is not null)
-                        whenKnown(result);
+                    {
+                        foreach (var callback in toCall)
+                            callback(result);
+                    }
                 });
             }
 

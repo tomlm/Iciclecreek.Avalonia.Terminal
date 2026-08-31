@@ -541,11 +541,18 @@ namespace Iciclecreek.Terminal
             // calls back.
             var known = LigatureProbe.TryGetAlphabet(
                 new Typeface(FontFamily, style, weight),
-                _ => global::Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateRunCaches),
+                _onLigatureAlphabetKnown ??= _ => global::Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateRunCaches),
                 out var alphabet);
 
             return known && alphabet is not null && LigatureProbe.ContainsCandidate(text, alphabet);
         }
+
+        /// <summary>
+        /// One stable callback per view, not a lambda per ask: a view asks once per run it builds,
+        /// and the probe deduplicates waiters by delegate equality so each view is invalidated
+        /// exactly once when the alphabet arrives.
+        /// </summary>
+        private Action<bool[]?>? _onLigatureAlphabetKnown;
 
         public static readonly StyledProperty<XT.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalView, XT.Common.CursorStyle>(

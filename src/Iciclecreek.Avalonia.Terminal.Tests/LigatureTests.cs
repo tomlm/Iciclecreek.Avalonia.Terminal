@@ -83,6 +83,53 @@ public class LigatureTests
         Assert.That(alphabet, Is.Null);
     }
 
+    /// <summary>
+    /// Every caller waiting on a probe hears the answer, not just the one whose ask started it.
+    /// Two views sharing a face both cache unshaped runs while the probe runs; if only the winner
+    /// were invalidated, the other would keep displaying unligated text until its lines happened
+    /// to change. The probe is held still with the test override so both registrations
+    /// deterministically land mid-flight.
+    /// </summary>
+    [AvaloniaTest]
+    public void Every_waiter_hears_the_alphabet_not_just_the_first()
+    {
+        var gate = new ManualResetEventSlim(false);
+        var alphabet = new bool['~' + 1];
+        alphabet['-'] = alphabet['>'] = true;
+
+        LigatureProbe.ProbeOverride = _ => { gate.Wait(TimeSpan.FromSeconds(10)); return alphabet; };
+        LigatureProbe.ResetForTests();
+        try
+        {
+            // Distinct faces per test run are not available headless, so distinct CALLBACKS carry
+            // the point: register two while the probe is held open.
+            var typeface = new Typeface(new global::Avalonia.Media.FontFamily("every-waiter-test-face"));
+
+            var first = new ManualResetEventSlim(false);
+            var second = new ManualResetEventSlim(false);
+
+            Assert.That(LigatureProbe.TryGetAlphabet(typeface, _ => first.Set(), out _), Is.False,
+                "the first ask starts the probe and reports not-known");
+            Assert.That(LigatureProbe.TryGetAlphabet(typeface, _ => second.Set(), out _), Is.False,
+                "a second caller lands while the probe is in flight");
+
+            gate.Set();
+
+            Assert.That(first.Wait(TimeSpan.FromSeconds(10)), Is.True, "the starter was told");
+            Assert.That(second.Wait(TimeSpan.FromSeconds(10)), Is.True,
+                "the caller that did NOT start the probe was told too");
+
+            Assert.That(LigatureProbe.TryGetAlphabet(typeface, _ => { }, out var resolved), Is.True);
+            Assert.That(resolved, Is.SameAs(alphabet));
+        }
+        finally
+        {
+            LigatureProbe.ProbeOverride = null;
+            gate.Set();
+            LigatureProbe.ResetForTests();
+        }
+    }
+
     // ---- the switch -----------------------------------------------------------------------------
 
     [AvaloniaTest]
