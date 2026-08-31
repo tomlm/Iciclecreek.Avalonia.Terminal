@@ -298,6 +298,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowMoved(object? sender, XT.Events.TerminalEvents.WindowMovedEventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new WindowMovedEventArgs(e.X, e.Y)
@@ -330,6 +335,14 @@ namespace Iciclecreek.Terminal
             // Synchronously, before the post: Resized is raised inside Terminal.Resize, so this is
             // the only moment the flag set around the layout re-grid is still standing.
             if (_regridFromLayout)
+                return;
+
+            // DECCOLM asks the host to resize by the same route as CSI 8 t, so it answers to the
+            // same switch. Note what refusing does NOT undo: the emulator has already re-gridded to
+            // 132 columns, because that gate lives behind a mode the program sets for itself. The
+            // window keeps its width and the extra columns clip, which is the honest consequence of
+            // a host declining -- and the reason closing this properly needs the gate upstream.
+            if (!AllowWindowOps)
                 return;
 
             var cols = e.Cols;
@@ -367,6 +380,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
 
@@ -382,6 +400,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowMinimized(object? sender, EventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new RoutedEventArgs(WindowMinimizedEvent);
@@ -392,6 +415,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowMaximized(object? sender, EventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new RoutedEventArgs(WindowMaximizedEvent);
@@ -402,6 +430,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowRestored(object? sender, EventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new RoutedEventArgs(WindowRestoredEvent);
@@ -412,6 +445,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowRaised(object? sender, EventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new RoutedEventArgs(WindowRaisedEvent);
@@ -422,6 +460,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowLowered(object? sender, EventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new RoutedEventArgs(WindowLoweredEvent);
@@ -432,6 +475,11 @@ namespace Iciclecreek.Terminal
 
         private void OnTerminalWindowFullscreened(object? sender, EventArgs e)
         {
+            // Refused silently when the host has not granted window operations -- nothing is
+            // raised, so no host acts, and a bare TerminalView with its own handler is covered too.
+            if (!AllowWindowOps)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
                 var args = new RoutedEventArgs(WindowFullscreenedEvent);

@@ -105,6 +105,12 @@ namespace Iciclecreek.Terminal
                 nameof(ConvertEol),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.AllowWindowOpsProperty"/>
+        public static readonly StyledProperty<bool> AllowWindowOpsProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(AllowWindowOps),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
@@ -476,6 +482,13 @@ namespace Iciclecreek.Terminal
             set => SetValue(ConvertEolProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.AllowWindowOpsProperty"/>
+        public bool AllowWindowOps
+        {
+            get => GetValue(AllowWindowOpsProperty);
+            set => SetValue(AllowWindowOpsProperty, value);
+        }
+
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
         public bool UseSkiaRenderer
         {
@@ -730,6 +743,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
             _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
             _terminalControl.Bind(TerminalControl.ConvertEolProperty, this.GetObservable(ConvertEolProperty));
+            _terminalControl.Bind(TerminalControl.AllowWindowOpsProperty, this.GetObservable(AllowWindowOpsProperty));
             _terminalControl.Bind(TerminalControl.UseSkiaRendererProperty, this.GetObservable(UseSkiaRendererProperty));
             _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkProperty, this.GetObservable(CursorBlinkProperty));

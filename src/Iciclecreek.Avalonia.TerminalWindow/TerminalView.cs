@@ -600,6 +600,15 @@ namespace Iciclecreek.Terminal
                 defaultValue: true);
 
         /// <summary>
+        /// Off, like xterm's resource of the same name and like every flag in the emulator's own
+        /// <c>WindowOptions</c>: rearranging the user's desktop is opt-in.
+        /// </summary>
+        public static readonly StyledProperty<bool> AllowWindowOpsProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(AllowWindowOps),
+                defaultValue: false);
+
+        /// <summary>
         /// Off, as on every other terminal: the tty's line discipline owns this, not the emulator.
         /// </summary>
         public static readonly StyledProperty<bool> ConvertEolProperty =
@@ -1660,6 +1669,36 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(CursorBlinkProperty);
             set => SetValue(CursorBlinkProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets whether the program may move, resize or restack the window it is running in.
+        /// </summary>
+        /// <remarks>
+        /// <para>Covers the whole XTERM window-operation family this view forwards to its host --
+        /// move, resize (<c>CSI 8 t</c>), minimise, maximise, restore, raise, lower, fullscreen --
+        /// and DECCOLM's 80/132 switch, which asks for a resize by the same route. One switch rather
+        /// than eight, because the question a host is answering is a single one: may the program
+        /// rearrange the user's desktop.</para>
+        /// <para>Off by default, which is the convention already in force everywhere around it:
+        /// xterm's resource of this name defaults off, and every flag in the emulator's own
+        /// <c>WindowOptions</c> -- one per operation -- defaults off too, with this host enabling
+        /// only the four that REPORT. An application that can resize and raise its own window does
+        /// it at a moment the user did not choose, so it asks first.</para>
+        /// <para>Refusal is silent, as xterm's is: nothing is raised, so no host acts, and a bare
+        /// <see cref="TerminalView"/> with its own handler is covered as well as
+        /// <c>TerminalWindow</c>. Reports are NOT affected -- a program asking how big the window is
+        /// still gets a truthful answer, because refusing to be moved is not a reason to lie.</para>
+        /// <para>The consequence to know about is DECCOLM. Switching to 132 columns re-grids the
+        /// emulator before any of this is consulted, because that gate lives upstream behind a mode
+        /// the program sets for itself. While this is off the grid widens and the window does not,
+        /// so the extra columns are drawn past the edge and clipped -- which is what a host is
+        /// choosing when it declines. Turn this on to have the window follow instead.</para>
+        /// </remarks>
+        public bool AllowWindowOps
+        {
+            get => GetValue(AllowWindowOpsProperty);
+            set => SetValue(AllowWindowOpsProperty, value);
         }
 
         /// <summary>

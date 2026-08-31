@@ -96,6 +96,12 @@ namespace Iciclecreek.Terminal
                 nameof(ConvertEol),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.AllowWindowOpsProperty"/>
+        public static readonly StyledProperty<bool> AllowWindowOpsProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(AllowWindowOps),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalControl, bool>(
@@ -366,6 +372,13 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(ConvertEolProperty);
             set => SetValue(ConvertEolProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.AllowWindowOpsProperty"/>
+        public bool AllowWindowOps
+        {
+            get => GetValue(AllowWindowOpsProperty);
+            set => SetValue(AllowWindowOpsProperty, value);
         }
 
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>

@@ -25,7 +25,9 @@ public class ColumnModeResizeTests
 
     private static (TerminalView view, Window window) Realised()
     {
-        var view = new TerminalView { Process = "" };
+        // Opted in: the window resize DECCOLM asks for is off by default now, so a test about
+        // that resize has to be a host that permits it.
+        var view = new TerminalView { Process = "", AllowWindowOps = true };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
         window.UpdateLayout();
@@ -90,7 +92,9 @@ public class ColumnModeResizeTests
         // and anything else sharing the window. Computing it from the column count alone delivered
         // 130 columns inside an 8px padding to a program that had been told it had 132 -- the same
         // silent shortfall the whole change is about, arriving by another route.
-        var view = new TerminalView { Process = "" };
+        // Opted in: the window resize DECCOLM asks for is off by default now, so a test about
+        // that resize has to be a host that permits it.
+        var view = new TerminalView { Process = "", AllowWindowOps = true };
         var host = new Border { Padding = new Thickness(12, 0, 12, 0), Child = view };
         var window = new Window { Width = 800, Height = 600, Content = host };
         view.WindowResized += (_, e) => { window.Width = e.Width; window.Height = e.Height; };
