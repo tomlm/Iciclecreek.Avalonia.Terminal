@@ -99,6 +99,12 @@ namespace Iciclecreek.Terminal
                 nameof(Ligatures),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        public static readonly StyledProperty<bool> UseSkiaRendererProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(UseSkiaRenderer),
+                defaultValue: false);
+
         public static readonly StyledProperty<Color> CursorColorProperty =
             AvaloniaProperty.Register<TerminalWindow, Color>(
                 nameof(CursorColor),
@@ -457,6 +463,13 @@ namespace Iciclecreek.Terminal
             set => SetValue(LigaturesProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        public bool UseSkiaRenderer
+        {
+            get => GetValue(UseSkiaRendererProperty);
+            set => SetValue(UseSkiaRendererProperty, value);
+        }
+
         public XTerm.Common.CursorStyle CursorStyle
         {
             get => GetValue(CursorStyleProperty);
@@ -703,6 +716,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
             _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
+            _terminalControl.Bind(TerminalControl.UseSkiaRendererProperty, this.GetObservable(UseSkiaRendererProperty));
             _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkProperty, this.GetObservable(CursorBlinkProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkRateProperty, this.GetObservable(CursorBlinkRateProperty));

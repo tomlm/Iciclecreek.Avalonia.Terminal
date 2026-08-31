@@ -90,6 +90,12 @@ namespace Iciclecreek.Terminal
                 nameof(Ligatures),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        public static readonly StyledProperty<bool> UseSkiaRendererProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(UseSkiaRenderer),
+                defaultValue: false);
+
         // Cursor appearance. Real StyledProperties with the same defaults as TerminalView's, reaching the
         // view through the template — a forwarder would drop anything set before the template applied, which
         // for appearance properties is most of the time.
@@ -347,6 +353,13 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(LigaturesProperty);
             set => SetValue(LigaturesProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        public bool UseSkiaRenderer
+        {
+            get => GetValue(UseSkiaRendererProperty);
+            set => SetValue(UseSkiaRendererProperty, value);
         }
 
         public XTerm.Common.CursorStyle CursorStyle

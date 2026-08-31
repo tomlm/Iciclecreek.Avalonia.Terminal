@@ -46,6 +46,37 @@ namespace Iciclecreek.Terminal
         public bool HitTest(Point point) => new Rect(Bounds.Size).Contains(point);
 
         private XT.Terminal _terminal;
+
+        private readonly Skia.SnapshotBuilder _snapshotBuilder = new();
+        private readonly Skia.SkiaFontCache _skiaFonts = new();
+
+        /// <summary>
+        /// Whether the cell grid is drawn straight onto the Skia canvas instead of through
+        /// DrawingContext. Off by default — the classic path is untouched until a host opts in.
+        /// See the notes on TerminalSkiaLayer for what the direct path gives up.
+        /// </summary>
+        public static readonly StyledProperty<bool> UseSkiaRendererProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(UseSkiaRenderer),
+                defaultValue: false);
+
+        /// <summary>Whether the cell grid is drawn straight onto the Skia canvas. See <see cref="UseSkiaRendererProperty"/>.</summary>
+        public bool UseSkiaRenderer
+        {
+            get => GetValue(UseSkiaRendererProperty);
+            set => SetValue(UseSkiaRendererProperty, value);
+        }
+
+        /// <summary>
+        /// Releases the Skia faces and fonts when the view leaves the tree. They are native handles,
+        /// and a host that opens and closes terminals would otherwise hold one set per terminal until
+        /// the finalisers happened to run.
+        /// </summary>
+        protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            _skiaFonts.Dispose();
+            base.OnDetachedFromVisualTree(e);
+        }
         private FormattedText _measureText;
         private string? _currentDirectory;
         private double _charWidth;
@@ -1748,6 +1779,12 @@ namespace Iciclecreek.Terminal
                 // so dropped nothing at all. That is the gap, and it is why this is unconditional
                 // rather than only for the brushes that fail to convert.
                 InvalidateRunCaches();
+            }
+            else if (change.Property == UseSkiaRendererProperty)
+            {
+                // Nothing cached needs purging -- the classic path's run caches stay valid for a
+                // switch back -- but the frame on screen was drawn by the other path.
+                InvalidateVisual();
             }
             else if (change.Property == LigaturesProperty)
             {

@@ -329,6 +329,26 @@ namespace Iciclecreek.Terminal
             int viewportLines = _terminal.Rows;
             int startLine = viewportY;
             int endLine = Math.Min(_terminal.Buffer.Length, startLine + viewportLines);
+
+            // The direct renderer draws the cell grid onto the Skia canvas instead of recording a fill
+            // and a text draw per run. Everything after it — cursor, selection, the hovered link —
+            // still goes through DrawingContext and lands on top, because Custom() enqueues into the
+            // same list.
+            //
+            // The snapshot is taken HERE, on the UI thread. The operation runs during compositing, on
+            // another thread, while the pty read loop may be writing to the buffer; it must never
+            // touch the buffer or the palette itself.
+            if (UseSkiaRenderer && _charWidth > 0 && _charHeight > 0)
+            {
+                var snapshot = _snapshotBuilder.Build(
+                    _terminal, _palette, startLine, viewportLines, _terminal.Cols,
+                    _charWidth, _charHeight, FontSize, FontFamily?.Name ?? "monospace",
+                    GetValue(ForegroundProperty), surface, Ligatures);
+
+                context.Custom(new Skia.TerminalSkiaLayer(snapshot, _skiaFonts,
+                    new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight)));
+            }
+
             try
             {
                 // A block anchored ABOVE the viewport still hangs into it. The row pass below starts
@@ -368,7 +388,7 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
-                for (int y = startLine; y < endLine; y++)
+                for (int y = startLine; y < endLine && !UseSkiaRenderer; y++)
                 {
                     // The buffer can SHRINK underneath a render. CSI 3 J — what cmd.exe's `cls` sends —
                     // discards the entire scrollback, and it arrives on the PTY thread, so the bounds
