@@ -90,6 +90,12 @@ internal sealed class PushStream : Stream
     private int _consumed;      // how much of it has already gone
 
     public void Push(string text) => _queue.Add(Encoding.UTF8.GetBytes(text));
+
+    /// <summary>
+    /// Pushes raw bytes, so a test can put a chunk boundary anywhere — including the middle of a
+    /// multi-byte character, which is what a real pty read does whenever the read happens to end there.
+    /// </summary>
+    public void Push(byte[] bytes) => _queue.Add(bytes);
     public void Done() => _queue.CompleteAdding();
 
     public override int Read(byte[] buffer, int offset, int count)
@@ -130,6 +136,7 @@ internal sealed class PushConnection : IPtyConnection
     public Stream WriterStream { get; } = new MemoryStream();
 
     public void Push(string text) => _stream.Push(text);
+    public void Push(byte[] bytes) => _stream.Push(bytes);
     public void Done() => _stream.Done();
 
     public int ExitCode => 0;

@@ -161,7 +161,7 @@ namespace Iciclecreek.Terminal
             if (PendingHandoverBytes.ClaimOnAttach(connection) is { Length: > 0 } parked)
             {
                 var replayLatch = true;   // mid-session bytes; readiness must not re-announce
-                ConsumeOutputChunk(Encoding.UTF8.GetString(parked), ref replayLatch, _processCts.Token);
+                ConsumeOutputChunk(parked, ref replayLatch, _processCts.Token);
             }
 
             // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
@@ -418,7 +418,7 @@ namespace Iciclecreek.Terminal
         /// loop's token, which two of the posted callbacks compare against the CURRENT process's to
         /// refuse stale delivery — a replay passes the current one.
         /// </remarks>
-        private void ConsumeOutputChunk(string output, ref bool shellReadyPosted, CancellationToken cancellationToken)
+        private void ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken)
         {
 
             // Guarded so an unsubscribed terminal pays nothing: without it every chunk allocates a
@@ -439,7 +439,7 @@ namespace Iciclecreek.Terminal
                     // different reason: an escaping exception here propagates into ReadPtyOutputAsync
                     // and ends the read loop, leaving a live process with a frozen view and nothing
                     // reported.
-                    try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
+                    try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk)); }
                     catch { /* a sniffer must never kill the read loop */ }
                 }
                 else
@@ -452,7 +452,7 @@ namespace Iciclecreek.Terminal
                         if (_processCts?.Token != cancellationToken)
                             return;
 
-                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(output)); }
+                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk)); }
                         catch { /* a sniffer must never take the app down */ }
                     });
                 }
@@ -474,7 +474,12 @@ namespace Iciclecreek.Terminal
 
             lock (_terminalLock)
             {
-                _terminal.Write(output);
+                // Bytes straight through, no UTF-16 round trip. This fixes a real defect, not just
+                // an allocation: decoding each read on its own corrupts any multi-byte sequence the
+                // read boundary happens to split, and pty reads end wherever they end. The parser
+                // carries the partial sequence into the next chunk instead -- which is what
+                // OutputReceivedEventArgs.Bytes has been promising subscribers all along.
+                _terminal.Write(chunk.Span);
 
                 // See _inputStartRow. A change of row means the shell drew something new, so the
                 // recorded input start is stale — but where the prompt ENDS is not known until the
@@ -726,8 +731,14 @@ namespace Iciclecreek.Terminal
                         break;
                     }
 
-                    var output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    ConsumeOutputChunk(output, ref shellReadyPosted, cancellationToken);
+                    // Nothing is decoded here any more: the terminal takes bytes, and OutputReceived
+                    // carries bytes. The copy is only made when someone is listening -- `buffer` is
+                    // reused on the next iteration, and the dispatcher delivery outlives this one --
+                    // so an unsubscribed view allocates nothing per read at all.
+                    var chunk = OutputReceived != null
+                        ? new ReadOnlyMemory<byte>(buffer.AsSpan(0, bytesRead).ToArray())
+                        : buffer.AsMemory(0, bytesRead);
+                    ConsumeOutputChunk(chunk, ref shellReadyPosted, cancellationToken);
                 }
             }
             catch (OperationCanceledException)
