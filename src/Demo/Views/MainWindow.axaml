@@ -26,6 +26,12 @@
 				<MenuItem Header="_New" Click="OnNewTerminalWindowClicked"/>
 				<MenuItem Header="_Run..." Click="OnRunTerminalWindowClicked"/>
 			</MenuItem>
+			<!-- The direct renderer, composited: the cell grid drawn by the Skia layer with live
+			     Avalonia controls floating over it — the case that proves Custom() lands in the
+			     same display list as everything above it. -->
+			<MenuItem Header="_Skia Renderer">
+				<MenuItem Header="_New composited" Click="OnNewSkiaCompositedClicked"/>
+			</MenuItem>
 		</Menu>
 
 		<wm:WindowsPanel x:Name="Windows" Background="DarkGray"/>

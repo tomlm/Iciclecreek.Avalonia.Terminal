@@ -112,6 +112,64 @@ public partial class MainWindow : Window
     // realised no terminal at all. Driving it from the demo means that class of defect is visible the
     // next time someone runs the app.
 
+    /// <summary>
+    /// The direct renderer with Avalonia controls composited over it. The terminal's cell grid is
+    /// drawn by a Custom() Skia operation; the translucent panel, the live button and the border
+    /// are ordinary retained-mode controls layered above it in the same display list. If the
+    /// custom operation misbehaved -- drew over its bounds, or out of order -- this window is
+    /// where it would show.
+    /// </summary>
+    private void OnNewSkiaCompositedClicked(object? sender, RoutedEventArgs e)
+    {
+        var terminal = new TerminalControl
+        {
+            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
+            Ligatures = true,
+            UseSkiaRenderer = true,
+            Background = Avalonia.Media.Brushes.Black,
+            Foreground = Avalonia.Media.Brushes.LightGray,
+        };
+        terminal.Options = DemoOptions();
+
+        var clicks = 0;
+        var button = new Button { Content = "Composited button — 0 clicks" };
+        button.Click += (_, _) => button.Content = $"Composited button — {++clicks} clicks";
+
+        var overlay = new Border
+        {
+            Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(0xAA, 0x20, 0x30, 0x40)),
+            BorderBrush = Avalonia.Media.Brushes.CadetBlue,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(14),
+            Margin = new Thickness(16),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top,
+            Child = new StackPanel
+            {
+                Spacing = 8,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Avalonia controls over UseSkiaRenderer.\nThe grid below is the Skia layer;\nthis panel is retained-mode, translucent,\nand the button is live.",
+                        Foreground = Avalonia.Media.Brushes.White,
+                    },
+                    button,
+                },
+            },
+        };
+
+        var window = new Window
+        {
+            Title = "Skia renderer, composited",
+            Width = 900,
+            Height = 560,
+            Content = new Grid { Children = { terminal, overlay } },
+        };
+        window.Show(this);
+    }
+
     private void OnNewTerminalWindowClicked(object? sender, RoutedEventArgs e)
     {
         var terminalWindow = new TerminalWindow
