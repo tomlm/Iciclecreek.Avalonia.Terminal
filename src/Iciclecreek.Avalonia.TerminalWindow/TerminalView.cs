@@ -1910,6 +1910,10 @@ namespace Iciclecreek.Terminal
             // disposing on detach could pull native handles out from under an in-flight composite.
             _skiaFonts.Dispose();
 
+            // And the layer this view kept only to read its Unsupported report: it holds a snapshot,
+            // its rows, and through them any images those rows referenced.
+            _lastSkiaLayer = null;
+
             UnsubscribeTerminalEvents();
 
             // The two OnInitialized subscribes ONCE and re-attachment never restores, so they

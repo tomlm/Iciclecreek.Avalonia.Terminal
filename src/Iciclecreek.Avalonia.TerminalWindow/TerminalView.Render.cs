@@ -342,18 +342,33 @@ namespace Iciclecreek.Terminal
             // to draw exactly the rows the snapshot declined.
             Skia.TerminalSnapshot? skiaSnapshot = null;
 
-            // A custom draw operation only runs where Avalonia is on its Skia backend. Asking the
-            // compositor first, rather than discovering it inside the operation, is what keeps the
-            // opt-in from blanking the grid on any other backend: without this the classic loop was
-            // suppressed and the layer then declined to draw, leaving surface and overlays only.
-            // _skiaUnsupported latches when a layer reports the backend would not lease a canvas.
+            // A custom draw operation only draws where Avalonia is on its Skia backend, and there
+            // is no way to ask before enqueuing one -- so the layer reports afterwards and this
+            // reads the report BEFORE deciding, on the frame after the one that failed. Asking
+            // inside the else of the decision (as this first did) never runs: on any frame where
+            // the direct path applies, the if branch is taken and the report is never read, so a
+            // non-Skia backend stayed silently blank forever instead of falling back once.
+            if (_lastSkiaLayer is { Unsupported: true })
+            {
+                _skiaUnsupported = true;
+                _lastSkiaLayer = null;
+            }
+
+            // INSIDE a try of its own: this reads the live buffer without the lock, exactly as the
+            // classic loop does, and the classic loop's own catch is what keeps a concurrent write
+            // from turning a race into an unhandled exception out of Render. Building outside that
+            // protection gave the two paths different failure modes for the same race.
+            try
+            {
             if (UseSkiaRenderer && !_skiaUnsupported && _charWidth > 0 && _charHeight > 0)
             {
                 var snapshot = _snapshotBuilder.Build(
                     _terminal, _palette, startLine, viewportLines, _terminal.Cols,
                     _charWidth, _charHeight, FontSize, FontFamily?.Name ?? "monospace",
-                    GetValue(ForegroundProperty), surface, Ligatures,
+                    GetValue(ForegroundProperty), surface, RequestPaint, Ligatures,
                     _terminal.ReverseVideo, _cursorBlinkOn, _boldIsBright, _minimumContrast);
+
+                snapshot.RenderScale = scale;
 
                 var layer = new Skia.TerminalSkiaLayer(snapshot, _skiaFonts,
                     new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight));
@@ -362,12 +377,13 @@ namespace Iciclecreek.Terminal
                 skiaSnapshot = snapshot;
                 _lastSkiaLayer = layer;
             }
-            else if (_lastSkiaLayer is { Unsupported: true })
+            }
+            catch (Exception ex)
             {
-                // Learned last frame: this backend cannot lease a Skia canvas, so the direct path
-                // is off for the life of this view and the classic loop below draws everything.
-                _skiaUnsupported = true;
-                _lastSkiaLayer = null;
+                // A write landed mid-read. Draw this frame classically rather than losing it, and
+                // let the write that interrupted us ask for the next one.
+                Debug.WriteLine($"[TerminalView] Skia snapshot skipped: {ex.Message}");
+                skiaSnapshot = null;
             }
 
             try

@@ -55,6 +55,7 @@ namespace Iciclecreek.Terminal.Skia
             string fontFamily,
             IBrush? defaultForeground,
             IBrush? defaultBackground,
+            Action requestPaint,
             bool ligatures,
             bool reverseVideo,
             bool blinkOn,
@@ -88,7 +89,14 @@ namespace Iciclecreek.Terminal.Skia
                 }
 
                 // Still good? Then it is the same pixels, wherever on screen the line has moved to.
-                if (line.Cache is SnapshotRow cachedRow && cachedRow.Cols == cols)
+                //
+                // Except under DECSCNM, where the cache is bypassed in BOTH directions -- the same
+                // rule the classic path follows (see the cache read in CollectLineRuns and the
+                // refusal to store beside it). Reverse video is a whole-screen state that no line
+                // write announces, so a row built before it was set would stay un-inverted for as
+                // long as the line went untouched, and one built during it would stay inverted
+                // after it was cleared.
+                if (!reverseVideo && line.Cache is SnapshotRow cachedRow && cachedRow.Cols == cols)
                 {
                     snapshot.Rows[row] = cachedRow;
                     continue;
@@ -100,35 +108,54 @@ namespace Iciclecreek.Terminal.Skia
                 // being drawn wrong: a doubled row (DECDWL/DECDHL) has a transform this snapshot has
                 // no field for, and a line carrying OSC 66 sized runs is painted by the deferred
                 // block pass. Null here means "not mine"; TerminalView draws exactly these rows.
-                if (line.HasSizedRuns || line.LineAttribute != LineAttribute.Normal)
+                // Pictures go to the classic renderer too, and for more reasons than the two
+                // above put together: it plans a blit from the placement's pixel offsets and its
+                // per-cell scale, clips a partial edge cell instead of stretching it, re-uploads
+                // when an animation bumps its frame serial, suppresses the cell background under a
+                // backdrop placement, and skips the text a Sixel replaced. Reproducing all of that
+                // here would be a second implementation of the hardest part of the renderer, to
+                // speed up screens whose cost is a blit rather than glyphs.
+                if (line.HasImages || line.HasSizedRuns || line.LineAttribute != LineAttribute.Normal)
                 {
                     snapshot.Rows[row] = null;
                     snapshot.Deferred[row] = true;
                     continue;
                 }
 
-                // Same stamp-and-retry the classic path uses (see CollectLineRuns): the line is read
-                // without a lock, and a writer that clears Cache mid-read must not have its
-                // invalidation overwritten by the row this read produced -- that would cache a
-                // mixture of the old line and the new one, permanently.
-                var stamp = new object();
-                line.Cache = stamp;
+                // The same stamp-and-retry CollectLineRuns uses, including its retry count: the
+                // line is read without a lock, and a writer that clears Cache mid-read must not
+                // have its invalidation overwritten by the row this read produced -- that would
+                // cache a mixture of the old line and the new one, permanently. Bounded, because
+                // unbounded retries let a line being written continuously stall the frame.
+                const int Attempts = 3;
 
-                var built = new SnapshotRow(cols);
-                Fill(built, line, palette, cols, fallbackForeground, snapshot.Surface,
-                     reverseVideo, blinkOn, boldIsBright, minimumContrast);
-
-                if (!ReferenceEquals(line.Cache, stamp))
+                for (var attempt = 1; ; attempt++)
                 {
-                    // The line moved under the read. Publish nothing, draw what we have this frame,
-                    // and let the write that interrupted us request the next one.
-                    line.Cache = null;
-                    snapshot.Rows[row] = built;
-                    continue;
-                }
+                    var stamp = new object();
+                    line.Cache = stamp;
 
-                line.Cache = built;
-                snapshot.Rows[row] = built;
+                    var built = new SnapshotRow(cols);
+                    Fill(built, line, palette, cols, fallbackForeground, snapshot.Surface,
+                         reverseVideo, blinkOn, boldIsBright, minimumContrast);
+
+                    if (!ReferenceEquals(line.Cache, stamp))
+                    {
+                        if (attempt < Attempts)
+                            continue;
+
+                        // Out of attempts: draw what this read produced, cache nothing, and ask for
+                        // another frame ourselves rather than trusting the writer to do it.
+                        line.Cache = null;
+                        snapshot.Rows[row] = built;
+                        requestPaint();
+                        break;
+                    }
+
+                    // Not stored while the screen is inverted, for the reason above.
+                    line.Cache = reverseVideo ? null : built;
+                    snapshot.Rows[row] = built;
+                    break;
+                }
             }
 
             return snapshot;
@@ -178,11 +205,16 @@ namespace Iciclecreek.Terminal.Skia
 
                 // The readability floor, applied where the classic path applies it -- after the
                 // swaps, against the colour actually behind the glyph, so an inverse cell is
-                // measured against what it really sits on.
+                // measured against what it really sits on -- and skipped where the classic path
+                // skips it: a fully transparent backdrop has no single colour to measure against,
+                // and the box-drawing and powerline runs are exempt because their glyphs join into
+                // shapes with their neighbours and a nudged shade breaks the join mid-line.
+                // (A run over a picture cannot arise here: lines holding one are declined above.)
                 if (minimumContrast is { Active: true })
                 {
                     var behind = background == 0 ? surface : background;
-                    foreground = Argb(minimumContrast.Apply(FromArgb(foreground), FromArgb(behind)));
+                    if ((behind >> 24) == 0xFF && !MinimumContrast.IsExemptRun(cell.Content))
+                        foreground = Argb(minimumContrast.Apply(FromArgb(foreground), FromArgb(behind)));
                 }
 
                 target.CodePoint = cell.CodePoint;
@@ -256,58 +288,9 @@ namespace Iciclecreek.Terminal.Skia
                 col += span;
             }
 
-            // Pictures, gathered once per line rather than reconstructed from cells. Each run already
-            // carries its source rectangle, so the render thread has nothing to compute and nothing to
-            // coalesce — a run IS the coalesced thing.
-            //
-            // The strong reference is taken HERE, on the UI thread, so a frame in flight keeps its
-            // picture alive even if the buffer drops it a moment later.
-            if (line.HasImages)
-            {
-                // Ordered by z the way the classic renderer's OrderedPlacements does, and stable
-                // within a z so equal placements keep their age order.
-                var placements = line.Placements;
-                var ordered = placements.Count > 1
-                    ? placements.OrderBy(p => p.ZIndex).ToList()
-                    : (System.Collections.Generic.IReadOnlyList<XTerm.Graphics.LinePlacement>)placements;
-
-                foreach (var placement in ordered)
-                {
-                    // By ID, not by column: two placements can overlap, and asking the line what
-                    // image sits at a column answers with the topmost one -- which is how a run
-                    // ended up pointing at another placement's pixels.
-                    var image = ImageFor(line, placement);
-                    if (image is null)
-                        continue;
-
-                    row.AddRun(new SnapshotImageRun(
-                        row.AddImage(image),
-                        placement.Column,
-                        placement.Cols,
-                        placement.SrcX,
-                        placement.SrcY,
-                        placement.SrcWidth,
-                        placement.SrcHeight,
-                        placement.ZIndex));
-                }
-            }
-
-        }
-
-        /// <summary>
-        /// The image a placement names, found among the ones its line holds -- the same by-id lookup
-        /// the classic renderer's ImageFor does, for the same reason: a line holds one or two images
-        /// and a placement refers to one of them by name, not by position.
-        /// </summary>
-        private static XTerm.Graphics.TerminalImage? ImageFor(BufferLine line, XTerm.Graphics.LinePlacement placement)
-        {
-            foreach (var image in line.Images)
-            {
-                if (image.Id == placement.ImageId)
-                    return image;
-            }
-
-            return null;
+            // No picture runs are collected here. A line holding one is declined above and drawn by
+            // the classic renderer; see the note there for why its geometry is not worth a second
+            // implementation.
         }
 
         /// <summary>True when the cell's text is not simply its codepoint rendered.</summary>

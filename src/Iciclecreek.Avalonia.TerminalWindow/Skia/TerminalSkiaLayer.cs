@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Rendering.SceneGraph;
@@ -68,23 +69,48 @@ namespace Iciclecreek.Terminal.Skia
                 // already skipped the classic rows on the strength of it. Say so: the view reads
                 // this, gives up on the direct path for good, and repaints classically. One frame
                 // of an unpainted grid, once, instead of a permanently empty terminal.
-                Unsupported = true;
+                Volatile.Write(ref _unsupported, 1);
                 return;
             }
 
-            using var lease = feature.Lease();
-            Draw(lease.SkCanvas);
+            // The cache is owned by a view that may be disposing on the UI thread right now.
+            // Entering says "a composite is using this"; a cache already being disposed says no
+            // and this frame draws nothing, which is the right answer for a dead terminal.
+            if (!_fonts.TryEnter())
+                return;
+
+            try
+            {
+                using var lease = feature.Lease();
+                Draw(lease.SkCanvas);
+            }
+            finally
+            {
+                _fonts.Leave();
+            }
         }
 
         /// <summary>
         /// Set by <see cref="Render"/> when the backend would not lease a Skia canvas. Read by
         /// TerminalView on the next frame, which then abandons the direct path permanently.
         /// </summary>
-        public bool Unsupported { get; private set; }
+        public bool Unsupported => Volatile.Read(ref _unsupported) != 0;
+
+        private int _unsupported;
+
+        /// <summary>
+        /// To the device pixel grid, exactly as the classic path's Snap does. Without it the cell
+        /// grid and the overlays still drawn over it -- selection, search highlights, the cursor,
+        /// all of which ARE snapped -- disagree by up to a pixel at fractional display scales, and
+        /// the disagreement accumulates down the screen.
+        /// </summary>
+        private static float Snap(double value, double scale) =>
+            (float)(Math.Round(value * scale, MidpointRounding.AwayFromZero) / scale);
 
         private void Draw(SKCanvas canvas)
         {
             var snapshot = _snapshot;
+            var scale = snapshot.RenderScale;
             var cw = (float)snapshot.CellWidth;
             var ch = (float)snapshot.CellHeight;
 
@@ -107,7 +133,7 @@ namespace Iciclecreek.Terminal.Skia
                 if (row is null)
                     continue;
 
-                var y = rowIndex * ch;
+                var y = Snap(rowIndex * ch, scale);
                 var col = 0;
 
                 while (col < snapshot.Cols)
@@ -120,17 +146,23 @@ namespace Iciclecreek.Terminal.Skia
 
                     if (background != 0)
                     {
+                        // Both edges snapped, then subtracted: snapping the width instead would let
+                        // adjacent spans round apart and show a hairline of surface between them.
+                        var left = Snap(start * cw, scale);
+                        var right = Snap(col * cw, scale);
+                        var bottom = Snap((rowIndex + 1) * ch, scale);
+
                         paint.Color = new SKColor(background);
-                        canvas.DrawRect(start * cw, y, (col - start) * cw, ch, paint);
+                        canvas.DrawRect(left, y, right - left, bottom - y, paint);
                     }
                 }
             }
 
-            // Images, drawn in two passes around the glyphs and ordered by z the way the classic
-            // renderer orders them: a placement with negative z sits under the text (an ordinary
-            // picture printed over), one with non-negative z covers it (a Kitty overlay). The
-            // snapshot carries each run's z so this split needs no second look at the buffer.
-            DrawImages(canvas, snapshot, cw, ch, under: true);
+            // No image pass. A line holding a picture is declined by the builder and drawn by the
+            // classic renderer, which already plans the blit from the placement's pixel offsets and
+            // per-cell scale, clips a partial edge cell, re-uploads on an animation's frame serial,
+            // and suppresses the cell background under a backdrop. Reproducing that here would be a
+            // second implementation of the subtlest part of the renderer.
 
             // Then glyphs.
             var baseline = _fonts.Baseline(snapshot.FontFamily, snapshot.FontSize, SnapshotFlags.None);
@@ -147,7 +179,7 @@ namespace Iciclecreek.Terminal.Skia
                 if (row is null)
                     continue;
 
-                var y = rowIndex * ch + baseline;
+                var y = Snap(rowIndex * ch, scale) + baseline;
 
                 for (var col = 0; col < snapshot.Cols; col++)
                 {
@@ -171,7 +203,12 @@ namespace Iciclecreek.Terminal.Skia
                     // background above has already been painted; only decorations can still make an
                     // empty cell visible.
                     var blank = cell.ClusterIndex < 0 && (cell.CodePoint == 0 || cell.CodePoint == ' ');
-                    var decorated = (cell.Flags & (SnapshotFlags.Underline | SnapshotFlags.Strikethrough | SnapshotFlags.Overline)) != 0;
+                    // Concealed text hides its decorations too: the classic path derives the
+                    // underline brush from the post-conceal (transparent) foreground and sets the
+                    // strikethrough on a FormattedText drawn in it, so SGR 8 takes the lot. An
+                    // underline left visible under a concealed password shows where it is.
+                    var decorated = (cell.Flags & SnapshotFlags.Conceal) == 0
+                        && (cell.Flags & (SnapshotFlags.Underline | SnapshotFlags.Strikethrough | SnapshotFlags.Overline)) != 0;
 
                     if (blank && !decorated)
                         continue;
@@ -186,7 +223,7 @@ namespace Iciclecreek.Terminal.Skia
                     if (!blank)
                     {
                         var font = _fonts.For(snapshot.FontFamily, snapshot.FontSize, cell.Flags);
-                        var x = col * cw;
+                        var x = Snap(col * cw, scale);
 
                         // SGR 2 at the same 40% the classic path uses.
                         paint.Color = (cell.Flags & SnapshotFlags.Dim) != 0
@@ -213,63 +250,9 @@ namespace Iciclecreek.Terminal.Skia
                             : new SKColor(cell.Foreground);
 
                         DrawDecorations(canvas, paint, cell.Flags, (XTerm.Common.UnderlineStyle)cell.UnderlineStyle,
-                                        underlineColor, col * cw, rowIndex * ch, cw * Math.Max(1, (int)cell.Width), ch);
+                                        underlineColor, Snap(col * cw, scale), Snap(rowIndex * ch, scale),
+                                        cw * Math.Max(1, (int)cell.Width), ch);
                     }
-                }
-            }
-
-            // And the placements that sit ABOVE the text.
-            DrawImages(canvas, snapshot, cw, ch, under: false);
-        }
-
-        /// <summary>
-        /// One pass of picture runs: the ones below the text (<paramref name="under"/>) or the ones
-        /// above it. Splitting on z is what lets a Kitty overlay cover glyphs while an ordinary
-        /// picture stays behind them.
-        /// </summary>
-        private void DrawImages(SKCanvas canvas, TerminalSnapshot snapshot, float cw, float ch, bool under)
-        {
-            for (var rowIndex = 0; rowIndex < snapshot.RowCount; rowIndex++)
-            {
-                var row = snapshot.Rows[rowIndex];
-                if (row is null || row.RunCount == 0)
-                    continue;
-
-                var y = rowIndex * ch;
-
-                for (var i = 0; i < row.RunCount; i++)
-                {
-                    ref var run = ref row.Runs[i];
-
-                    if (under != run.ZIndex < 0)
-                        continue;
-
-                    var visibleCols = Math.Min(run.Cols, snapshot.Cols - run.Column);
-                    if (visibleCols <= 0)
-                        continue;
-
-                    var image = row.Images[run.ImageIndex];
-                    if (_fonts.Upload(image) is not { } uploaded)
-                        continue;
-
-                    // Clip the source to match, so narrowing shows less of the picture rather than
-                    // squeezing all of it into fewer columns.
-                    var srcWidth = run.Cols > 0
-                        ? (int)Math.Round(run.SrcWidth * (visibleCols / (double)run.Cols))
-                        : 0;
-
-                    srcWidth = Math.Min(srcWidth, image.PixelWidth - run.SrcX);
-                    var srcHeight = Math.Min(run.SrcHeight, image.PixelHeight - run.SrcY);
-
-                    if (srcWidth <= 0 || srcHeight <= 0)
-                        continue;
-
-                    var src = new SKRect(run.SrcX, run.SrcY, run.SrcX + srcWidth, run.SrcY + srcHeight);
-                    var dest = new SKRect(
-                        run.Column * cw, y,
-                        (run.Column + visibleCols) * cw, y + ch);
-
-                    canvas.DrawImage(uploaded, src, dest);
                 }
             }
         }
@@ -419,12 +402,12 @@ namespace Iciclecreek.Terminal.Skia
                 paint.Color = textColor;
             }
 
+            // Strikethrough OR overline, never both -- GetTextDecorations returns one collection
+            // and strikethrough wins when a cell carries both, so drawing the pair here put a bar
+            // on a cell the other path gives one.
             if ((flags & SnapshotFlags.Strikethrough) != 0)
                 canvas.DrawRect(x, y + cellHeight / 2f, cellWidth, thickness, paint);
-
-            // SGR 53, drawn where the classic path draws it: along the cell's top edge, in the
-            // text colour rather than the underline colour, which SGR 58 does not reach.
-            if ((flags & SnapshotFlags.Overline) != 0)
+            else if ((flags & SnapshotFlags.Overline) != 0)
                 canvas.DrawRect(x, y, cellWidth, thickness, paint);
         }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -58,7 +59,10 @@ namespace Iciclecreek.Terminal.Skia
 
         public SKFont For(string family, double size, SnapshotFlags flags)
         {
-            var style = flags & (SnapshotFlags.Bold | SnapshotFlags.Italic);
+            // Dim is part of the FACE, not only the alpha: the classic path maps SGR 2 to
+            // FontWeight.Thin, so a dim run drawn at normal weight here came out heavier than the
+            // same text on the other path.
+            var style = flags & (SnapshotFlags.Bold | SnapshotFlags.Italic | SnapshotFlags.Dim);
             return _fonts.GetOrAdd((family, (float)size, style),
                 key => new SKFont(Face(key.Family, key.Style), key.Size) { Subpixel = true });
         }
@@ -67,7 +71,9 @@ namespace Iciclecreek.Terminal.Skia
         {
             return _faces.GetOrAdd((family, style), key =>
             {
-                var weight = (key.Style & SnapshotFlags.Bold) != 0 ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
+                var weight = (key.Style & SnapshotFlags.Bold) != 0 ? SKFontStyleWeight.Bold
+                           : (key.Style & SnapshotFlags.Dim) != 0 ? SKFontStyleWeight.Thin
+                           : SKFontStyleWeight.Normal;
                 var slant = (key.Style & SnapshotFlags.Italic) != 0 ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
 
                 // A FAMILY CHAIN, not one name. Avalonia's FontFamily is comma-separated -- the
@@ -428,6 +434,10 @@ namespace Iciclecreek.Terminal.Skia
                     var face = SKTypeface.FromFamilyName(family);
                     if (face is not null && !IsLastResort(face) && face.ContainsGlyph(codePoint))
                         return face;
+
+                    // Same as the Nerd Font sweep above: a rejected candidate is dropped now.
+                    // This loop walks EVERY remaining family, so it is the bigger leak of the two.
+                    face?.Dispose();
                 }
             }
             catch
@@ -485,7 +495,51 @@ namespace Iciclecreek.Terminal.Skia
             return uploaded;
         }
 
+        /// <summary>
+        /// Draw operations currently inside this cache, and whether disposal is owed once they
+        /// leave. The cache is disposed from the UI thread while the render thread may be halfway
+        /// through a composite that holds it: freeing an SKFont there is a native access violation,
+        /// not a managed exception, so the last one out does the freeing.
+        /// </summary>
+        private int _inFlight;
+        private int _disposeRequested;
+
+        /// <summary>
+        /// Marks a draw as using this cache. Returns false when the cache is already being disposed,
+        /// in which case the caller must draw nothing.
+        /// </summary>
+        internal bool TryEnter()
+        {
+            Interlocked.Increment(ref _inFlight);
+
+            if (Volatile.Read(ref _disposeRequested) != 0)
+            {
+                Leave();
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>Ends what <see cref="TryEnter"/> began, freeing the cache if it is owed.</summary>
+        internal void Leave()
+        {
+            if (Interlocked.Decrement(ref _inFlight) == 0 && Volatile.Read(ref _disposeRequested) != 0)
+                Free();
+        }
+
         public void Dispose()
+        {
+            // Announce first, so a draw that has not started yet declines, then free only if no
+            // draw is inside. One that IS inside frees on its way out.
+            if (Interlocked.Exchange(ref _disposeRequested, 1) != 0)
+                return;
+
+            if (Volatile.Read(ref _inFlight) == 0)
+                Free();
+        }
+
+        private void Free()
         {
             // Only what this cache CREATED is disposed.
             //
@@ -504,6 +558,9 @@ namespace Iciclecreek.Terminal.Skia
             _faces.Clear();
             _fallback.Clear();
             _baselines.Clear();
+            _shapedRuns.Clear();
+            _ligatureAlphabet.Clear();
+            _images.Clear();
         }
     }
 }

@@ -231,6 +231,14 @@ namespace Iciclecreek.Terminal.Skia
         /// <summary>Whether to draw the font's ligatures. See <c>TerminalView.Ligatures</c>.</summary>
         public bool Ligatures = true;
 
+        /// <summary>
+        /// The display's render scaling, so this path can snap to the device pixel grid the way the
+        /// classic one does. Without it the grid and the overlays that still draw over it --
+        /// selection, search highlight, cursor -- disagree by up to a pixel at fractional scales,
+        /// and the disagreement grows down the screen.
+        /// </summary>
+        public double RenderScale = 1.0;
+
         /// <summary>The surface colour behind the grid, as resolved for the frame. Never painted
         /// here -- TerminalView.Render has already filled it -- but inverse cells resolve against
         /// it, so the value has to travel with the frame.</summary>
