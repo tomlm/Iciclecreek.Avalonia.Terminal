@@ -473,6 +473,69 @@ namespace Iciclecreek.Terminal
                 nameof(CursorColor),
                 defaultValue: Colors.White);
 
+        /// <summary>
+        /// Whether the font's programming ligatures are drawn. On by default.
+        /// </summary>
+        /// <remarks>
+        /// <para>A switch because a ligature is a taste people hold opinions about: a joined
+        /// ligature hides how many characters are actually there, which some people want and
+        /// others find intolerable in code they are editing.</para>
+        /// <para>A font without them is unaffected either way — nothing to turn off, and nothing
+        /// is spent looking: see <see cref="LigatureProbe"/>.</para>
+        /// </remarks>
+        public static readonly StyledProperty<bool> LigaturesProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(Ligatures),
+                defaultValue: true);
+
+        /// <summary>Whether the font's programming ligatures are drawn. See <see cref="LigaturesProperty"/>.</summary>
+        public bool Ligatures
+        {
+            get => GetValue(LigaturesProperty);
+            set => SetValue(LigaturesProperty, value);
+        }
+
+        /// <summary>
+        /// Turns the font's ligatures off for one piece of text, when the switch says so.
+        /// </summary>
+        /// <remarks>
+        /// <para>Only needed on the FormattedText path. Avalonia shapes that text, so ligatures
+        /// arrive whether or not anyone asked — turning them OFF is the work. The fast path never
+        /// needs this: it maps characters to glyphs one for one, so a ligature cannot form there,
+        /// which is also why a run that SHOULD ligate has to decline it — see the run builder.</para>
+        /// <para><c>calt</c> and <c>liga</c> both, because the two forms exist: programming fonts
+        /// use contextual alternates, and a text face that reached a terminal might use real
+        /// ligature substitution.</para>
+        /// </remarks>
+        private void ApplyLigatureSetting(FormattedText text)
+        {
+            if (!Ligatures)
+                text.SetFontFeatures(LigaturesOff);
+        }
+
+        /// <summary>Built once: a collection per run per frame would be an allocation for nothing.</summary>
+        private static readonly FontFeatureCollection LigaturesOff = new()
+        {
+            new FontFeature { Tag = "calt", Value = 0 },
+            new FontFeature { Tag = "liga", Value = 0 },
+        };
+
+        /// <summary>
+        /// Whether this text must reach the shaper for the ligature switch to be honoured. The
+        /// glyph-run fast path maps characters to glyphs one for one, so a ligature can never form
+        /// there; a run containing a character the font's ligature alphabet names has to take the
+        /// FormattedText path while the switch is on. Fonts without ligatures — most — have a null
+        /// alphabet and decline nothing, so they keep the fast path everywhere.
+        /// </summary>
+        private bool LigaturesWantShaping(string text, FontStyle style, FontWeight weight)
+        {
+            if (!Ligatures)
+                return false;
+
+            var alphabet = LigatureProbe.Alphabet(new Typeface(FontFamily, style, weight));
+            return alphabet is not null && LigatureProbe.ContainsCandidate(text, alphabet);
+        }
+
         public static readonly StyledProperty<XT.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalView, XT.Common.CursorStyle>(
                 nameof(CursorStyle),
@@ -1667,6 +1730,20 @@ namespace Iciclecreek.Terminal
                 // so dropped nothing at all. That is the gap, and it is why this is unconditional
                 // rather than only for the brushes that fail to convert.
                 InvalidateRunCaches();
+            }
+            else if (change.Property == LigaturesProperty)
+            {
+                // Every line's cached runs were built with the old setting, and the cache is replayed
+                // rather than rebuilt — so without this the switch takes effect only on lines that
+                // happen to change afterwards, which looks like it half worked.
+                for (int y = 0; y < _terminal.Buffer.Length; y++)
+                {
+                    var line = _terminal.Buffer.GetLine(y);
+                    if (line != null)
+                        line.Cache = null;
+                }
+
+                InvalidateVisual();
             }
             else if (change.Property == CursorStyleProperty)
             {
@@ -3309,12 +3386,16 @@ namespace Iciclecreek.Terminal
                 FormattedText? formattedText = null;
                 if (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null)
                 {
-                    glyphs = td == null ? TryBuildGlyphRun(text, cellCount, style, weight) : null;
+                    // A run the ligature switch cares about must reach the shaper, which the
+                    // fast path never does -- it maps characters to glyphs one for one.
+                    glyphs = td == null && !LigaturesWantShaping(text, style, weight)
+                        ? TryBuildGlyphRun(text, cellCount, style, weight) : null;
                     if (glyphs is null)
                     {
                         var typeface = new Typeface(FontFamily, style, weight);
                         formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
                                                           typeface, FontSize, foreground);
+                        ApplyLigatureSetting(formattedText);
                         if (td != null)
                             formattedText.SetTextDecorations(td);
                     }

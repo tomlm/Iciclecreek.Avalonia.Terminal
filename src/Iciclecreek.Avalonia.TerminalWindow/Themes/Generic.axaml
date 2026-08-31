@@ -55,6 +55,7 @@
                                        AutoScrollToBottom="{TemplateBinding AutoScrollToBottom}"
                                        TextDecorations="{TemplateBinding TextDecorations}"
                                        CursorColor="{TemplateBinding CursorColor}"
+                                       Ligatures="{TemplateBinding Ligatures}"
                                        CursorStyle="{TemplateBinding CursorStyle}"
                                        CursorBlink="{TemplateBinding CursorBlink}"
                                        CursorBlinkRate="{TemplateBinding CursorBlinkRate}"

@@ -92,6 +92,12 @@ namespace Iciclecreek.Terminal
                 nameof(CursorColor),
                 defaultValue: Colors.White);
 
+        /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
+        public static readonly StyledProperty<bool> LigaturesProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(Ligatures),
+                defaultValue: true);
+
         public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalControl, XTerm.Common.CursorStyle>(
                 nameof(CursorStyle),
@@ -336,6 +342,13 @@ namespace Iciclecreek.Terminal
         }
 
         /// <inheritdoc cref="TerminalView.CursorStyleProperty"/>
+        /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
+        public bool Ligatures
+        {
+            get => GetValue(LigaturesProperty);
+            set => SetValue(LigaturesProperty, value);
+        }
+
         public XTerm.Common.CursorStyle CursorStyle
         {
             get => GetValue(CursorStyleProperty);

@@ -1407,6 +1407,7 @@ namespace Iciclecreek.Terminal
                     var formatted = new FormattedText(
                         cell.Content, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
                         typeface, FontSize, foreground);
+                    ApplyLigatureSetting(formatted);
 
                     // The glyph is drawn at base size under a scale transform, exactly as
                     // DECDWL/DECDHL lines are — the transform is what makes it big, so hinting,
@@ -1587,6 +1588,7 @@ namespace Iciclecreek.Terminal
 
                         var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                         var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
+                        ApplyLigatureSetting(formattedText);
                         var td = cell.GetTextDecorations();
                         if (td != null)
                             formattedText.SetTextDecorations(td);

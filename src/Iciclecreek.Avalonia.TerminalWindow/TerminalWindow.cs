@@ -98,6 +98,12 @@ namespace Iciclecreek.Terminal
                 nameof(CursorColor),
                 defaultValue: Colors.White);
 
+        /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
+        public static readonly StyledProperty<bool> LigaturesProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(Ligatures),
+                defaultValue: true);
+
         public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalWindow, XTerm.Common.CursorStyle>(
                 nameof(CursorStyle),
@@ -444,6 +450,13 @@ namespace Iciclecreek.Terminal
         }
 
         /// <inheritdoc cref="TerminalView.CursorStyleProperty"/>
+        /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
+        public bool Ligatures
+        {
+            get => GetValue(LigaturesProperty);
+            set => SetValue(LigaturesProperty, value);
+        }
+
         public XTerm.Common.CursorStyle CursorStyle
         {
             get => GetValue(CursorStyleProperty);
@@ -689,6 +702,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
+            _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
             _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkProperty, this.GetObservable(CursorBlinkProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkRateProperty, this.GetObservable(CursorBlinkRateProperty));
