@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
 using Avalonia.Threading;
@@ -78,6 +79,34 @@ public class ColumnModeResizeTests
             var wanted = (int)System.Math.Ceiling(80 * view.CharWidth + System.Math.Max(0, view.GutterWidth));
             Assert.That(reports.Select(r => r.Width), Does.Contain(wanted),
                 "the switch back is a resize too, not just the switch out");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void The_request_covers_what_the_host_spends_around_the_control()
+    {
+        // The request is a WINDOW size but the columns only get what is left after padding, borders
+        // and anything else sharing the window. Computing it from the column count alone delivered
+        // 130 columns inside an 8px padding to a program that had been told it had 132 -- the same
+        // silent shortfall the whole change is about, arriving by another route.
+        var view = new TerminalView { Process = "" };
+        var host = new Border { Padding = new Thickness(12, 0, 12, 0), Child = view };
+        var window = new Window { Width = 800, Height = 600, Content = host };
+        view.WindowResized += (_, e) => { window.Width = e.Width; window.Height = e.Height; };
+        window.Show();
+        window.UpdateLayout();
+
+        try
+        {
+            view.Terminal.Write($"{Esc}[?40h{Esc}[?3h");
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            Assert.That(view.Terminal.Cols, Is.EqualTo(132),
+                "a program that asked for 132 columns has to end up with 132 of them, padding or no");
         }
         finally { window.Close(); }
     }

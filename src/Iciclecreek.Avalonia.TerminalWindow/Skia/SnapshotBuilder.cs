@@ -198,8 +198,15 @@ namespace Iciclecreek.Terminal.Skia
                 if (swapped)
                 {
                     // Once swapped the background is no longer optional: what it paints is the text
-                    // colour, so a cell with no background of its own takes the surface.
-                    var behind = background == 0 ? surface : background;
+                    // colour, so a cell with no background of its own takes the default one.
+                    //
+                    // The PALETTE's default, not the surface actually painted. Under DECSCNM the
+                    // surface is itself inverted, so swapping against it inverts a second time and
+                    // the glyph comes out the same colour as the fill behind it -- an inverted
+                    // screen rendered as a blank sheet, every character invisible.
+                    var behind = background == 0
+                        ? Argb(BufferCellExtensions.FromRgb(palette.Background))
+                        : background;
                     (foreground, background) = (behind, foreground);
                 }
 

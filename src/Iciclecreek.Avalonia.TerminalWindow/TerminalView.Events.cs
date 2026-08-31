@@ -342,8 +342,18 @@ namespace Iciclecreek.Terminal
                 if (_charWidth <= 0 || _charHeight <= 0)
                     return;
 
-                var width = (int)Math.Ceiling(cols * _charWidth + Math.Max(0, GutterWidth));
-                var height = (int)Math.Ceiling(rows * _charHeight);
+                // What the host spends AROUND this control has to be added back, or it comes out of
+                // the text area: the request is a window size, and the columns only get what is
+                // left after padding, borders and anything sharing the window. Asking for exactly
+                // 132 cells wide inside an 8px padding delivered 130 columns to a program that had
+                // been told it had 132 -- the same silent shortfall this whole change is about,
+                // just arriving by a different route.
+                var top = TopLevel.GetTopLevel(this);
+                var chromeWidth = top is not null ? Math.Max(0, top.Bounds.Width - Bounds.Width) : 0;
+                var chromeHeight = top is not null ? Math.Max(0, top.Bounds.Height - Bounds.Height) : 0;
+
+                var width = (int)Math.Ceiling(cols * _charWidth + Math.Max(0, GutterWidth) + chromeWidth);
+                var height = (int)Math.Ceiling(rows * _charHeight + chromeHeight);
 
                 var args = new WindowResizedEventArgs(width, height)
                 {
