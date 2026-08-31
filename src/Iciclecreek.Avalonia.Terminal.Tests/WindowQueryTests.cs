@@ -93,19 +93,22 @@ public class WindowQueryTests
     }
 
     /// <summary>
-    /// What the view CANNOT know on its own — where the window sits on the screen — still stays
-    /// unanswered without a handler: there the terminal genuinely has nothing to say, and
-    /// inventing an answer is worse than silence.
+    /// A position query nothing has handled is answered from the emulator's own virtual window
+    /// state — (0,0) until a program moves it with winop 3. This changed in XTerm.NET 2.0.0-rc006:
+    /// the emulator keeps a coherent virtual position precisely so a headless or unhandled host
+    /// still answers, the way xterm always answers. The old contract here — silence — now belongs
+    /// only to a host that turns GetWinPosition off.
     /// </summary>
     [AvaloniaTest]
-    public async Task An_unhandled_query_the_view_cannot_answer_stays_unanswered()
+    public async Task An_unhandled_position_query_is_answered_from_the_virtual_window()
     {
         var (view, pty, window) = LiveView();
 
         view.Terminal.Write(Esc + "[13t");
-        await Task.Delay(150);
 
-        Assert.That(pty.Written, Is.Empty);
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.Not.Empty,
+            "rc006 answers from the virtual window state instead of staying silent");
+        Assert.That(pty.Written, Does.StartWith(Esc + "[3;"), "CSI 3 ; x ; y t");
 
         window.Close();
     }
