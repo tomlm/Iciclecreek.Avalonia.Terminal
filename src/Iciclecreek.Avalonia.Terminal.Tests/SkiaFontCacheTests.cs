@@ -17,8 +17,26 @@ namespace Iciclecreek.Terminal.Tests;
 [TestFixture]
 public class SkiaFontCacheTests
 {
-    /// <summary>A monospace face present on every machine this is expected to run on.</summary>
-    private const string Mono = "Menlo";
+    /// <summary>
+    /// A monospace face the machine actually has. Hardcoding one name here made the suite a test
+    /// of the runner's font inventory: Menlo exists on macOS and nowhere else, so the Linux CI leg
+    /// failed five tests that had nothing to do with the cache. FromFamilyName never returns null
+    /// -- it hands back the default face under a different family name -- so a real hit is the one
+    /// whose FamilyName round-trips.
+    /// </summary>
+    private static readonly string Mono = ResolveMono();
+
+    private static string ResolveMono()
+    {
+        foreach (var candidate in new[] { "Menlo", "DejaVu Sans Mono", "Consolas", "Liberation Mono" })
+        {
+            using var face = SKTypeface.FromFamilyName(candidate);
+            if (face is not null && face.FamilyName == candidate)
+                return candidate;
+        }
+
+        return SKTypeface.Default.FamilyName;
+    }
 
     [Test]
     public void A_face_it_has_is_drawn_with_the_requested_font()
@@ -49,7 +67,10 @@ public class SkiaFontCacheTests
 
         var fallback = SKFontManager.Default.MatchCharacter(codePoint);
 
-        Assert.That(fallback, Is.Not.Null, "the system should offer some face for this codepoint");
+        // Assume, not Assert: a runner without CJK fonts installed has nothing to offer, and that
+        // is a fact about the machine, not a defect in the cache. The macOS leg always has them,
+        // so the fallback path stays covered somewhere on every CI run.
+        Assume.That(fallback, Is.Not.Null, "the system offers no face for this codepoint; nothing to verify");
         using var sized = new SKFont(fallback!, 12);
         Assert.That(sized.ContainsGlyph(codePoint), Is.True, "the face offered should actually have the glyph");
     }
