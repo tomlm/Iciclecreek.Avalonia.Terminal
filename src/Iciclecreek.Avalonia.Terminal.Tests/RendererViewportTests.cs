@@ -162,7 +162,13 @@ public class RendererViewportTests
         // Counted rather than exercised through each renderer, which needs pixels this platform has
         // no backend for. What it guards is the thing that actually went wrong: a fourth draw site
         // appearing without the call.
-        var source = System.IO.File.ReadAllText(SourcePath("TerminalView.cs"));
+        // TerminalView is partial classes now, and the call sites this counts live in more than
+        // one of its files -- so read them ALL, or a move-only split flips this test.
+        var source = string.Concat(
+            System.IO.Directory.GetFiles(
+                    System.IO.Path.GetDirectoryName(SourcePath("TerminalView.cs"))!, "TerminalView*.cs")
+                .OrderBy(f => f)
+                .Select(System.IO.File.ReadAllText));
 
         Assert.That(Occurrences(source, "ApplyConceal(foreground)"), Is.EqualTo(3),
             "every path that shapes a cell's text must conceal it; add the call, then update this count");
