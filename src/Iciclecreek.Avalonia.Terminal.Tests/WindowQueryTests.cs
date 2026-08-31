@@ -93,19 +93,25 @@ public class WindowQueryTests
     }
 
     /// <summary>
-    /// What the view CANNOT know on its own — where the window sits on the screen — still stays
-    /// unanswered without a handler: there the terminal genuinely has nothing to say, and
-    /// inventing an answer is worse than silence.
+    /// What the view CANNOT know on its own — where the window sits on the screen — is answered
+    /// from the position winop 3 last set, which is 0;0 until something sets it.
     /// </summary>
+    /// <remarks>
+    /// This used to assert silence, on the reasoning that inventing an answer is worse than saying
+    /// nothing. The emulator settled it the other way in its esctest sweep, because xterm answers
+    /// and silence is not free: a client that blocks waiting for CSI 3 t hangs on a terminal that
+    /// never replies. So the report is opt-in — <c>GetWinPosition</c>, which this fixture turns on
+    /// — and a host that knows better answers it, as the next test does.
+    /// </remarks>
     [AvaloniaTest]
-    public async Task An_unhandled_query_the_view_cannot_answer_stays_unanswered()
+    public async Task An_unhandled_position_query_falls_back_to_the_last_position_set()
     {
         var (view, pty, window) = LiveView();
 
         view.Terminal.Write(Esc + "[13t");
-        await Task.Delay(150);
 
-        Assert.That(pty.Written, Is.Empty);
+        Assert.That(await PtyWaits.AwaitOutput(pty), Is.EqualTo(Esc + "[3;0;0t"),
+            "CSI 3 ; x ; y t, and nothing has set a position");
 
         window.Close();
     }
