@@ -599,6 +599,14 @@ namespace Iciclecreek.Terminal
                 nameof(CursorBlink),
                 defaultValue: true);
 
+        /// <summary>
+        /// Off, as on every other terminal: the tty's line discipline owns this, not the emulator.
+        /// </summary>
+        public static readonly StyledProperty<bool> ConvertEolProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(ConvertEol),
+                defaultValue: false);
+
         public static readonly StyledProperty<int> CursorBlinkRateProperty =
             AvaloniaProperty.Register<TerminalView, int>(
                 nameof(CursorBlinkRate),
@@ -1123,12 +1131,15 @@ namespace Iciclecreek.Terminal
             // not exist yet, so the value is carried across here instead of being silently lost.
             options.Scrollback = _bufferSize;
 
-            // On Linux, the PTY doesn't convert LF to CRLF (ONLCR is disabled for raw mode),
-            // so we need XTerm to handle LF as implicit CRLF
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                options.ConvertEol = true;
-            }
+            // On Linux the pty does not convert LF to CRLF (ONLCR is off in raw mode), so the
+            // emulator has to treat a bare line feed as an implicit CRLF. That is still the default
+            // everywhere but Windows -- see ConvertEol, which now carries it.
+            //
+            // Through the PROPERTY rather than forced on, because forcing it took a decision away
+            // from the program. The emulator asks `Options.ConvertEol || LineFeedMode`, so a host
+            // that hard-set this left LNM half-wired: a program could set it and never reset it,
+            // and CSI 20 l did nothing on macOS and Linux for anyone.
+            options.ConvertEol = ConvertEol;
 
             // Foreground and Background ARE the terminal's default colour pair, so they are seeded into the
             // theme BEFORE the emulator is built rather than assigned afterwards. That is what makes them
@@ -1652,6 +1663,31 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Gets or sets whether a bare line feed also returns the carriage.
+        /// </summary>
+        /// <remarks>
+        /// <para>Off, which is where every other terminal leaves it: translating a bare line feed is
+        /// the tty line discipline's job (ONLCR on the slave), not the emulator's, and a pty that
+        /// sends bare line feeds to a terminal is a pty that has not been set up. This host used to
+        /// force it on for everything but Windows, which papered over that and cost more than it
+        /// paid.</para>
+        /// <para>What it cost: the emulator asks <c>Options.ConvertEol || LineFeedMode</c>, and LNM
+        /// is the second half of that -- so while this is on, a program can SET LNM but never RESET
+        /// it, and <c>CSI 20 l</c> does nothing at all. A program that resets LNM to move down a
+        /// line WITHOUT returning the carriage gets the carriage return anyway and writes its whole
+        /// line into column one. vttest's cursor-control screen builds a line exactly that way, and
+        /// it collapsed to a single character on macOS and Linux for every host.</para>
+        /// <para>Turn it on for a transport that really does deliver bare line feeds and cannot be
+        /// fixed at its own layer. Set it BEFORE the emulator is built to have it apply from the
+        /// first byte; changing it afterwards moves the live emulator too.</para>
+        /// </remarks>
+        public bool ConvertEol
+        {
+            get => GetValue(ConvertEolProperty);
+            set => SetValue(ConvertEolProperty, value);
+        }
+
+        /// <summary>
         /// Gets or sets the cursor blink rate in milliseconds.
         /// </summary>
         public int CursorBlinkRate
@@ -1789,6 +1825,12 @@ namespace Iciclecreek.Terminal
                 // Nothing cached needs purging -- the classic path's run caches stay valid for a
                 // switch back -- but the frame on screen was drawn by the other path.
                 InvalidateVisual();
+            }
+            else if (change.Property == ConvertEolProperty)
+            {
+                // Straight through to the live emulator: this is read on every line feed, so moving
+                // it takes effect on the next one rather than needing a rebuild.
+                _terminal.Options.ConvertEol = (bool)change.NewValue!;
             }
             else if (change.Property == LigaturesProperty)
             {

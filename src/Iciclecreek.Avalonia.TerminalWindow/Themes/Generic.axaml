@@ -56,6 +56,7 @@
                                        TextDecorations="{TemplateBinding TextDecorations}"
                                        CursorColor="{TemplateBinding CursorColor}"
                                        Ligatures="{TemplateBinding Ligatures}"
+                                       ConvertEol="{TemplateBinding ConvertEol}"
                                        UseSkiaRenderer="{TemplateBinding UseSkiaRenderer}"
                                        CursorStyle="{TemplateBinding CursorStyle}"
                                        CursorBlink="{TemplateBinding CursorBlink}"

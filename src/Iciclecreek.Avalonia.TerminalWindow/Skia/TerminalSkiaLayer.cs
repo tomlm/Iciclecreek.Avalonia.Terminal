@@ -318,9 +318,9 @@ namespace Iciclecreek.Terminal.Skia
 
             var builder = _blobs ??= new SKTextBlobBuilder();
             var blobRun = builder.AllocateHorizontalRun(font, glyphs.Length, 0);
-            glyphs.CopyTo(blobRun.GetGlyphSpan());
+            glyphs.CopyTo(blobRun.Glyphs);
 
-            var positions = blobRun.GetPositionSpan();
+            var positions = blobRun.Positions;
             for (var i = 0; i < glyphs.Length; i++)
                 positions[i] = (col + i) * cw;
 
