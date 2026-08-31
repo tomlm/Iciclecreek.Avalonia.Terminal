@@ -118,6 +118,34 @@ public class DoubledRowGeometryTests
     }
 
     [AvaloniaTest]
+    public void A_doubled_row_draws_the_last_cell_that_fits_at_an_odd_column_count()
+    {
+        // Cols / 2 truncates, and the cell it truncates away is the RIGHTMOST one on screen. An odd
+        // number of columns leaves half a cell of room at the right edge, and a doubled row that
+        // reaches the edge -- the border of a box, which is what vttest draws -- puts its last
+        // character exactly there. It vanished, and only at odd widths, so resizing the window
+        // appeared to fix and unfix it.
+        //
+        // Read from the source rather than rendered: what went wrong is the rounding rule itself,
+        // and asserting on pixels needs a backend not every CI machine has. The same technique the
+        // conceal guard in RendererViewportTests uses, for the same reason.
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src")))
+            dir = dir.Parent;
+        Assert.That(dir, Is.Not.Null, "could not find the repo root from " + AppContext.BaseDirectory);
+
+        var source = System.IO.File.ReadAllText(System.IO.Path.Combine(
+            dir!.FullName, "src", "Iciclecreek.Avalonia.TerminalWindow", "TerminalView.Render.cs"));
+
+        Assert.That(source, Does.Contain("int effectiveCols = (_terminal.Cols + 1) / 2;"),
+            "a doubled row must round its column count UP; _terminal.Cols / 2 drops the rightmost cell "
+            + "at odd widths, which is where a box loses its right border");
+
+        Assert.That(source, Does.Not.Contain("int effectiveCols = _terminal.Cols / 2;"),
+            "the truncating rule is the bug and must not come back");
+    }
+
+    [AvaloniaTest]
     public void A_row_that_is_not_there_is_treated_as_ordinary()
     {
         // Both helpers are asked about rows the caller believes are on screen, and a buffer that

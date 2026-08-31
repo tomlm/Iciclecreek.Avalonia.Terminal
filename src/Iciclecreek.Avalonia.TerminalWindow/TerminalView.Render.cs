@@ -1458,7 +1458,9 @@ namespace Iciclecreek.Terminal
                     foreground = cell.ApplyConceal(foreground);
                     foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
-                    if (swapped || cell.GetBackgroundColor(_palette).HasValue)
+                    // ReverseVideo for the reason the run path gives: a cancelled double swap leaves
+                    // the cell's background differing from the inverted surface.
+                    if (swapped || _terminal.ReverseVideo || cell.GetBackgroundColor(_palette).HasValue)
                         context.FillRectangle(background, box);
 
                     // A blank cell has nothing to shape, but its background belongs to the block and is
@@ -1550,7 +1552,16 @@ namespace Iciclecreek.Terminal
                 {
                     // Render the line content at normal size - the transform will scale it
                     // Only render the first half of the columns since they'll be doubled
-                    int effectiveCols = _terminal.Cols / 2;
+                    // Rounded UP, because the division truncates and the cell it truncates away is
+                    // the rightmost one on screen. An odd number of columns leaves half a cell of
+                    // room at the right edge; a doubled row that reaches the edge -- the border of
+                    // a box, which is exactly what vttest draws -- puts its last character there,
+                    // and walking Cols / 2 dropped it. The box lost its right-hand side, and only
+                    // at odd widths, which is why resizing the window appeared to fix and unfix it.
+                    //
+                    // Drawing it is safe: the PushClip above trims whatever hangs past the edge, so
+                    // the extra cell is clipped rather than spilling.
+                    int effectiveCols = (_terminal.Cols + 1) / 2;
 
                     // Pictures, which this path used to skip entirely -- so a picture on a line a
                     // program had doubled simply disappeared, and the text still stored in those
@@ -1662,7 +1673,8 @@ namespace Iciclecreek.Terminal
 
                         var position = new Point(startX, startYPos);
 
-                        if ((swapped || cell.GetBackgroundColor(_palette).HasValue) && !dwRunHasBackdrop)
+                        if ((swapped || _terminal.ReverseVideo || cell.GetBackgroundColor(_palette).HasValue)
+                            && !dwRunHasBackdrop)
                             context.FillRectangle(background, rect);
                         context.DrawText(formattedText, position);
 

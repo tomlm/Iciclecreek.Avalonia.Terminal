@@ -3481,7 +3481,16 @@ namespace Iciclecreek.Terminal
 
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
-                var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
+                //
+                // Under DECSCNM it has to paint anyway. "Not swapped" there means the cell inverted
+                // and the screen inverted, cancelling -- so its background is the ordinary default
+                // while the SURFACE is the inverted one, and the two are no longer the same colour.
+                // Leaving it unpainted drew a negative cell's text in the normal foreground on an
+                // inverted sheet: white on white, and vttest's four `negative` rows vanished from
+                // the light-background pattern.
+                var fill = swapped || _terminal.ReverseVideo || cell.GetBackgroundColor(_palette).HasValue
+                    ? background
+                    : null;
 
                 // Unless a picture is already there. Placements with a NEGATIVE z-index are drawn
                 // before the text precisely so the text sits on top of them -- and then every cell

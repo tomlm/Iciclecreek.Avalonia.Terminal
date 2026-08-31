@@ -175,6 +175,46 @@ public class RendererViewportTests
     }
 
     [AvaloniaTest]
+    public void An_inverse_cell_under_DECSCNM_still_paints_its_own_background()
+    {
+        // The cancelled double swap. SGR 7 inverts the cell and DECSCNM inverts the screen, so the
+        // two come out even and the cell is "not swapped" -- but its background is the ORDINARY
+        // default while the surface behind it is the inverted one. Skipping the fill on the grounds
+        // that nothing was swapped drew the glyph in the normal foreground on an inverted sheet:
+        // white on white, and vttest's four `negative` rows vanished from the light-background
+        // rendition pattern while the buffer held them all along.
+        var (view, window) = Realised();
+        try
+        {
+            var cell = CellAfter(view, $"{Esc}[?5h{Esc}[7mnegative");
+
+            Assert.That(cell.Attributes.IsInverse(), Is.True, "sanity: the cell carries SGR 7");
+            Assert.That(view.Terminal.ReverseVideo, Is.True, "sanity: and the screen is inverted");
+
+            // What the renderer resolves, in its own order: the two swaps cancel.
+            var palette = view.Terminal.Colors.Take();
+            IBrush foreground = cell.GetForegroundBrush(palette, Brushes.White);
+            IBrush background = cell.GetBackgroundBrush(palette, Brushes.Black);
+            var swapped = false;
+            if (cell.Attributes.IsInverse()) (foreground, background, swapped) = (background, foreground, !swapped);
+            if (view.Terminal.ReverseVideo) (foreground, background, swapped) = (background, foreground, !swapped);
+
+            Assert.That(swapped, Is.False, "the two inversions cancel -- that is what made this invisible");
+            Assert.That(cell.GetBackgroundColor(palette).HasValue, Is.False,
+                "and the cell carries no background of its own, so the old rule painted nothing");
+
+            // The rule the renderer now applies at all three draw sites.
+            var fills = swapped || view.Terminal.ReverseVideo || cell.GetBackgroundColor(palette).HasValue;
+            Assert.That(fills, Is.True, "under DECSCNM the fill is not optional");
+
+            Assert.That(((ISolidColorBrush)background).Color,
+                Is.Not.EqualTo(((ISolidColorBrush)foreground).Color),
+                "and what it paints has to differ from the text, or the cell is invisible either way");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
     public void Blink_hides_the_glyph_it_does_not_swap_the_cells_colours()
     {
         // SGR 5 used to be drawn by exchanging foreground and background, which made blinking text

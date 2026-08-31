@@ -209,6 +209,15 @@ namespace Iciclecreek.Terminal.Skia
                         : background;
                     (foreground, background) = (behind, foreground);
                 }
+                else if (reverseVideo && background == 0)
+                {
+                    // The cancelled double swap: the cell inverted, the screen inverted, and the two
+                    // came out even -- so this cell keeps the ORDINARY default background while the
+                    // surface behind it is the inverted one. A zero here means "leave the surface
+                    // alone", which would draw the glyph in the normal foreground on an inverted
+                    // sheet. Naming the colour is what keeps the cell visible.
+                    background = Argb(BufferCellExtensions.FromRgb(palette.Background));
+                }
 
                 // The readability floor, applied where the classic path applies it -- after the
                 // swaps, against the colour actually behind the glyph, so an inverse cell is
