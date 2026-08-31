@@ -174,6 +174,58 @@ public class RendererViewportTests
             "every path that shapes a cell's text must conceal it; add the call, then update this count");
     }
 
+    [AvaloniaTest]
+    public void Blink_hides_the_glyph_it_does_not_swap_the_cells_colours()
+    {
+        // SGR 5 used to be drawn by exchanging foreground and background, which made blinking text
+        // spend half its life looking exactly like SGR 7 text -- and made `blink negative` swap twice
+        // back to looking plain. vttest's rendition pattern shows both misreadings side by side.
+        var (view, window) = Realised();
+        try
+        {
+            var cell = CellAfter(view, $"{Esc}[5malarm");
+            Assert.That(cell.Attributes.IsBlink(), Is.True, "sanity: the emulator recorded the attribute");
+
+            Assert.That(cell.ApplyBlinkPhase(Brushes.Red, blinkOn: true), Is.SameAs(Brushes.Red),
+                "the lit half of the phase draws the text exactly as it was resolved");
+
+            var hidden = cell.ApplyBlinkPhase(Brushes.Red, blinkOn: false);
+            Assert.That(((ISolidColorBrush)hidden).Color.A, Is.EqualTo(0),
+                "and the dark half hides the glyph, leaving the background it sits on alone");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Text_that_does_not_blink_keeps_its_brush_on_both_halves_of_the_phase()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var cell = CellAfter(view, "steady");
+
+            Assert.That(cell.ApplyBlinkPhase(Brushes.Red, blinkOn: false), Is.SameAs(Brushes.Red));
+            Assert.That(cell.ApplyBlinkPhase(Brushes.Red, blinkOn: true), Is.SameAs(Brushes.Red));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void The_blink_phase_is_applied_everywhere_a_cell_is_drawn()
+    {
+        // The same guard as the conceal count above, and for the same reason: the swap this replaced
+        // lived at all three draw sites, so a fix at one of them would have left blinking text
+        // inverted on doubled rows and inside sized blocks.
+        var source = string.Concat(
+            System.IO.Directory.GetFiles(
+                    System.IO.Path.GetDirectoryName(SourcePath("TerminalView.cs"))!, "TerminalView*.cs")
+                .OrderBy(f => f)
+                .Select(System.IO.File.ReadAllText));
+
+        Assert.That(Occurrences(source, "ApplyBlinkPhase(foreground"), Is.EqualTo(3),
+            "every path that shapes a cell's text must apply the blink phase; add the call, then update this count");
+    }
+
     private static int Occurrences(string haystack, string needle)
     {
         var n = 0;

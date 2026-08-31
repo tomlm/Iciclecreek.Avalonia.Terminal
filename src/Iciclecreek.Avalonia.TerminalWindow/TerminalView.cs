@@ -3369,8 +3369,6 @@ namespace Iciclecreek.Terminal
                 // Apply terminal-wide reverse video mode (DECSCNM)
                 if (_terminal.ReverseVideo)
                     (foreground, background, swapped) = (background, foreground, !swapped);
-                if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
-                    (foreground, background, swapped) = (background, foreground, !swapped);
 
                 // Options.MinimumContrastRatio. Applied AFTER the swaps, because the pair being
                 // tested must be the pair being painted -- an inverted cell's readable colour is its
@@ -3403,6 +3401,7 @@ namespace Iciclecreek.Terminal
                 // Applied AFTER the swaps above -- see ApplyConceal, where the ordering is the
                 // substance of it rather than a detail.
                 foreground = cell.ApplyConceal(foreground);
+                foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
                 var style = cell.GetFontStyle();
                 var weight = cell.GetFontWeight();

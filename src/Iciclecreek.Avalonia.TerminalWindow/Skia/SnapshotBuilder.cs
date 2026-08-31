@@ -188,12 +188,12 @@ namespace Iciclecreek.Terminal.Skia
                 var foreground = cell.GetForegroundColor(palette, boldIsBright) is { } fg ? Argb(fg) : fallbackForeground;
                 var background = cell.GetBackgroundColor(palette) is { } bg ? Argb(bg) : 0u;
 
-                // The same three swaps the classic path applies, in the same order: a cell's own
-                // inverse, then DECSCNM for the whole screen, then the blink phase. Each is its own
-                // toggle -- two of them cancel -- so they are counted rather than short-circuited.
+                // The same two swaps the classic path applies, in the same order: a cell's own
+                // inverse, then DECSCNM for the whole screen. Each is its own toggle -- the two can
+                // cancel -- so they are counted rather than short-circuited. Blink is NOT among
+                // them: it hides the glyph rather than exchanging colours, below with conceal.
                 var swapped = cell.Attributes.IsInverse();
                 if (reverseVideo) swapped = !swapped;
-                if (cell.Attributes.IsBlink() && blinkOn) swapped = !swapped;
 
                 if (swapped)
                 {
@@ -222,6 +222,12 @@ namespace Iciclecreek.Terminal.Skia
                 target.Background = background;
                 target.Width = (byte)Math.Clamp(cell.Width, 0, 2);
                 target.Flags = FlagsFor(cell);
+
+                // The off half of the blink phase rides the conceal flag rather than one of its own:
+                // "draw the cell but not its glyph or its decorations" is exactly what conceal
+                // already means to the layer, and the two never need telling apart downstream.
+                if (!blinkOn && cell.Attributes.IsBlink())
+                    target.Flags |= SnapshotFlags.Conceal;
 
                 // A cell whose text is more than its codepoint — combining marks, a ZWJ sequence.
                 // Rare, so it costs a string only when it happens.

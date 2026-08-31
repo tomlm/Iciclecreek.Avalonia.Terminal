@@ -207,6 +207,23 @@ namespace Iciclecreek.Avalonia.Terminal
             => cell.Attributes.IsInvisible() ? Brushes.Transparent : swappedForeground;
 
         /// <summary>
+        /// SGR 5 on the off half of the blink phase, applied in the same slot as <see cref="ApplyConceal"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Blink alternates a glyph between drawn and not drawn. It does NOT exchange the cell's
+        /// colours, which is what this host used to do: swapping made blinking text spend half its life
+        /// looking exactly like SGR 7 text, and made `blink negative` double-invert back to looking
+        /// plain -- two renditions vttest's rendition pattern exists to keep distinct.</para>
+        /// <para>Transparent rather than the background colour, for ApplyConceal's reason and one more:
+        /// painting the glyph in its own background would cover an image placement behind the run
+        /// instead of letting it show through.</para>
+        /// <para>The background, the cursor's column and the copied text are all untouched -- blinking
+        /// is invisible, not absent.</para>
+        /// </remarks>
+        public static IBrush ApplyBlinkPhase(this BufferCell cell, IBrush swappedForeground, bool blinkOn)
+            => !blinkOn && cell.Attributes.IsBlink() ? Brushes.Transparent : swappedForeground;
+
+        /// <summary>
         /// The colour an underline is drawn in, or null when it follows the text.
         /// </summary>
         /// <remarks>
