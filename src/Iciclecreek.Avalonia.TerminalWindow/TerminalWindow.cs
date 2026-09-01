@@ -99,6 +99,24 @@ namespace Iciclecreek.Terminal
                 nameof(Ligatures),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.ConvertEolProperty"/>
+        public static readonly StyledProperty<bool> ConvertEolProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(ConvertEol),
+                defaultValue: false);
+
+        /// <inheritdoc cref="TerminalView.AllowWindowOpsProperty"/>
+        public static readonly StyledProperty<bool> AllowWindowOpsProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(AllowWindowOps),
+                defaultValue: false);
+
+        /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        public static readonly StyledProperty<bool> UseSkiaRendererProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(UseSkiaRenderer),
+                defaultValue: false);
+
         public static readonly StyledProperty<Color> CursorColorProperty =
             AvaloniaProperty.Register<TerminalWindow, Color>(
                 nameof(CursorColor),
@@ -457,6 +475,27 @@ namespace Iciclecreek.Terminal
             set => SetValue(LigaturesProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.ConvertEolProperty"/>
+        public bool ConvertEol
+        {
+            get => GetValue(ConvertEolProperty);
+            set => SetValue(ConvertEolProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.AllowWindowOpsProperty"/>
+        public bool AllowWindowOps
+        {
+            get => GetValue(AllowWindowOpsProperty);
+            set => SetValue(AllowWindowOpsProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        public bool UseSkiaRenderer
+        {
+            get => GetValue(UseSkiaRendererProperty);
+            set => SetValue(UseSkiaRendererProperty, value);
+        }
+
         public XTerm.Common.CursorStyle CursorStyle
         {
             get => GetValue(CursorStyleProperty);
@@ -703,6 +742,9 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
             _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
+            _terminalControl.Bind(TerminalControl.ConvertEolProperty, this.GetObservable(ConvertEolProperty));
+            _terminalControl.Bind(TerminalControl.AllowWindowOpsProperty, this.GetObservable(AllowWindowOpsProperty));
+            _terminalControl.Bind(TerminalControl.UseSkiaRendererProperty, this.GetObservable(UseSkiaRendererProperty));
             _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkProperty, this.GetObservable(CursorBlinkProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkRateProperty, this.GetObservable(CursorBlinkRateProperty));

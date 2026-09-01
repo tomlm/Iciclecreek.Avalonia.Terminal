@@ -46,6 +46,34 @@ namespace Iciclecreek.Terminal
         public bool HitTest(Point point) => new Rect(Bounds.Size).Contains(point);
 
         private XT.Terminal _terminal;
+
+        private readonly Skia.SnapshotBuilder _snapshotBuilder = new();
+        private readonly Skia.SkiaFontCache _skiaFonts = new();
+
+        /// <summary>
+        /// Whether the cell grid is drawn straight onto the Skia canvas instead of through
+        /// DrawingContext. Off by default — the classic path is untouched until a host opts in.
+        /// See the notes on TerminalSkiaLayer for what the direct path gives up.
+        /// </summary>
+        public static readonly StyledProperty<bool> UseSkiaRendererProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(UseSkiaRenderer),
+                defaultValue: false);
+
+        /// <summary>Whether the cell grid is drawn straight onto the Skia canvas. See <see cref="UseSkiaRendererProperty"/>.</summary>
+        public bool UseSkiaRenderer
+        {
+            get => GetValue(UseSkiaRendererProperty);
+            set => SetValue(UseSkiaRendererProperty, value);
+        }
+
+        /// <summary>Latched once a layer reports the backend will not lease a Skia canvas.</summary>
+        private bool _skiaUnsupported;
+
+        /// <summary>The layer enqueued last frame, asked afterwards whether it could draw.</summary>
+        private Skia.TerminalSkiaLayer? _lastSkiaLayer;
+
+
         private FormattedText _measureText;
         private string? _currentDirectory;
         private double _charWidth;
@@ -131,6 +159,13 @@ namespace Iciclecreek.Terminal
         // Cursor blinking
         private DispatcherTimer _cursorBlinkTimer;
         private bool _cursorBlinkOn = true;
+
+        /// <summary>
+        /// Set while ArrangeOverride is re-gridding the emulator to match the size the host already
+        /// gave this control, so <see cref="OnTerminalResized"/> can tell that resize from the ones a
+        /// program asks for with DECCOLM.
+        /// </summary>
+        private bool _regridFromLayout;
 
         // Selection state - tracks whether terminal is handling selection vs forwarding mouse to app
         private bool _isSelecting = false;
@@ -563,6 +598,23 @@ namespace Iciclecreek.Terminal
             AvaloniaProperty.Register<TerminalView, bool>(
                 nameof(CursorBlink),
                 defaultValue: true);
+
+        /// <summary>
+        /// Off, like xterm's resource of the same name and like every flag in the emulator's own
+        /// <c>WindowOptions</c>: rearranging the user's desktop is opt-in.
+        /// </summary>
+        public static readonly StyledProperty<bool> AllowWindowOpsProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(AllowWindowOps),
+                defaultValue: false);
+
+        /// <summary>
+        /// Off, as on every other terminal: the tty's line discipline owns this, not the emulator.
+        /// </summary>
+        public static readonly StyledProperty<bool> ConvertEolProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(ConvertEol),
+                defaultValue: false);
 
         public static readonly StyledProperty<int> CursorBlinkRateProperty =
             AvaloniaProperty.Register<TerminalView, int>(
@@ -1088,12 +1140,15 @@ namespace Iciclecreek.Terminal
             // not exist yet, so the value is carried across here instead of being silently lost.
             options.Scrollback = _bufferSize;
 
-            // On Linux, the PTY doesn't convert LF to CRLF (ONLCR is disabled for raw mode),
-            // so we need XTerm to handle LF as implicit CRLF
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                options.ConvertEol = true;
-            }
+            // Off by default on EVERY platform now -- see ConvertEol, which carries the host's
+            // choice. This used to be forced on everywhere but Windows, on the theory that a raw
+            // pty delivers bare line feeds; what it actually did was take LNM away from programs.
+            // The emulator asks `Options.ConvertEol || LineFeedMode`, so a host that hard-set this
+            // left LNM half-wired: a program could set it and never reset it, and CSI 20 l did
+            // nothing on macOS and Linux for anyone. Translating bare line feeds is the tty line
+            // discipline's job (ONLCR on the slave); a transport that truly cannot do it can turn
+            // the property on.
+            options.ConvertEol = ConvertEol;
 
             // Foreground and Background ARE the terminal's default colour pair, so they are seeded into the
             // theme BEFORE the emulator is built rather than assigned afterwards. That is what makes them
@@ -1116,6 +1171,16 @@ namespace Iciclecreek.Terminal
             options.WindowOptions.GetWinSizeChars = true;
             options.WindowOptions.GetWinSizePixels = true;
             options.WindowOptions.GetScreenSizePixels = true;
+
+            // One switch, both gates. The emulator has a flag per manipulation command, all off,
+            // and AllowWindowOps is this control's single advertised answer to "may the program
+            // rearrange the window" -- so a yes has to open the emulator's gate too. Without this
+            // the switch governed only DECCOLM (whose re-grid lives behind a mode the program sets
+            // for itself) and the XTERM move/resize/minimise family was discarded upstream before
+            // the gated handlers ever ran; a host that set the one documented property got one
+            // command out of nine.
+            if (AllowWindowOps)
+                EnableWindowManipulation(options.WindowOptions);
 
             _terminal = new XT.Terminal(options);
 
@@ -1617,6 +1682,85 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Gets or sets whether the program may move, resize or restack the window it is running in.
+        /// </summary>
+        /// <remarks>
+        /// <para>Covers the whole XTERM window-operation family this view forwards to its host --
+        /// move, resize (<c>CSI 8 t</c>), minimise, maximise, restore, raise, lower, fullscreen --
+        /// and DECCOLM's 80/132 switch, which asks for a resize by the same route. One switch rather
+        /// than eight, because the question a host is answering is a single one: may the program
+        /// rearrange the user's desktop.</para>
+        /// <para>Off by default, which is the convention already in force everywhere around it:
+        /// xterm's resource of this name defaults off, and every flag in the emulator's own
+        /// <c>WindowOptions</c> -- one per operation -- defaults off too, with this host enabling
+        /// only the four that REPORT. An application that can resize and raise its own window does
+        /// it at a moment the user did not choose, so it asks first.</para>
+        /// <para>Refusal is silent, as xterm's is: nothing is raised, so no host acts, and a bare
+        /// <see cref="TerminalView"/> with its own handler is covered as well as
+        /// <c>TerminalWindow</c>. Reports are NOT affected -- a program asking how big the window is
+        /// still gets a truthful answer, because refusing to be moved is not a reason to lie.</para>
+        /// <para>The consequence to know about is DECCOLM. Switching to 132 columns re-grids the
+        /// emulator before any of this is consulted, because that gate lives upstream behind a mode
+        /// the program sets for itself. While this is off the grid widens and the window does not,
+        /// so the extra columns are drawn past the edge and clipped -- which is what a host is
+        /// choosing when it declines. Turn this on to have the window follow instead.</para>
+        /// </remarks>
+        public bool AllowWindowOps
+        {
+            get => GetValue(AllowWindowOpsProperty);
+            set => SetValue(AllowWindowOpsProperty, value);
+        }
+
+        /// <summary>
+        /// Opens the emulator's own per-command gate for the window-manipulation family, which is
+        /// the second half of what <see cref="AllowWindowOps"/> promises: without these flags the
+        /// emulator discards the commands before this control's gated handlers ever see them.
+        /// </summary>
+        /// <remarks>
+        /// The manipulation commands only -- the Get* reports have their own defaults, set where the
+        /// emulator is built, and refusing to be moved is not a reason to stop answering questions.
+        /// The same set <c>TerminalWindow.EnableWindowCommands</c> turns on.
+        /// </remarks>
+        private static void EnableWindowManipulation(XTerm.Options.WindowOptions windowOptions)
+        {
+            windowOptions.SetWinPosition = true;
+            windowOptions.SetWinSizePixels = true;
+            windowOptions.SetWinSizeChars = true;
+            windowOptions.RaiseWin = true;
+            windowOptions.LowerWin = true;
+            windowOptions.RefreshWin = true;
+            windowOptions.RestoreWin = true;
+            windowOptions.MaximizeWin = true;
+            windowOptions.MinimizeWin = true;
+            windowOptions.FullscreenWin = true;
+        }
+
+        /// <summary>
+        /// Gets or sets whether a bare line feed also returns the carriage.
+        /// </summary>
+        /// <remarks>
+        /// <para>Off, which is where every other terminal leaves it: translating a bare line feed is
+        /// the tty line discipline's job (ONLCR on the slave), not the emulator's, and a pty that
+        /// sends bare line feeds to a terminal is a pty that has not been set up. This host used to
+        /// force it on for everything but Windows, which papered over that and cost more than it
+        /// paid.</para>
+        /// <para>What it cost: the emulator asks <c>Options.ConvertEol || LineFeedMode</c>, and LNM
+        /// is the second half of that -- so while this is on, a program can SET LNM but never RESET
+        /// it, and <c>CSI 20 l</c> does nothing at all. A program that resets LNM to move down a
+        /// line WITHOUT returning the carriage gets the carriage return anyway and writes its whole
+        /// line into column one. vttest's cursor-control screen builds a line exactly that way, and
+        /// it collapsed to a single character on macOS and Linux for every host.</para>
+        /// <para>Turn it on for a transport that really does deliver bare line feeds and cannot be
+        /// fixed at its own layer. Set it BEFORE the emulator is built to have it apply from the
+        /// first byte; changing it afterwards moves the live emulator too.</para>
+        /// </remarks>
+        public bool ConvertEol
+        {
+            get => GetValue(ConvertEolProperty);
+            set => SetValue(ConvertEolProperty, value);
+        }
+
+        /// <summary>
         /// Gets or sets the cursor blink rate in milliseconds.
         /// </summary>
         public int CursorBlinkRate
@@ -1749,12 +1893,32 @@ namespace Iciclecreek.Terminal
                 // rather than only for the brushes that fail to convert.
                 InvalidateRunCaches();
             }
+            else if (change.Property == UseSkiaRendererProperty)
+            {
+                // Nothing cached needs purging -- the classic path's run caches stay valid for a
+                // switch back -- but the frame on screen was drawn by the other path.
+                InvalidateVisual();
+            }
+            else if (change.Property == ConvertEolProperty)
+            {
+                // Straight through to the live emulator: this is read on every line feed, so moving
+                // it takes effect on the next one rather than needing a rebuild.
+                _terminal.Options.ConvertEol = (bool)change.NewValue!;
+            }
             else if (change.Property == LigaturesProperty)
             {
                 // Every line's cached runs were built with the old setting, and the cache is
                 // replayed rather than rebuilt — without the purge the switch would only reach
                 // lines that happen to change afterwards, which looks like it half worked.
                 InvalidateRunCaches();
+            }
+            else if (change.Property == AllowWindowOpsProperty && (bool)change.NewValue!)
+            {
+                // The same both-gates rule OnInitialized applies, for a host that says yes after the
+                // emulator is built. One-way on purpose: revoking is already handled by the gated
+                // handlers reading the CURRENT value, and TerminalWindow turns the emulator flags on
+                // unconditionally -- turning them off here would fight it for no protection gained.
+                EnableWindowManipulation(_terminal.Options.WindowOptions);
             }
             else if (change.Property == CursorStyleProperty)
             {
@@ -1869,6 +2033,17 @@ namespace Iciclecreek.Terminal
 
             _disposed = true;
 
+            // The Skia faces and fonts go HERE and not on visual detach. Detachment is not an
+            // ownership boundary for this view -- it happens during ordinary initialisation and
+            // during supported reparenting, both of which are followed by more painting -- and a
+            // custom draw operation already queued still holds this cache on the render thread, so
+            // disposing on detach could pull native handles out from under an in-flight composite.
+            _skiaFonts.Dispose();
+
+            // And the layer this view kept only to read its Unsupported report: it holds a snapshot,
+            // its rows, and through them any images those rows referenced.
+            _lastSkiaLayer = null;
+
             UnsubscribeTerminalEvents();
 
             // The two OnInitialized subscribes ONCE and re-attachment never restores, so they
@@ -1944,6 +2119,7 @@ namespace Iciclecreek.Terminal
             _terminal.TitleChanged += OnTerminalTitleChanged;
             _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
             _terminal.WindowMoved += OnTerminalWindowMoved;
+            _terminal.Resized += OnTerminalResized;
             _terminal.WindowResized += OnTerminalWindowResized;
             _terminal.WindowMinimized += OnTerminalWindowMinimized;
             _terminal.WindowMaximized += OnTerminalWindowMaximized;
@@ -1985,6 +2161,7 @@ namespace Iciclecreek.Terminal
             _terminal.TitleChanged -= OnTerminalTitleChanged;
             _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
+            _terminal.Resized -= OnTerminalResized;
             _terminal.WindowResized -= OnTerminalWindowResized;
             _terminal.WindowMinimized -= OnTerminalWindowMinimized;
             _terminal.WindowMaximized -= OnTerminalWindowMaximized;
@@ -3129,7 +3306,21 @@ namespace Iciclecreek.Terminal
                     // whenever a window is resized while anything is printing.
                     lock (_terminalLock)
                     {
-                        _terminal.Resize(newCols, newRows);
+                        // Marked as OURS for the duration. Terminal.Resize raises Resized
+                        // synchronously, and OnTerminalResized answers a program's resize by asking
+                        // the host for a new window size -- which is right for DECCOLM and wrong
+                        // here, where the grid was derived FROM the window size a moment ago.
+                        // Without the flag every drag of the window edge would bounce back as a
+                        // request to snap the window to an exact multiple of the cell.
+                        _regridFromLayout = true;
+                        try
+                        {
+                            _terminal.Resize(newCols, newRows);
+                        }
+                        finally
+                        {
+                            _regridFromLayout = false;
+                        }
                     }
 
                     // Outside it: this is a write to the pty, which has its own serialisation, and
@@ -3324,8 +3515,6 @@ namespace Iciclecreek.Terminal
                 // Apply terminal-wide reverse video mode (DECSCNM)
                 if (_terminal.ReverseVideo)
                     (foreground, background, swapped) = (background, foreground, !swapped);
-                if (cell.Attributes.IsBlink() && this._cursorBlinkOn)
-                    (foreground, background, swapped) = (background, foreground, !swapped);
 
                 // Options.MinimumContrastRatio. Applied AFTER the swaps, because the pair being
                 // tested must be the pair being painted -- an inverted cell's readable colour is its
@@ -3358,6 +3547,7 @@ namespace Iciclecreek.Terminal
                 // Applied AFTER the swaps above -- see ApplyConceal, where the ordering is the
                 // substance of it rather than a detail.
                 foreground = cell.ApplyConceal(foreground);
+                foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
                 var style = cell.GetFontStyle();
                 var weight = cell.GetFontWeight();
@@ -3373,6 +3563,13 @@ namespace Iciclecreek.Terminal
                     underlineBrush = cell.GetUnderlineColor(_palette) is { } uc
                         ? new ImmutableSolidColorBrush(uc)
                         : foreground;
+
+                    // Through the blink phase like the glyph. An underline WITHOUT SGR 58 borrows
+                    // the foreground and inherits its transparency for free; one WITH its own
+                    // colour resolved opaque here and stayed lit through the off half -- blinking
+                    // text under a steady underline, on the classic path only, while the Skia
+                    // renderer suppressed both together.
+                    underlineBrush = cell.ApplyBlinkPhase(underlineBrush, this._cursorBlinkOn);
                 }
 
                 // A run of blanks with no decoration has nothing to draw. Most of a terminal is exactly
@@ -3414,7 +3611,16 @@ namespace Iciclecreek.Terminal
 
                 // A cell that carries no background of its own and was not swapped paints nothing, leaving
                 // whatever the view is layered over to show through.
-                var fill = swapped || cell.GetBackgroundColor(_palette).HasValue ? background : null;
+                //
+                // Under DECSCNM it has to paint anyway. "Not swapped" there means the cell inverted
+                // and the screen inverted, cancelling -- so its background is the ordinary default
+                // while the SURFACE is the inverted one, and the two are no longer the same colour.
+                // Leaving it unpainted drew a negative cell's text in the normal foreground on an
+                // inverted sheet: white on white, and vttest's four `negative` rows vanished from
+                // the light-background pattern.
+                var fill = swapped || _terminal.ReverseVideo || cell.GetBackgroundColor(_palette).HasValue
+                    ? background
+                    : null;
 
                 // Unless a picture is already there. Placements with a NEGATIVE z-index are drawn
                 // before the text precisely so the text sits on top of them -- and then every cell

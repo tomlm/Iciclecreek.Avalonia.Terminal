@@ -300,6 +300,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new WindowMovedEventArgs(e.X, e.Y)
                 {
                     RoutedEvent = WindowMovedEvent
@@ -310,10 +320,86 @@ namespace Iciclecreek.Terminal
             });
         }
 
+        /// <summary>
+        /// The grid changed size because a PROGRAM asked it to -- DECCOLM's 80/132 switch, in
+        /// practice -- rather than because the host laid this control out at a new size.
+        /// </summary>
+        /// <remarks>
+        /// <para>The emulator has always announced this: Terminal.Resize raises Resized, and
+        /// SetColumnMode goes through Resize like any other resize. Nothing here listened, so
+        /// switching to 132 columns re-gridded the buffer while the window kept its 80-column pixel
+        /// width, and columns 81 onwards were drawn past the right edge and clipped -- with the
+        /// application believing all 132 were visible.</para>
+        /// <para>Reported as the same window-resize this control already raises for
+        /// <c>CSI 8 t</c>, so a host that sizes itself for one sizes itself for the other and a host
+        /// that declines keeps declining. Declining is still a real answer: what a host must not do
+        /// is silently show 80 of 132 columns.</para>
+        /// </remarks>
+        private void OnTerminalResized(object? sender, XT.Events.TerminalEvents.ResizeEventArgs e)
+        {
+            // Synchronously, before the post: Resized is raised inside Terminal.Resize, so this is
+            // the only moment the flag set around the layout re-grid is still standing.
+            if (_regridFromLayout)
+                return;
+
+            var cols = e.Cols;
+            var rows = e.Rows;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                // DECCOLM asks the host to resize by the same route as CSI 8 t, so it answers to
+                // the same switch -- read inside the post like every other window-operation gate:
+                // it is a styled property, which only the UI thread may read, and Resized fires on
+                // the pty reader thread. Note what refusing does NOT undo: the emulator has already
+                // re-gridded to 132 columns, because that gate lives behind a mode the program sets
+                // for itself. The window keeps its width and the extra columns clip, which is the
+                // honest consequence of a host declining -- and the reason closing this properly
+                // needs the gate upstream.
+                if (!AllowWindowOps)
+                    return;
+
+                // The metrics are the UI thread's to read, and a resize can arrive on the pty reader
+                // thread before this control has ever measured a cell.
+                if (_charWidth <= 0 || _charHeight <= 0)
+                    return;
+
+                // What the host spends AROUND this control has to be added back, or it comes out of
+                // the text area: the request is a window size, and the columns only get what is
+                // left after padding, borders and anything sharing the window. Asking for exactly
+                // 132 cells wide inside an 8px padding delivered 130 columns to a program that had
+                // been told it had 132 -- the same silent shortfall this whole change is about,
+                // just arriving by a different route.
+                var top = TopLevel.GetTopLevel(this);
+                var chromeWidth = top is not null ? Math.Max(0, top.Bounds.Width - Bounds.Width) : 0;
+                var chromeHeight = top is not null ? Math.Max(0, top.Bounds.Height - Bounds.Height) : 0;
+
+                var width = (int)Math.Ceiling(cols * _charWidth + Math.Max(0, GutterWidth) + chromeWidth);
+                var height = (int)Math.Ceiling(rows * _charHeight + chromeHeight);
+
+                var args = new WindowResizedEventArgs(width, height)
+                {
+                    RoutedEvent = WindowResizedEvent
+                };
+
+                RaiseEvent(args);
+                WindowResized?.Invoke(this, args);
+            });
+        }
+
         private void OnTerminalWindowResized(object? sender, XT.Events.TerminalEvents.WindowResizedEventArgs e)
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
 
                 var args = new WindowResizedEventArgs(e.Width, e.Height)
                 {
@@ -329,6 +415,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new RoutedEventArgs(WindowMinimizedEvent);
                 RaiseEvent(args);
                 WindowMinimized?.Invoke(this, EventArgs.Empty);
@@ -339,6 +435,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new RoutedEventArgs(WindowMaximizedEvent);
                 RaiseEvent(args);
                 WindowMaximized?.Invoke(this, EventArgs.Empty);
@@ -349,6 +455,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new RoutedEventArgs(WindowRestoredEvent);
                 RaiseEvent(args);
                 WindowRestored?.Invoke(this, EventArgs.Empty);
@@ -359,6 +475,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new RoutedEventArgs(WindowRaisedEvent);
                 RaiseEvent(args);
                 WindowRaised?.Invoke(this, EventArgs.Empty);
@@ -369,6 +495,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new RoutedEventArgs(WindowLoweredEvent);
                 RaiseEvent(args);
                 WindowLowered?.Invoke(this, EventArgs.Empty);
@@ -379,6 +515,16 @@ namespace Iciclecreek.Terminal
         {
             Dispatcher.UIThread.Post(() =>
             {
+                // Refused silently when the host has not granted window operations -- nothing is
+                // raised, so no host acts, and a bare TerminalView with its own handler is covered
+                // too. Asked INSIDE the post, for two reasons that arrive together: AllowWindowOps
+                // is a styled property, which only the UI thread may read, and this handler fires
+                // on the pty reader thread; and the answer should be the host's CURRENT one -- a
+                // host that revokes permission while a request sits queued has revoked it for that
+                // request too.
+                if (!AllowWindowOps)
+                    return;
+
                 var args = new RoutedEventArgs(WindowFullscreenedEvent);
                 RaiseEvent(args);
                 WindowFullscreened?.Invoke(this, EventArgs.Empty);
