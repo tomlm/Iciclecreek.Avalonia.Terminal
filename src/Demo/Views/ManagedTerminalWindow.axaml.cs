@@ -184,6 +184,7 @@ namespace Demo.Views
                 FontFamily = this.FontFamily,
                 FontSize = this.FontSize,
                 Ligatures = this.Ligatures,
+                UseSkiaRenderer = true
             };
 
             // Subscribe to terminal events.
