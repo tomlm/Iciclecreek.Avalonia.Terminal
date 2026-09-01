@@ -562,8 +562,57 @@ namespace Iciclecreek.Terminal
             }
 
             // Notify IME of cursor position change after terminal processes data
+            NotifyInputMethodCoalesced();
+
+            // Output is the only thing that can start or stop an animation, and the clock is
+            // a dispatcher timer, so the decision has to be made on the UI thread. The check
+            // behind it is a walk of a list that is empty for a terminal showing text.
+            //
+            // Coalesced for the same reason as the IME notification above: this is a state SYNC,
+            // so N queued calls and one queued call reach the same answer, and only the count
+            // differs.
+            if (Interlocked.CompareExchange(ref _animationSyncQueued, 1, 0) == 0)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    Interlocked.Exchange(ref _animationSyncQueued, 0);
+                    SyncAnimationClock();
+                });
+            }
+
+            RequestPaint();
+        }
+
+        /// <summary>
+        /// Tells the IME its cursor rectangle and surrounding text have moved, at most once per
+        /// dispatcher drain no matter how many chunks asked.
+        /// </summary>
+        /// <remarks>
+        /// <para>Both notifications say "what you cached is stale, come and re-read it" — they carry
+        /// no payload of their own. So N of them queued back to back and one of them queued reach the
+        /// identical state, and the only difference is how much UI-thread time is spent getting there.</para>
+        /// <para>That difference is the whole bug. This is called once per pty CHUNK, which for a
+        /// full-screen animation redrawing every cell is hundreds of times a second — far faster than
+        /// the UI thread can retire them, because on Windows NotifyCursorRectangleChanged reaches
+        /// IMM32 (ImmSetCandidateWindow), which sends messages and so RE-ENTERS the window procedure
+        /// on its way through. The dispatcher queue then grows without bound, the message loop never
+        /// gets back to pumping input or painting, and the window goes "Not Responding" while the
+        /// child process is still happily writing. Measured with libcaca's cacademo: unresponsive
+        /// within about five seconds, responsive indefinitely once coalesced.</para>
+        /// <para>The latch is cleared BEFORE the notifications rather than after, which is what makes
+        /// coalescing lossless. Cleared after, a chunk landing while the notification runs would see
+        /// the latch still set, skip, and then find it cleared with nothing queued — and the IME would
+        /// be left reading a line the buffer no longer holds until some later chunk happened along.</para>
+        /// </remarks>
+        private void NotifyInputMethodCoalesced()
+        {
+            if (Interlocked.CompareExchange(ref _imeNotifyQueued, 1, 0) != 0)
+                return;
+
             Dispatcher.UIThread.Post(() =>
             {
+                Interlocked.Exchange(ref _imeNotifyQueued, 0);
+
                 _inputMethodClient?.NotifyCursorRectangleChanged();
 
                 // And the TEXT around it, which the client advertises support for and was
@@ -571,13 +620,6 @@ namespace Iciclecreek.Terminal
                 // was composing against whatever the line held the first time it looked.
                 _inputMethodClient?.NotifySurroundingTextChanged();
             });
-
-            // Output is the only thing that can start or stop an animation, and the clock is
-            // a dispatcher timer, so the decision has to be made on the UI thread. The check
-            // behind it is a walk of a list that is empty for a terminal showing text.
-            Dispatcher.UIThread.Post(SyncAnimationClock);
-
-            RequestPaint();
         }
 
         /// <param name="connection">

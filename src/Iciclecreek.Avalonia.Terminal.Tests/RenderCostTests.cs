@@ -141,6 +141,70 @@ public class RenderCostTests
         finally { window.Close(); }
     }
 
+    /// <summary>Hands the view a chunk the way the pty read loop does.</summary>
+    /// <remarks>
+    /// Through the private method rather than through <c>Terminal.Write</c>, because the per-chunk
+    /// posting under test lives in the read loop's delivery path and not in the emulator. Passing
+    /// shellReadyPosted as true keeps the once-per-process signal out of the way.
+    /// </remarks>
+    private static void FeedChunk(TerminalView view, string text)
+    {
+        var consume = typeof(TerminalView).GetMethod("ConsumeOutputChunk",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(consume, Is.Not.Null, "ConsumeOutputChunk has been renamed; this test needs updating");
+
+        var args = new object?[]
+        {
+            new ReadOnlyMemory<byte>(System.Text.Encoding.UTF8.GetBytes(text)),
+            true,
+            System.Threading.CancellationToken.None,
+        };
+
+        consume!.Invoke(view, args);
+    }
+
+    [AvaloniaTest]
+    public void A_burst_of_output_chunks_queues_one_ime_notification()
+    {
+        // The one that actually froze a window. Every chunk posted its own IME notification, and on
+        // Windows that reaches IMM32, which sends messages and re-enters the window procedure. A
+        // full-screen animation redrawing every cell produced chunks faster than the UI thread could
+        // retire them, so the queue grew without bound and the message loop never got back to
+        // pumping: "Not Responding" while the child process was still writing happily.
+        var (view, window) = Realised();
+        try
+        {
+            for (var i = 0; i < 50; i++)
+                FeedChunk(view, $"line {i}\r\n");
+
+            Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(1),
+                "fifty chunks, one notification -- the IME re-reads state, so the last one is the only one that says anything");
+            Assert.That(Field<int>(view, "_animationSyncQueued"), Is.EqualTo(1),
+                "and the same for the animation clock, which is a sync and not an event");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_later_output_chunk_queues_another_ime_notification()
+    {
+        // "One at a time", not "once ever". An IME caches what it was last told, so a chunk arriving
+        // after the notification has run still has to say the line moved -- otherwise composition
+        // happens against text the buffer no longer holds.
+        var (view, window) = Realised();
+        try
+        {
+            FeedChunk(view, "first\r\n");
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(0), "sanity: the first one ran");
+
+            FeedChunk(view, "second\r\n");
+
+            Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(1));
+        }
+        finally { window.Close(); }
+    }
+
     // ----------------------------------------------- one walk, not one per colour
 
     [AvaloniaTest]

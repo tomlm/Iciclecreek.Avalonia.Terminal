@@ -293,6 +293,15 @@ namespace Iciclecreek.Terminal
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
+        // 1 while an IME notification is already queued on the dispatcher and has not run yet.
+        // Read and written from the pty reader thread and the UI thread, hence Interlocked; see
+        // NotifyInputMethodCoalesced for why one notification in flight is enough.
+        private int _imeNotifyQueued;
+
+        // The same latch for the animation-clock sync, which ConsumeOutputChunk posts on the same
+        // once-per-chunk footing.
+        private int _animationSyncQueued;
+
         // Unique identifier for this terminal instance (for debugging)
         private readonly Guid _instanceId = Guid.NewGuid();
 

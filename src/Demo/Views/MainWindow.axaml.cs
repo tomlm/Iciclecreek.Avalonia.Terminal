@@ -59,9 +59,6 @@ public partial class MainWindow : Window
 
         var terminalWindow = new ManagedTerminalWindow
         {
-            // A ligature face first in the chain, and the switch on -- this demo is where the
-            // feature gets eyeballed. Cascadia MONO (the library default) has no ligatures by design.
-            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
             Ligatures = true,
             Width = 80 * FontSize,
             Height = 25 * FontSize,
@@ -86,9 +83,6 @@ public partial class MainWindow : Window
 
         var terminalWindow = new ManagedTerminalWindow
         {
-            // A ligature face first in the chain, and the switch on -- this demo is where the
-            // feature gets eyeballed. Cascadia MONO (the library default) has no ligatures by design.
-            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
             Ligatures = true,
             Process = command.Value.Process,
             ProcessArgs = command.Value.Args,
@@ -123,7 +117,6 @@ public partial class MainWindow : Window
     {
         var terminal = new TerminalControl
         {
-            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
             Ligatures = true,
             UseSkiaRenderer = true,
             Background = Avalonia.Media.Brushes.Black,
@@ -176,7 +169,6 @@ public partial class MainWindow : Window
         {
             // A ligature face first in the chain, and the switch on -- this demo is where the
             // feature gets eyeballed. Cascadia MONO (the library default) has no ligatures by design.
-            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
             Ligatures = true,
             Title = "TerminalWindow",
             Width = 80 * FontSize,
@@ -201,7 +193,6 @@ public partial class MainWindow : Window
         {
             // A ligature face first in the chain, and the switch on -- this demo is where the
             // feature gets eyeballed. Cascadia MONO (the library default) has no ligatures by design.
-            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
             Ligatures = true,
             Process = command.Value.Process,
             ProcessArgs = command.Value.Args,
@@ -288,9 +279,6 @@ public partial class MainWindow : Window
 
         var terminalWindow = new ManagedTerminalWindow
         {
-            // A ligature face first in the chain, and the switch on -- this demo is where the
-            // feature gets eyeballed. Cascadia MONO (the library default) has no ligatures by design.
-            FontFamily = new Avalonia.Media.FontFamily("Cascadia Code,FiraCode Nerd Font,Cascadia Mono,Menlo,monospace"),
             Ligatures = true,
             Width = 80 * FontSize,
             Height = 25 * FontSize,
