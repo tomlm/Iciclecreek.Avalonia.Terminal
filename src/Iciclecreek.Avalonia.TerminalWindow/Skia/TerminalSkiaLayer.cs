@@ -107,7 +107,9 @@ namespace Iciclecreek.Terminal.Skia
         private static float Snap(double value, double scale) =>
             (float)(Math.Round(value * scale, MidpointRounding.AwayFromZero) / scale);
 
-        private void Draw(SKCanvas canvas)
+        /// <summary>Internal rather than private so the profiling benchmark suite can drive the
+        /// exact frame-drawing path directly, without needing a live Avalonia composite.</summary>
+        internal void Draw(SKCanvas canvas)
         {
             var snapshot = _snapshot;
             var scale = snapshot.RenderScale;

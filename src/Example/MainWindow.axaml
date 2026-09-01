@@ -6,6 +6,7 @@
 		xmlns:xterm="using:XTerm.Options"
 		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
 		Background="Purple"
+		WindowState="Maximized"
 		x:Class="Example.MainWindow"
 		Title="Example">
 	<term:TerminalControl FontSize="14" BufferSize="1000"

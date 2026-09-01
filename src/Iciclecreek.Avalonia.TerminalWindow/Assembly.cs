@@ -9,5 +9,9 @@ using System.Runtime.CompilerServices;
 // which needs the switch that chooses between them.
 [assembly: InternalsVisibleTo("Terminal.RenderBench")]
 
+// The profiling benchmark suite drives TerminalSkiaLayer.Draw directly against a synthetic
+// snapshot, which needs the same internal surface the render bench above uses.
+[assembly: InternalsVisibleTo("BenchmarkSuite1")]
+
 
 [assembly: XmlnsDefinition("https://github.com/tomlm/Terminal", "Iciclecreek.Terminal")]

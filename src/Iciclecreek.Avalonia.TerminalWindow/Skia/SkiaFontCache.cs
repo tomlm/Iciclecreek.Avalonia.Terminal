@@ -42,6 +42,16 @@ namespace Iciclecreek.Terminal.Skia
         private readonly ConcurrentDictionary<(string Family, SnapshotFlags Style), SKTypeface> _faces = new();
         private readonly ConcurrentDictionary<(string Family, float Size), float> _baselines = new();
 
+        /// <summary>
+        /// One glyph, pre-shaped, per (face, size, codepoint). A terminal draws from a small
+        /// alphabet against a screen of thousands of cells, so this settles at a few hundred
+        /// entries — and every one of those cells previously paid DrawText's own codepoint-to-glyph
+        /// lookup again, on top of the ContainsGlyph lookup that had just made the same one. Built
+        /// once, a cell now draws a blob whose glyph is already known: DrawText(blob, ...) positions
+        /// and rasterizes, nothing more.
+        /// </summary>
+        private readonly ConcurrentDictionary<(IntPtr Face, float Size, int CodePoint), SKTextBlob?> _glyphBlobs = new();
+
         /// <summary>One shaper per face. Building one parses the font's tables; clusters repeat.</summary>
         private readonly ConcurrentDictionary<SKTypeface, SKShaper> _shapers = new();
 
@@ -151,6 +161,34 @@ namespace Iciclecreek.Terminal.Skia
             }
 
             var span = new ReadOnlySpan<char>(scratch, 0, length);
+            var text = TextFor(codePoint, span);
+
+            var blob = _glyphBlobs.GetOrAdd((font.Typeface.Handle, font.Size, codePoint), key =>
+            {
+                // Resolved ONCE per (face, size, codepoint) rather than on every cell that draws
+                // it: ContainsGlyph and DrawText(string, ...) each mapped the codepoint to a glyph
+                // ID on their own, so a screen of the same handful of characters paid that mapping
+                // thousands of times a frame for an answer that never changes. A missing glyph is
+                // cached as null so its absence is remembered too, not re-probed every frame.
+                if (!font.ContainsGlyph(codePoint))
+                    return null;
+
+                var glyphs = font.GetGlyphs(text);
+                if (glyphs.Length != 1)
+                    return null;   // an odd shape; the per-frame path below still handles it
+
+                using var builder = new SKTextBlobBuilder();
+                var run = builder.AllocatePositionedRun(font, 1);
+                run.Glyphs[0] = glyphs[0];
+                run.Positions[0] = new SKPoint(0, 0);
+                return builder.Build();
+            });
+
+            if (blob is not null)
+            {
+                canvas.DrawText(blob, x, y, paint);
+                return;
+            }
 
             if (font.ContainsGlyph(codePoint))
             {
@@ -161,7 +199,7 @@ namespace Iciclecreek.Terminal.Skia
                 // visible cell per frame, so span.ToString() was thousands of short-lived
                 // allocations a frame; a terminal draws from a small alphabet, so the cache settles
                 // at a few hundred entries and never allocates again.
-                canvas.DrawText(TextFor(codePoint, span), x, y, font, paint);
+                canvas.DrawText(text, x, y, font, paint);
                 return;
             }
 
@@ -173,11 +211,11 @@ namespace Iciclecreek.Terminal.Skia
                 // the missing-glyph box: a visible box says "this cell holds something I cannot draw",
                 // where drawing nothing says "this cell is empty" — and the cell is NOT empty, as
                 // selecting and copying it would show.
-                canvas.DrawText(span.ToString(), x, y, font, paint);
+                canvas.DrawText(text, x, y, font, paint);
                 return;
             }
 
-            canvas.DrawText(span.ToString(), x, y, FallbackFont(face, font.Size), paint);
+            canvas.DrawText(text, x, y, FallbackFont(face, font.Size), paint);
         }
 
         /// <summary>
@@ -551,6 +589,7 @@ namespace Iciclecreek.Terminal.Skia
             foreach (var shaper in _shapers.Values) shaper.Dispose();
             foreach (var font in _fonts.Values) font.Dispose();
             foreach (var font in _fallbackFonts.Values) font.Dispose();
+            foreach (var blob in _glyphBlobs.Values) blob?.Dispose();
 
             _shapers.Clear();
             _fonts.Clear();
@@ -560,6 +599,7 @@ namespace Iciclecreek.Terminal.Skia
             _baselines.Clear();
             _shapedRuns.Clear();
             _ligatureAlphabet.Clear();
+            _glyphBlobs.Clear();
             _images.Clear();
         }
     }
