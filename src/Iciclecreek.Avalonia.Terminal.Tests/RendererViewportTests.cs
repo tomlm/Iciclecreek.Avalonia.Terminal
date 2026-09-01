@@ -272,6 +272,16 @@ public class RendererViewportTests
             "the run path's independently coloured underline must blink with its text");
         Assert.That(Occurrences(source, "ApplyBlinkPhase(dwBrush"), Is.EqualTo(1),
             "and so must a doubled row's");
+
+        // The Skia layer expresses both conceal and the dark blink half as one snapshot flag, and
+        // its ligature fast path draws blob and decorations without consulting the per-cell flags
+        // -- so it must decline concealed runs up front, or blinking ligatured text stays lit
+        // through the off phase. Asserted at the source like the counts above, because the layer
+        // needs a Skia canvas lease this platform does not grant.
+        var skiaSource = System.IO.File.ReadAllText(System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(SourcePath("TerminalView.cs"))!, "Skia", "TerminalSkiaLayer.cs"));
+        Assert.That(Occurrences(skiaSource, "first.Flags & SnapshotFlags.Conceal"), Is.EqualTo(1),
+            "the ligature run must decline concealed cells before it draws anything");
     }
 
     private static int Occurrences(string haystack, string needle)
