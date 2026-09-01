@@ -36,14 +36,14 @@
   </ItemGroup>
   
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.2" />
+    <PackageReference Include="Avalonia" Version="12.0.4" />
     <!-- The direct renderer leases the SKCanvas, which needs the Skia backend types; HarfBuzz is
          how a cluster or ligature run reaches the shaper whole on that path. SkiaSharp itself is
          deliberately NOT referenced: Avalonia.Skia's transitive SkiaSharp is available at compile
          time and always matches the Avalonia in use, so there is no version here to keep in step.
          (These are minimum versions — a consumer on a newer Avalonia unifies everything upward.) -->
-    <PackageReference Include="Avalonia.Skia" Version="12.0.2" />
-    <PackageReference Include="SkiaSharp.HarfBuzz" Version="3.119.4-preview.1.1" />
+    <PackageReference Include="Avalonia.Skia" Version="12.0.4" />
+    <PackageReference Include="SkiaSharp.HarfBuzz" Version="3.119.4" />
     <PackageReference Include="Unicode.net" Version="2.0.0" />
     <PackageReference Include="Wcwidth" Version="4.0.1" />
   </ItemGroup>
