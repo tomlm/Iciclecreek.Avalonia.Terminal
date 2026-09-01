@@ -62,4 +62,4 @@ jobs:
           # in under half a second: is_error, zero cost, empty modelUsage, and the real error
           # hidden by the default output redaction. show_full_output is on for the same reason:
           # a failure that cannot be read from the log gets diagnosed by archaeology instead.
-          claude_args: '--model claude-opus-5 --allowedTools "Bash(dotnet:*),Bash(gh pr edit:*),Bash(gh pr ready:*),Bash(gh pr view:*)"'
+          claude_args: '--allowedTools "Bash(dotnet:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Read,Glob,Grep,Task,mcp__github_inline_comment__create_inline_comment"'
