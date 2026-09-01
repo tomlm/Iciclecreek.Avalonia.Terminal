@@ -167,6 +167,57 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private bool _regridFromLayout;
 
+        /// <summary>
+        /// The DEC status line's single row, or <see langword="null"/> when there is no status line.
+        /// </summary>
+        /// <remarks>
+        /// <para>A <c>BufferLine</c> because that is what it is -- one row with per-cell attributes,
+        /// which vttest writes graphic renditions into. The emulator owns it (XTerm.NET#148, the
+        /// state half of the split); <see cref="OnTerminalStatusLineChanged"/> hands it in through
+        /// <see cref="SetStatusLine"/>, which the tests also drive directly.</para>
+        /// <para>Held rather than read through on demand for the reason every other frame input is
+        /// snapshotted: the row is drawn from the UI thread while the pty thread may be writing it.</para>
+        /// </remarks>
+        private XT.Buffer.BufferLine? _statusLine;
+
+        /// <summary>
+        /// The height the status line takes out of this control, in pixels: one row, or nothing.
+        /// </summary>
+        /// <remarks>
+        /// Taken off the height BEFORE the grid is counted, so the row is not one of the terminal's
+        /// rows. That is what keeps <c>CSI 18 t</c>, the pixel-geometry reports and the pty size
+        /// honest without any of them knowing this exists -- every one of them is computed from
+        /// <c>_terminal.Rows</c>, and the status row was never in it.
+        /// </remarks>
+        private double StatusLineHeight => _statusLine is null ? 0 : _charHeight;
+
+        /// <summary>
+        /// Sets the row drawn as the DEC status line, or clears it with <see langword="null"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>The seam between the emulator's state and this view's pixels:
+        /// <see cref="OnTerminalStatusLineChanged"/> calls it with the emulator's row (or null),
+        /// and the tests call it directly -- which is how the drawing and the geometry were
+        /// written and pinned before the emulator half existed.</para>
+        /// <para>Appearing or disappearing changes how many rows fit, so this re-runs layout rather
+        /// than only repainting: the grid is a row shorter while a status line is shown. Setting the
+        /// same presence again is only a repaint, because the row's CONTENT changing does not move
+        /// anything.</para>
+        /// </remarks>
+        internal void SetStatusLine(XT.Buffer.BufferLine? line)
+        {
+            var appearedOrVanished = (_statusLine is null) != (line is null);
+            _statusLine = line;
+
+            if (appearedOrVanished)
+            {
+                InvalidateMeasure();
+                InvalidateArrange();
+            }
+
+            InvalidateVisual();
+        }
+
         // Selection state - tracks whether terminal is handling selection vs forwarding mouse to app
         private bool _isSelecting = false;
         // When non-null, a single left-click has been pressed but the selection hasn't started yet.
@@ -2117,6 +2168,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged += OnTerminalBufferChanged;
             _terminal.CursorStyleChanged += OnTerminalCursorStyleChanged;
             _terminal.TitleChanged += OnTerminalTitleChanged;
+            _terminal.StatusLineChanged += OnTerminalStatusLineChanged;
             _terminal.SynchronizedOutputChanged += OnSynchronizedOutputChanged;
             _terminal.WindowMoved += OnTerminalWindowMoved;
             _terminal.Resized += OnTerminalResized;
@@ -2159,6 +2211,7 @@ namespace Iciclecreek.Terminal
             _terminal.BufferChanged -= OnTerminalBufferChanged;
             _terminal.CursorStyleChanged -= OnTerminalCursorStyleChanged;
             _terminal.TitleChanged -= OnTerminalTitleChanged;
+            _terminal.StatusLineChanged -= OnTerminalStatusLineChanged;
             _terminal.SynchronizedOutputChanged -= OnSynchronizedOutputChanged;
             _terminal.WindowMoved -= OnTerminalWindowMoved;
             _terminal.Resized -= OnTerminalResized;
@@ -2225,6 +2278,22 @@ namespace Iciclecreek.Terminal
                         if (line[x].Attributes.IsBlink())
                         {
                             line.Cache = null;
+                            break;
+                        }
+                    }
+                }
+
+                // The status line blinks too -- vttest writes graphic renditions into it, SGR 5
+                // included -- and it is not one of the viewport's lines, so the walk above never
+                // reaches it. Without this its cached runs pin whichever phase was showing when
+                // they were built, and the status line freezes half-lit.
+                if (_statusLine is { } statusLine)
+                {
+                    for (int x = 0; x < statusLine.Length; x++)
+                    {
+                        if (statusLine[x].Attributes.IsBlink())
+                        {
+                            statusLine.Cache = null;
                             break;
                         }
                     }
@@ -3294,7 +3363,12 @@ namespace Iciclecreek.Terminal
                 // narrows the terminal rather than pushing text off the right-hand edge. Clamped the
                 // same way Render and PointerColumn clamp it -- a negative width must not mint columns.
                 int newCols = Math.Max(1, (int)((finalSize.Width - Math.Max(0, GutterWidth)) / _charWidth));
-                int newRows = Math.Max(1, (int)(finalSize.Height / _charHeight));
+
+                // The status row comes off the height the way the gutter comes off the width: before
+                // anything is counted, so the grid never contains it. An application told it has 24
+                // rows must have 24 rows it can actually write to -- a status line carved out of the
+                // grid afterwards would leave it addressing a row that is not there.
+                int newRows = Math.Max(1, (int)((finalSize.Height - StatusLineHeight) / _charHeight));
 
                 // Only resize if dimensions have changed
                 if (newCols != _terminal.Cols || newRows != _terminal.Rows)

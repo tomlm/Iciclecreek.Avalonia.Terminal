@@ -479,6 +479,25 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // The DEC status line, drawn after the grid and before the overlays.
+                //
+                // Through RenderNormalLine like any other row, which is the point: vttest writes
+                // graphic renditions into the status line, so it is not a text strip with a colour.
+                // Sending it down the same path means bold, inverse, colours and underlines work
+                // there because they already work everywhere else.
+                //
+                // It sits BELOW the grid, at the height the grid was already shortened by -- see
+                // StatusLineHeight, taken off in ArrangeOverride before the rows were counted. No
+                // clip: it occupies space nothing else was given.
+                if (_statusLine is { } statusLine && _charHeight > 0)
+                {
+                    var statusTop = Snap(_terminal.Rows * _charHeight, scale);
+                    var statusBottom = Snap((_terminal.Rows + 1) * _charHeight, scale);
+
+                    RenderNormalLine(context, statusLine, _terminal.Rows, statusTop,
+                                     Math.Max(0, statusBottom - statusTop), scale);
+                }
+
                 // OSC 66 blocks, after every row's background and text and before the overlays:
                 // selection and the cursor still draw over scaled text, as they do over plain text.
                 RenderSizedBlocks(context, scale);

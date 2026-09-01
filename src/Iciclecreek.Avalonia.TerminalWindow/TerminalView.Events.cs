@@ -296,6 +296,34 @@ namespace Iciclecreek.Terminal
             });
         }
 
+        /// <summary>
+        /// The emulator's status line changed: appeared, vanished, or was written to.
+        /// </summary>
+        /// <remarks>
+        /// <para>The Title/TitleChanged shape, one row bigger: the emulator owns the state
+        /// (XTerm.NET#148), this view decides what to draw. Fires on the pty reader thread, so the
+        /// read and the layout both happen inside the post -- and the state is read THERE, not
+        /// captured here, so a burst of writes coalesces to the current row rather than replaying
+        /// stale ones.</para>
+        /// <para>Only a HOST-WRITABLE status line (DECSSDT 2) is shown. The indicator (type 1) is
+        /// the terminal's own status -- keyboard state, printer state -- and a terminal control
+        /// embedded in someone's application has no status of its own worth a row of their layout;
+        /// DEC hardware showed one because it WAS the whole screen. Drawing nothing is the decision
+        /// issue #151 asked to have written down, and this is it. A program that selects type 1
+        /// loses nothing it could ever have written: DECSASD 1 is refused without a host-writable
+        /// line, so there is no text to lose.</para>
+        /// </remarks>
+        private void OnTerminalStatusLineChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_terminal is not { } terminal)
+                    return;
+
+                SetStatusLine(terminal.StatusDisplayType == 2 ? terminal.StatusLine : null);
+            });
+        }
+
         private void OnTerminalWindowMoved(object? sender, XT.Events.TerminalEvents.WindowMovedEventArgs e)
         {
             Dispatcher.UIThread.Post(() =>
