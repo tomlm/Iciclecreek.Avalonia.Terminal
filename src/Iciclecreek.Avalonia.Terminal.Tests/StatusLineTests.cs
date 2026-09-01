@@ -41,14 +41,6 @@ public class StatusLineTests
         return scratch.Buffer.GetLine(0)!;
     }
 
-    private static void SetStatusLine(TerminalView view, XTerm.Buffer.BufferLine? line)
-    {
-        var m = typeof(TerminalView).GetMethod("SetStatusLine",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.That(m, Is.Not.Null, "SetStatusLine has been renamed; this test needs updating");
-        m!.Invoke(view, new object?[] { line });
-    }
-
     [AvaloniaTest]
     public void A_status_line_costs_the_grid_exactly_one_row()
     {
@@ -57,7 +49,7 @@ public class StatusLineTests
         {
             var before = view.Terminal.Rows;
 
-            SetStatusLine(view, RowOf("ready"));
+            view.SetStatusLine(RowOf("ready"));
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
@@ -75,12 +67,12 @@ public class StatusLineTests
         {
             var before = view.Terminal.Rows;
 
-            SetStatusLine(view, RowOf("ready"));
+            view.SetStatusLine(RowOf("ready"));
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             Assert.That(view.Terminal.Rows, Is.EqualTo(before - 1), "sanity: it was taken");
 
-            SetStatusLine(view, null);
+            view.SetStatusLine(null);
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
@@ -99,7 +91,7 @@ public class StatusLineTests
         var (view, window) = Realised();
         try
         {
-            SetStatusLine(view, RowOf("ready"));
+            view.SetStatusLine(RowOf("ready"));
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
@@ -126,7 +118,7 @@ public class StatusLineTests
         var (view, window) = Realised();
         try
         {
-            SetStatusLine(view, RowOf("ready"));
+            view.SetStatusLine(RowOf("ready"));
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
@@ -148,12 +140,12 @@ public class StatusLineTests
         var (view, window) = Realised();
         try
         {
-            SetStatusLine(view, RowOf("first"));
+            view.SetStatusLine(RowOf("first"));
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             var rows = view.Terminal.Rows;
 
-            SetStatusLine(view, RowOf("second"));
+            view.SetStatusLine(RowOf("second"));
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
@@ -238,6 +230,37 @@ public class StatusLineTests
 
             Assert.That(view.Terminal.Rows, Is.EqualTo(before),
                 "DECSSDT 0 hands the application its row back");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_blinking_status_line_is_invalidated_by_the_blink_tick()
+    {
+        // The blink tick's cache walk covers the viewport's rows, and the status line is not one of
+        // them -- so SGR 5 written into it (vttest does) cached one phase and froze there.
+        var (view, window) = Realised();
+        try
+        {
+            view.CursorBlink = true;
+            view.SetStatusLine(RowOf($"{Esc}[5mALERT{Esc}[0m"));
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var line = typeof(TerminalView)
+                .GetField("_statusLine", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(view) as XTerm.Buffer.BufferLine;
+            Assert.That(line, Is.Not.Null);
+
+            // Something has to be IN the cache before dropping it can be observed.
+            line!.Cache = new object();
+            view.Focus();
+            typeof(TerminalView).GetMethod("OnCursorBlinkTick",
+                BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(view, new object?[] { null, EventArgs.Empty });
+
+            Assert.That(line.Cache, Is.Null,
+                "a blinking status line must have its cached runs dropped, or it freezes half-lit");
         }
         finally { window.Close(); }
     }

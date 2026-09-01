@@ -2283,6 +2283,22 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
+                // The status line blinks too -- vttest writes graphic renditions into it, SGR 5
+                // included -- and it is not one of the viewport's lines, so the walk above never
+                // reaches it. Without this its cached runs pin whichever phase was showing when
+                // they were built, and the status line freezes half-lit.
+                if (_statusLine is { } statusLine)
+                {
+                    for (int x = 0; x < statusLine.Length; x++)
+                    {
+                        if (statusLine[x].Attributes.IsBlink())
+                        {
+                            statusLine.Cache = null;
+                            break;
+                        }
+                    }
+                }
+
                 RequestPaint();
             }
         }
