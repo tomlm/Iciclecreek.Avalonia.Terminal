@@ -1,3 +1,4 @@
+using System;
 using Iciclecreek.Terminal.Skia;
 using NUnit.Framework;
 using SkiaSharp;
@@ -173,5 +174,147 @@ public class SkiaFontCacheTests
 
         Assert.That(font, Is.Not.Null);
         Assert.That(font.ContainsGlyph('a'), Is.True, "some usable face should still be drawn with");
+    }
+
+    /// <summary>
+    /// The pixels one DrawCodepoint call produces, against black, so two draws can be compared
+    /// byte for byte.
+    ///
+    /// A raster bitmap rather than a surface: the cache talks to SkiaSharp directly, and a GPU
+    /// context would make these tests a check on the runner's graphics stack.
+    /// </summary>
+    private static byte[] Render(Action<SKCanvas> draw)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(48, 48, SKColorType.Rgba8888, SKAlphaType.Premul));
+        using var canvas = new SKCanvas(bitmap);
+
+        canvas.Clear(SKColors.Black);
+        draw(canvas);
+        canvas.Flush();
+
+        return bitmap.GetPixelSpan().ToArray();
+    }
+
+    private static SKPaint White() => new() { Color = SKColors.White, IsAntialias = true };
+
+    /// <summary>
+    /// The cached glyph has to draw what the uncached one drew.
+    ///
+    /// DrawCodepoint builds a positioned text blob on first sight and draws that blob thereafter,
+    /// which is a different Skia call than DrawText(string, ...) with its own notion of where the
+    /// origin is. Getting the position wrong shifts every glyph by a fraction of a cell and getting
+    /// the glyph id wrong draws the wrong character -- neither of which any throughput measurement,
+    /// or any other test here, would see.
+    /// </summary>
+    [Test]
+    public void A_cached_glyph_draws_what_the_uncached_path_drew()
+    {
+        using var cache = new SkiaFontCache();
+        using var paint = White();
+
+        var font = cache.For(Mono, 24, SnapshotFlags.None);
+
+        var reference = Render(c => c.DrawText("A", 6, 34, font, paint));
+        var built = Render(c => cache.DrawCodepoint(c, 'A', 6, 34, font, paint));
+        var hit = Render(c => cache.DrawCodepoint(c, 'A', 6, 34, font, paint));
+
+        Assert.That(built, Is.Not.EqualTo(Render(_ => { })), "the glyph should have drawn something");
+        Assert.That(built, Is.EqualTo(reference), "the blob it built should draw the same glyph in the same place");
+        Assert.That(hit, Is.EqualTo(built), "the cached blob should draw the same as the one that built it");
+        Assert.That(cache.HasCachedGlyph('A', font), Is.True, "the glyph should have been cached");
+    }
+
+    /// <summary>
+    /// Fallback glyphs must be cached too, and cached against the font that was ASKED for.
+    ///
+    /// An earlier version resolved nothing and cached a null whenever the primary face lacked the
+    /// codepoint, so every CJK and emoji cell still re-ran ContainsGlyph, the fallback lookup and
+    /// the string DrawText every frame -- with a dictionary probe now added on top. That is the
+    /// path most non-Latin text takes, so the optimisation missed the cells that needed it most.
+    /// </summary>
+    [TestCase(0x4E16, TestName = "cjk")]
+    [TestCase(0x1F600, TestName = "emoji")]
+    public void A_glyph_drawn_from_a_fallback_face_is_cached_too(int codePoint)
+    {
+        using var cache = new SkiaFontCache();
+        using var paint = White();
+
+        var font = cache.For(Mono, 24, SnapshotFlags.None);
+        Assume.That(font.ContainsGlyph(codePoint), Is.False,
+            $"U+{codePoint:X4} would not exercise fallback if {Mono} already had it");
+
+        // A runner with no face for this codepoint is a fact about the machine, not a defect.
+        var face = cache.FallbackFace(codePoint);
+        Assume.That(face, Is.Not.Null, "the system offers no face for this codepoint; nothing to verify");
+
+        var built = Render(c => cache.DrawCodepoint(c, codePoint, 6, 34, font, paint));
+        var hit = Render(c => cache.DrawCodepoint(c, codePoint, 6, 34, font, paint));
+
+        Assert.That(cache.HasCachedGlyph(codePoint, font), Is.True,
+            "a codepoint that needs fallback should be cached against the font it was asked for, not skipped");
+        Assert.That(built, Is.Not.EqualTo(Render(_ => { })), "the fallback face's glyph should have drawn something");
+        Assert.That(hit, Is.EqualTo(built), "the cached fallback blob should draw the same glyph");
+
+        // And it is the FALLBACK face's glyph, not the primary's missing-glyph box: building the
+        // blob from one face while keying it on another is the whole trick here, and drawing the
+        // box instead would still pass every assertion above.
+        using var sized = new SKFont(face!, 24) { Subpixel = true };
+        var reference = Render(c => c.DrawText(char.ConvertFromUtf32(codePoint), 6, 34, sized, paint));
+        Assert.That(built, Is.EqualTo(reference), "the cache should draw with the face that has the glyph");
+    }
+
+    /// <summary>
+    /// A supplementary-plane codepoint arrives as a surrogate PAIR, which is two chars for one
+    /// glyph. A blob builder that mapped chars to glyphs one for one would build the wrong run.
+    /// </summary>
+    [Test]
+    public void A_supplementary_plane_codepoint_caches_one_glyph_not_two()
+    {
+        const int codePoint = 0x1D400;   // MATHEMATICAL BOLD CAPITAL A
+
+        using var cache = new SkiaFontCache();
+        using var paint = White();
+
+        var font = cache.For(Mono, 24, SnapshotFlags.None);
+        var face = font.ContainsGlyph(codePoint) ? font.Typeface : cache.FallbackFace(codePoint);
+        Assume.That(face, Is.Not.Null, "the system offers no face for this codepoint; nothing to verify");
+
+        using var sized = new SKFont(face!, 24) { Subpixel = true };
+        Assume.That(sized.ContainsGlyph(codePoint), Is.True, "the face chosen for this codepoint does not have it");
+
+        var built = Render(c => cache.DrawCodepoint(c, codePoint, 6, 34, font, paint));
+        var hit = Render(c => cache.DrawCodepoint(c, codePoint, 6, 34, font, paint));
+
+        Assert.That(built, Is.Not.EqualTo(Render(_ => { })), "the astral glyph should have drawn something");
+        Assert.That(hit, Is.EqualTo(built), "the cached blob should draw the same glyph");
+        Assert.That(built, Is.EqualTo(Render(c => c.DrawText(char.ConvertFromUtf32(codePoint), 6, 34, sized, paint))),
+            "one glyph for the pair, not one per surrogate");
+    }
+
+    /// <summary>
+    /// Disposing a cache frees the blobs it built without taking the shared face down with them.
+    ///
+    /// The blobs are built ON a face this cache only borrowed -- FromFamilyName and MatchCharacter
+    /// hand back shared instances -- so disposing them is exactly the kind of thing that could
+    /// leave a second terminal, or Avalonia, drawing with a dead typeface. Nothing about the first
+    /// cache's own output would show it.
+    /// </summary>
+    [Test]
+    public void Disposing_a_cache_that_built_glyphs_leaves_the_shared_face_usable()
+    {
+        using var paint = White();
+
+        var first = new SkiaFontCache();
+        var font = first.For(Mono, 24, SnapshotFlags.None);
+        _ = Render(c => first.DrawCodepoint(c, 'A', 6, 34, font, paint));
+        Assume.That(first.HasCachedGlyph('A', font), Is.True, "the glyph should have been cached before disposal");
+        first.Dispose();
+
+        using var second = new SkiaFontCache();
+        var again = second.For(Mono, 24, SnapshotFlags.None);
+
+        Assert.That(Render(c => second.DrawCodepoint(c, 'A', 6, 34, again, paint)),
+            Is.EqualTo(Render(c => c.DrawText("A", 6, 34, again, paint))),
+            "a fresh cache should still draw the glyph after another one disposed its blobs");
     }
 }
