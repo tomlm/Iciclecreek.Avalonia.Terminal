@@ -49,9 +49,9 @@ namespace Demo.Views
                 nameof(Process),
                 defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash");
 
-        public static readonly StyledProperty<IList<string>> ArgsProperty =
+        public static readonly StyledProperty<IList<string>> ProcessArgsProperty =
             AvaloniaProperty.Register<ManagedTerminalWindow, IList<string>>(
-                nameof(Args),
+                nameof(ProcessArgs),
                 defaultValue: Array.Empty<string>());
 
         public static readonly StyledProperty<int> BufferSizeProperty =
@@ -96,10 +96,10 @@ namespace Demo.Views
         /// <summary>
         /// Gets or sets the arguments for the process.
         /// </summary>
-        public IList<string> Args
+        public IList<string> ProcessArgs
         {
-            get => GetValue(ArgsProperty);
-            set => SetValue(ArgsProperty, value);
+            get => GetValue(ProcessArgsProperty);
+            set => SetValue(ProcessArgsProperty, value);
         }
 
         /// <summary>
@@ -211,7 +211,7 @@ namespace Demo.Views
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.SelectionBrushProperty, this.GetObservable(SelectionBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
-            _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
+            _terminalControl.Bind(TerminalControl.ProcessArgsProperty, this.GetObservable(ProcessArgsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
 
             // The find bar, hidden until Ctrl+F. It drives nothing but the public search API on

@@ -29,7 +29,7 @@ public class TerminalControlContractTests
     }
 
     /// <summary>
-    /// The convenience overload is documented as "sets StartingDirectory, Process, and Args, then launches".
+    /// The convenience overload is documented as "sets StartingDirectory, Process, and ProcessArgs, then launches".
     /// The write-through is observable on its own, without a launch succeeding.
     /// </summary>
     [AvaloniaTest]
@@ -47,8 +47,8 @@ public class TerminalControlContractTests
         {
             Assert.That(control.StartingDirectory, Is.EqualTo(dir), $"observed '{control.StartingDirectory ?? "null"}'");
             Assert.That(control.Process, Is.EqualTo("/bin/sh"), $"observed '{control.Process}'");
-            Assert.That(control.Args, Is.EqualTo(new[] { "-c", "exit 0" }),
-                $"observed [{string.Join(", ", control.Args ?? [])}]");
+            Assert.That(control.ProcessArgs, Is.EqualTo(new[] { "-c", "exit 0" }),
+                $"observed [{string.Join(", ", control.ProcessArgs ?? [])}]");
         });
     }
 

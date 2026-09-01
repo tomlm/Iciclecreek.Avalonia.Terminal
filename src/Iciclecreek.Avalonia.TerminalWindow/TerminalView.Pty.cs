@@ -274,13 +274,25 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Launch the terminal process with the current Process, Args, and StartingDirectory properties. If the process is already running, it will be
+        /// Launch the terminal process with the current Process, ProcessArgs, and StartingDirectory properties. If the process is already running, it will be
         /// terminated and replaced with a new instance using the updated properties. 
         /// </summary>
         /// <returns></returns>
         /// <exception cref="InvalidOperationException"></exception>
+        /// <remarks>
+        /// A no-op under a XAML designer. The previewer renders live controls and runs the handlers
+        /// wired to them, so both the automatic launch in OnLoaded and an explicit call from a
+        /// consumer's code reach here inside Visual Studio's and Rider's designers -- and a preview
+        /// that rebuilds on every edit would spawn a child process per refresh, none of which the
+        /// developer asked for or can see exit. The check sits HERE rather than at the automatic
+        /// caller so one guard covers both paths. Design.IsDesignMode is set by the previewer's
+        /// entry point before the AppBuilder runs, so it is already true when the first control loads.
+        /// </remarks>
         public async Task LaunchProcess()
         {
+            if (Design.IsDesignMode)
+                return;
+
             CleanupProcess();
             _externalConnection = false;   // this view owns what it spawns
 
@@ -346,9 +358,9 @@ namespace Iciclecreek.Terminal
 
 
                 // Add arguments if provided
-                if (Args != null && Args.Count > 0)
+                if (ProcessArgs != null && ProcessArgs.Count > 0)
                 {
-                    options.CommandLine = Args.ToArray();
+                    options.CommandLine = ProcessArgs.ToArray();
                 }
 
                 var spawned = await PtyProvider.SpawnAsync(options, _processCts.Token);
@@ -390,7 +402,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Launch the terminal process with the specified parameters, updating the Process, Args, and StartingDirectory properties. 
+        /// Launch the terminal process with the specified parameters, updating the Process, ProcessArgs, and StartingDirectory properties. 
         /// If the process is already running, it will be terminated and replaced with a new instance using the updated properties.
         /// </summary>
         /// <param name="startingDirectory"></param>
@@ -401,7 +413,7 @@ namespace Iciclecreek.Terminal
         {
             StartingDirectory = startingDirectory;
             Process = process;
-            Args = args ?? Array.Empty<string>();
+            ProcessArgs = args ?? Array.Empty<string>();
             await LaunchProcess();
         }
 

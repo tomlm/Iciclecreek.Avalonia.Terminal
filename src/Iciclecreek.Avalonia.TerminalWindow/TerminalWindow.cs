@@ -35,9 +35,9 @@ namespace Iciclecreek.Terminal
                 nameof(Process),
                 defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash");
 
-        public static readonly StyledProperty<IList<string>> ArgsProperty =
+        public static readonly StyledProperty<IList<string>> ProcessArgsProperty =
             AvaloniaProperty.Register<TerminalWindow, IList<string>>(
-                nameof(Args),
+                nameof(ProcessArgs),
                 defaultValue: Array.Empty<string>());
 
         public static readonly StyledProperty<string?> StartingDirectoryProperty =
@@ -192,10 +192,10 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Gets or sets the arguments for the process.
         /// </summary>
-        public IList<string> Args
+        public IList<string> ProcessArgs
         {
-            get => GetValue(ArgsProperty);
-            set => SetValue(ArgsProperty, value);
+            get => GetValue(ProcessArgsProperty);
+            set => SetValue(ProcessArgsProperty, value);
         }
 
         /// <summary>
@@ -729,7 +729,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.SearchCurrentBrushProperty, this.GetObservable(SearchCurrentBrushProperty));
             _terminalControl.Bind(TerminalControl.ProcessProperty, this.GetObservable(ProcessProperty));
             _terminalControl.Bind(TerminalControl.StartingDirectoryProperty, this.GetObservable(StartingDirectoryProperty));
-            _terminalControl.Bind(TerminalControl.ArgsProperty, this.GetObservable(ArgsProperty));
+            _terminalControl.Bind(TerminalControl.ProcessArgsProperty, this.GetObservable(ProcessArgsProperty));
             _terminalControl.Bind(TerminalControl.OptionsProperty, this.GetObservable(OptionsProperty));
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
@@ -762,7 +762,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Launch the terminal process with the current Process, Args, and StartingDirectory properties. If the process is already running, it will be
+        /// Launch the terminal process with the current Process, ProcessArgs, and StartingDirectory properties. If the process is already running, it will be
         /// terminated and replaced with a new instance using the updated properties. 
         /// </summary>
         /// <returns></returns>
@@ -783,7 +783,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Launch the terminal process with the specified parameters, updating the Process, Args, and StartingDirectory properties. 
+        /// Launch the terminal process with the specified parameters, updating the Process, ProcessArgs, and StartingDirectory properties. 
         /// If the process is already running, it will be terminated and replaced with a new instance using the updated properties.
         /// </summary>
         /// <param name="startingDirectory"></param>
@@ -794,7 +794,7 @@ namespace Iciclecreek.Terminal
         {
             StartingDirectory = startingDirectory;
             Process = process;
-            Args = args ?? Array.Empty<string>();
+            ProcessArgs = args ?? Array.Empty<string>();
             await LaunchProcess();
         }
 

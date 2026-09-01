@@ -544,9 +544,9 @@ namespace Iciclecreek.Terminal
                 nameof(Process),
                 defaultValue: RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "bash");
 
-        public static readonly StyledProperty<IList<string>> ArgsProperty =
+        public static readonly StyledProperty<IList<string>> ProcessArgsProperty =
             AvaloniaProperty.Register<TerminalView, IList<string>>(
-                nameof(Args),
+                nameof(ProcessArgs),
                 defaultValue: Array.Empty<string>());
 
         public static readonly StyledProperty<string?> StartingDirectoryProperty =
@@ -872,7 +872,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// When <see langword="false"/> (default), each entry in <see cref="Args"/> reaches the process as a
+        /// When <see langword="false"/> (default), each entry in <see cref="ProcessArgs"/> reaches the process as a
         /// distinct argument, quoted as necessary so it arrives exactly as written. Set to
         /// <see langword="true"/> to hand the process one command line built by joining the entries with
         /// spaces, and let it apply its own parsing rules.
@@ -1685,10 +1685,10 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Gets or sets the command-line arguments passed to <see cref="Process"/> when launching.
         /// </summary>
-        public IList<string> Args
+        public IList<string> ProcessArgs
         {
-            get => GetValue(ArgsProperty);
-            set => SetValue(ArgsProperty, value);
+            get => GetValue(ProcessArgsProperty);
+            set => SetValue(ProcessArgsProperty, value);
         }
 
         /// <summary>

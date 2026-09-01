@@ -91,13 +91,13 @@ public partial class MainWindow : Window
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `Process` | `string` | `cmd.exe` (Windows) / `bash` (Unix) | The shell or process to launch |
-| `Args` | `IList<string>` | Empty | Command-line arguments for the process |
+| `ProcessArgs` | `IList<string>` | Empty | Command-line arguments for the process |
 | `StartingDirectory` | `string?` | Current working directory | The initial working directory used when launching the PTY process |
 | `CurrentDirectory` | `string?` | Read-only | The current working directory reported by the running terminal session via OSC 7 |
 | `ExitCode` | `int` | Read-only | The exit code of the launched process after it has terminated |
 | `Pid` | `int` | Read-only | The operating system process identifier of the launched terminal process |
 | `BufferSize` | `int` | `1000` | Scrollback buffer size (number of lines) |
-| `VerbatimCommandLine` | `bool` | `false` | When `false`, each entry in `Args` reaches the process as a distinct argument, quoted so it arrives exactly as written. Set `true` to join the entries into one command line and let the process parse it itself. **Windows only** — Unix passes an argument vector to `exec`, so there is nothing to build |
+| `VerbatimCommandLine` | `bool` | `false` | When `false`, each entry in `ProcessArgs` reaches the process as a distinct argument, quoted so it arrives exactly as written. Set `true` to join the entries into one command line and let the process parse it itself. **Windows only** — Unix passes an argument vector to `exec`, so there is nothing to build |
 | `EnvironmentVariables` | `IDictionary<string,string>?` | `null` | Extra environment variables for the launched process. **Merged** into the environment it would otherwise inherit, not substituted for it, so setting one variable does not cost you `PATH`. `TERM` is already set to `xterm-256color` by the PTY layer |
 | `FontFamily` | `FontFamily` | Monospace stack | Terminal font family. Defaults to `Cascadia Mono` and friends, falling back to the platform's generic monospace — a terminal must not inherit a proportional UI font. Set it to override |
 | `FontSize` | `double` | Inherited | Terminal font size |
@@ -120,8 +120,8 @@ public partial class MainWindow : Window
 
 | Method | Description |
 |--------|-------------|
-| `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
-| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
+| `LaunchProcess()` | Launches the configured `Process` with the current `ProcessArgs` and `StartingDirectory` |
+| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `ProcessArgs`, then launches the process |
 | `Kill()` | Terminates the running terminal process |
 | `SendInputAsync(string text, CancellationToken)` | Sends text to the running process as if typed. Sent verbatim, so append `\r` to submit a command: `SendInputAsync("ls -la\r")`. Does nothing when no process is running |
 | `CopyAsync()` | Copies the selection to the clipboard. Returns false when nothing was selected |
@@ -172,7 +172,7 @@ var terminalWindow = new TerminalWindow
     FontSize = 14,
     StartingDirectory = Environment.CurrentDirectory,
     Process = "pwsh.exe",  // PowerShell Core
-    Args = new[] { "-NoLogo" },
+    ProcessArgs = new[] { "-NoLogo" },
     CloseOnProcessExit = true
 };
 
@@ -183,8 +183,8 @@ terminalWindow.Show();
 
 | Method | Description |
 |--------|-------------|
-| `LaunchProcess()` | Launches the configured `Process` with the current `Args` and `StartingDirectory` |
-| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `Args`, then launches the process |
+| `LaunchProcess()` | Launches the configured `Process` with the current `ProcessArgs` and `StartingDirectory` |
+| `LaunchProcess(string? startingDirectory, string process, params string[] args)` | Convenience overload that sets `StartingDirectory`, `Process`, and `ProcessArgs`, then launches the process |
 | `Kill()` | Terminates the running terminal process |
 | `SendInputAsync(string text, CancellationToken)` | Sends text to the running process as if typed. Sent verbatim, so append `\r` to submit a command: `SendInputAsync("ls -la\r")`. Does nothing when no process is running |
 | `CopyAsync()` | Copies the selection to the clipboard. Returns false when nothing was selected |

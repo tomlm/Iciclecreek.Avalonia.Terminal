@@ -62,17 +62,17 @@ public class TerminalControlRealisationTests
         }
     }
 
-    /// <summary>Args set before realisation must reach the view.</summary>
+    /// <summary>ProcessArgs set before realisation must reach the view.</summary>
     [AvaloniaTest]
     public void Args_set_before_realisation_reach_the_view()
     {
-        var control = new TerminalControl { Process = "", Args = new[] { "-NoLogo", "-Interactive" } };
+        var control = new TerminalControl { Process = "", ProcessArgs = new[] { "-NoLogo", "-Interactive" } };
         var window = TerminalHost.Show(control);
 
         try
         {
-            Assert.That(control.View().Args, Is.EqualTo(new[] { "-NoLogo", "-Interactive" }),
-                $"observed [{string.Join(", ", control.View().Args ?? [])}]");
+            Assert.That(control.View().ProcessArgs, Is.EqualTo(new[] { "-NoLogo", "-Interactive" }),
+                $"observed [{string.Join(", ", control.View().ProcessArgs ?? [])}]");
         }
         finally
         {

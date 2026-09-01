@@ -522,7 +522,7 @@ public class ShiftSelectionTests
 
     private static async Task<(TerminalView view, Window window)> RealShell()
     {
-        var view = new TerminalView { Process = "bash", Args = new List<string> { "--norc" } };
+        var view = new TerminalView { Process = "bash", ProcessArgs = new List<string> { "--norc" } };
         var window = new Window { Width = 900, Height = 400, Content = view };
         window.Show();
         window.UpdateLayout();
@@ -896,7 +896,7 @@ public class ShiftSelectionTests
         var view = new TerminalView
         {
             Process = "zsh",
-            Args = new List<string> { "-f" },
+            ProcessArgs = new List<string> { "-f" },
             EnvironmentVariables = new Dictionary<string, string> { ["PROMPT"] = "zsh$ " },
         };
         var window = new Window { Width = 900, Height = 400, Content = view };

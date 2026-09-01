@@ -140,7 +140,7 @@ public class ShortcutModeTests
         var view = new TerminalView
         {
             Process = "bash",
-            Args = new List<string> { "--norc" },
+            ProcessArgs = new List<string> { "--norc" },
             ShortcutMode = mode,
         };
         var window = new Window { Width = 900, Height = 400, Content = view };

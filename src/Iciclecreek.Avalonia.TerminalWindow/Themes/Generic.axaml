@@ -46,7 +46,7 @@
                                        SelectionBrush="{TemplateBinding SelectionBrush}"
                                        Process="{TemplateBinding Process}"
                                        StartingDirectory="{TemplateBinding StartingDirectory}"
-                                       Args="{TemplateBinding Args}"
+                                       ProcessArgs="{TemplateBinding ProcessArgs}"
                                        BufferSize="{TemplateBinding BufferSize}"
                                        ShowCaretOnClick="{TemplateBinding ShowCaretOnClick}"
                                        ShortcutMode="{TemplateBinding ShortcutMode}"

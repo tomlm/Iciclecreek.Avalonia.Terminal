@@ -84,7 +84,7 @@ public class TerminalWindowDefaultsTests
     }
 
     /// <summary>
-    /// The convenience overload documented as "sets StartingDirectory, Process, and Args, then launches".
+    /// The convenience overload documented as "sets StartingDirectory, Process, and ProcessArgs, then launches".
     /// The write-through half is assertable without launching anything.
     /// </summary>
     [AvaloniaTest]
@@ -103,8 +103,8 @@ public class TerminalWindowDefaultsTests
             {
                 Assert.That(window.StartingDirectory, Is.EqualTo(dir), $"observed '{window.StartingDirectory ?? "null"}'");
                 Assert.That(window.Process, Is.EqualTo("/bin/sh"), $"observed '{window.Process}'");
-                Assert.That(window.Args, Is.EqualTo(new[] { "-c", "exit 0" }),
-                    $"observed [{string.Join(", ", window.Args ?? [])}]");
+                Assert.That(window.ProcessArgs, Is.EqualTo(new[] { "-c", "exit 0" }),
+                    $"observed [{string.Join(", ", window.ProcessArgs ?? [])}]");
             });
         }
         finally

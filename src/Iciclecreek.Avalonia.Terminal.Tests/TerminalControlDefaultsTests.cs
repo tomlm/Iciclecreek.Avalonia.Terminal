@@ -38,14 +38,14 @@ public class TerminalControlDefaultsTests
             $"a consumer reads this default from the README before launching anything. Observed '{control.Process}'");
     }
 
-    /// <summary>README: Args default "Empty".</summary>
+    /// <summary>README: ProcessArgs default "Empty".</summary>
     [AvaloniaTest]
     public void Args_defaults_to_empty()
     {
         var control = new TerminalControl();
 
-        Assert.That(control.Args, Is.Empty,
-            $"observed {control.Args?.Count.ToString() ?? "null"} argument(s)");
+        Assert.That(control.ProcessArgs, Is.Empty,
+            $"observed {control.ProcessArgs?.Count.ToString() ?? "null"} argument(s)");
     }
 
     /// <summary>

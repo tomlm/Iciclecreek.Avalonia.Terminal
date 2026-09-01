@@ -83,7 +83,7 @@ public class ReaderStartupTests
             var view = new TerminalView
             {
                 Process = "sh",
-                Args = new List<string> { "-c", $"echo {marker}" },
+                ProcessArgs = new List<string> { "-c", $"echo {marker}" },
             };
             var window = Show(view);
 
@@ -127,7 +127,7 @@ public class ReaderStartupTests
             var view = new TerminalView
             {
                 Process = "sh",
-                Args = new List<string> { "-c", $"echo {marker}" },
+                ProcessArgs = new List<string> { "-c", $"echo {marker}" },
             };
             views.Add((view, Show(view), marker));
         }

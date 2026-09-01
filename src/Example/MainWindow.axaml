@@ -5,30 +5,12 @@
 		xmlns:term="using:Iciclecreek.Terminal"
 		xmlns:xterm="using:XTerm.Options"
 		mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+		Background="Purple"
 		x:Class="Example.MainWindow"
 		Title="Example">
-	<TabControl>
-		<TabItem Header="Tab 1">
-			<term:TerminalControl FontSize="14" BufferSize="1000"/>
-		</TabItem>
-		<TabItem Header="Tab 2">
-			<Grid RowDefinitions="Auto, Auto, *" ColumnDefinitions="*,Auto">
-				<TextBox x:Name="MyDir" Text="c:\" Margin="5"/>
-				<Button Content="Start" Grid.Column="1" Click="OnStart"/>
-				<StackPanel Orientation="Horizontal" Grid.Row="1" Margin="5">
-					<TextBlock Text="Current Directory: "/>
-					<TextBlock Text="{Binding ElementName=Term2, Path=CurrentDirectory}"/>
-				</StackPanel>
-				<term:TerminalControl x:Name="Term2" IsVisible="false"
-									  Grid.Row="2" Grid.ColumnSpan="2"
-									  StartingDirectory="{Binding #MyDir.Text}"
-									  ProcessExited="Term2_ProcessExited"
-									  Background="#202020"
-									  FontSize="14" BufferSize="1000"/>
-			</Grid>
-		</TabItem>
-		<TabItem Header="Tab 3">
-			<term:TerminalControl FontSize="14" BufferSize="1000"/>
-		</TabItem>
-	</TabControl>
+	<term:TerminalControl FontSize="14" BufferSize="1000"
+						  Margin="10"
+						  UseSkiaRenderer="True"
+						  Process="wsl.exe"
+						  ProcessArgs="cacademo"/>
 </Window>
