@@ -115,7 +115,7 @@ namespace Iciclecreek.Terminal
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
                 nameof(UseSkiaRenderer),
-                defaultValue: false);
+                defaultValue: true);
 
         public static readonly StyledProperty<Color> CursorColorProperty =
             AvaloniaProperty.Register<TerminalWindow, Color>(
