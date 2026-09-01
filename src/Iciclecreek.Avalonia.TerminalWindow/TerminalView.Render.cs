@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -370,7 +370,7 @@ namespace Iciclecreek.Terminal
             {
                 var snapshot = _snapshotBuilder.Build(
                     _terminal, _palette, startLine, viewportLines, _terminal.Cols,
-                    _charWidth, _charHeight, FontSize, FontFamily?.Name ?? "monospace",
+                    _charWidth, _charHeight, FontSize, _fontFamilyChain,
                     GetValue(ForegroundProperty), surface, RequestPaint, Ligatures,
                     _terminal.ReverseVideo, _cursorBlinkOn, _boldIsBright, _minimumContrast);
 

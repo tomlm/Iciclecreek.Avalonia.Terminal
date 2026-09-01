@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -102,8 +102,25 @@ namespace Iciclecreek.Terminal.Skia
                         continue;
 
                     var face = SKTypeface.FromFamilyName(name, weight, SKFontStyleWidth.Normal, slant);
-                    if (face is not null && string.Equals(face.FamilyName, name, StringComparison.OrdinalIgnoreCase))
+                    if (face is not null && string.Equals(face.FamilyName, name, StringComparison.OrdinalIgnoreCase)
+                        && CanDrawText(face))
                         return face;
+                }
+
+                // "monospace" is a GENERIC ALIAS rather than a family, and the chain ends in one on
+                // purpose -- it is the net under every named face being absent. fontconfig resolves it
+                // to whatever the machine configured, so the name never round-trips (here: Cousine) and
+                // the exact-match pass above always skips it, leaving the net unreachable. Accept the
+                // substitute, but only when it really is fixed pitch, since a grid is the whole point.
+                foreach (var candidate in key.Family.Split(','))
+                {
+                    var name = candidate.Trim();
+                    if (!string.Equals(name, "monospace", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var generic = SKTypeface.FromFamilyName(name, weight, SKFontStyleWidth.Normal, slant);
+                    if (generic is not null && generic.IsFixedPitch && CanDrawText(generic))
+                        return generic;
                 }
 
                 // Nothing in the chain is installed: take the first name's answer, which is the
@@ -113,6 +130,26 @@ namespace Iciclecreek.Terminal.Skia
                        ?? SKTypeface.CreateDefault();
             });
         }
+
+        /// <summary>
+        /// Whether a face can carry the terminal's TEXT, as opposed to merely existing.
+        /// </summary>
+        /// <remarks>
+        /// <para>The chain ends in emoji families on purpose — see TerminalView.DefaultFontFamily, which
+        /// states the rule this enforces: they come last and never in front, because the cell grid comes
+        /// from the face chosen here and they would break it rather than fix it. Nothing was enforcing it.
+        /// The exact-match pass took the first name that EXISTS, and on a stock Linux with no Cascadia
+        /// installed that is Noto Color Emoji: a real family, an exact round-trip, and no Latin at all.</para>
+        /// <para>What that looks like is not blank text, which would have been obvious. Every Latin cell
+        /// missed the primary face and went through the per-codepoint fallback, which answers 'a' with the
+        /// platform's proportional default — so the glyphs came out proportional on a monospace grid,
+        /// columns landing correctly and the characters inside them not.</para>
+        /// <para>Asked as "does it have Latin" rather than "is it fixed pitch": a host naming a proportional
+        /// face has chosen one and is owed it, and an emoji font reports fixed pitch anyway (measured: Noto
+        /// Color Emoji does), so pitch does not separate these two cases and this does.</para>
+        /// </remarks>
+        private static bool CanDrawText(SKTypeface face)
+            => face.GetGlyph('M') != 0 && face.GetGlyph('a') != 0;
 
         /// <summary>
         /// Distance from the top of a cell to the text baseline, for the face actually being drawn with.

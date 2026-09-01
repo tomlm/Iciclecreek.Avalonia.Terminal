@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Iciclecreek.Terminal.Skia;
 using NUnit.Framework;
 using SkiaSharp;
@@ -37,6 +37,55 @@ public class SkiaFontCacheTests
         }
 
         return SKTypeface.Default.FamilyName;
+    }
+
+    /// <summary>
+    /// The chain's last name is the net under every other one being absent, and it has to hold.
+    /// </summary>
+    /// <remarks>
+    /// "monospace" is a GENERIC ALIAS rather than a family: fontconfig resolves it to whatever the
+    /// machine configured, so the name does not round-trip -- on this Linux it comes back as Cousine --
+    /// and the exact-match pass skipped it like any other miss. The net was unreachable, and a chain
+    /// naming nothing installed fell through to the platform's proportional default instead.
+    /// </remarks>
+    [Test]
+    public void The_generic_monospace_alias_is_the_net_under_a_chain_of_misses()
+    {
+        using var probe = SKTypeface.FromFamilyName("monospace");
+        Assume.That(probe?.IsFixedPitch, Is.True,
+            "this platform does not resolve the generic alias to a fixed-pitch face, so there is nothing to catch");
+
+        using var cache = new SkiaFontCache();
+
+        var font = cache.For("No Such Face,Also Not Installed,monospace", 12, SnapshotFlags.None);
+
+        Assert.That(font.Typeface.IsFixedPitch, Is.True,
+            "a chain ending in the generic alias must not come out proportional");
+    }
+
+    /// <summary>
+    /// An emoji family in the chain must never become the face the grid is drawn with.
+    /// </summary>
+    /// <remarks>
+    /// They are in the chain on purpose and they come last on purpose — TerminalView.DefaultFontFamily
+    /// says so — but nothing enforced it here. The exact-match pass took the first name that EXISTS, and
+    /// on a machine with no Cascadia installed that was Noto Color Emoji: a real family, an exact
+    /// round-trip, no Latin. Every Latin cell then missed the primary face and went through per-codepoint
+    /// fallback to the platform's proportional default, putting proportional glyphs on a monospace grid.
+    /// </remarks>
+    [Test]
+    public void An_emoji_family_is_never_chosen_as_the_cell_face()
+    {
+        const string Emoji = "Noto Color Emoji";
+        using var probe = SKTypeface.FromFamilyName(Emoji);
+        Assume.That(probe?.FamilyName, Is.EqualTo(Emoji), "this machine has no emoji family to be fooled by");
+
+        using var cache = new SkiaFontCache();
+
+        var font = cache.For($"No Such Face,{Emoji},{Mono}", 12, SnapshotFlags.None);
+
+        Assert.That(font.Typeface.FamilyName, Is.EqualTo(Mono),
+            "the emoji family was taken as the cell face, leaving the text to per-codepoint fallback");
     }
 
     [Test]

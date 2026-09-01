@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -78,6 +78,12 @@ namespace Iciclecreek.Terminal
         private string? _currentDirectory;
         private double _charWidth;
         private double _charHeight;
+
+        /// <summary>
+        /// The font chain as one comma-separated string, for the Skia layer, which takes a string
+        /// rather than a <see cref="FontFamily"/>. Rebuilt with the metrics it has to agree with.
+        /// </summary>
+        private string _fontFamilyChain = "monospace";
         private int _bufferSize = 1000;
         private bool _isAlternateBuffer;
 

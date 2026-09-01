@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -585,6 +585,20 @@ namespace Iciclecreek.Terminal
         private void UpdateTextMetrics()
         {
             var typeface = new Typeface(FontFamily, FontStyle, FontWeight);
+
+            // The WHOLE chain, not FontFamily.Name, which is only the first name in it. The Skia
+            // layer takes a string and splits it back into candidates; handed one name it has one
+            // candidate, and a chain exists precisely because the first name is usually absent --
+            // the default chain opens with Cascadia Mono, which no stock Linux has. SKTypeface
+            // .FromFamilyName does not fail on a name it cannot find, it substitutes, so the Skia
+            // path drew every cell in the platform's PROPORTIONAL default while this method, going
+            // through Avalonia's own resolution, measured the grid from a monospace face further
+            // down the chain. Grid monospace, glyphs not: columns land correctly and the characters
+            // inside them do not.
+            //
+            // Built HERE so it cannot drift from the metrics: the two have to describe one font, and
+            // this is the one place the font is resolved.
+            _fontFamilyChain = FontFamily is null ? "monospace" : string.Join(",", FontFamily.FamilyNames);
             _measureText = new FormattedText(
                 "W",
                 System.Globalization.CultureInfo.CurrentCulture,
