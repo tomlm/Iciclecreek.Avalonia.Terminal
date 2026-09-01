@@ -11,7 +11,5 @@
 		Title="Example">
 	<term:TerminalControl FontSize="14" BufferSize="1000"
 						  Margin="10"
-						  UseSkiaRenderer="True"
-						  Process="wsl.exe"
-						  ProcessArgs="cacademo"/>
+						  UseSkiaRenderer="True" />
 </Window>
