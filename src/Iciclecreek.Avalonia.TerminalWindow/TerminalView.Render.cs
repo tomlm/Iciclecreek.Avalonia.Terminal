@@ -1690,6 +1690,11 @@ namespace Iciclecreek.Terminal
                             var dwBrush = cell.GetUnderlineColor(_palette) is { } uc
                                 ? new ImmutableSolidColorBrush(uc)
                                 : foreground;
+
+                            // Through the blink phase, as on the run path: an SGR 58 colour
+                            // resolved opaque here and kept a doubled row's underline lit through
+                            // the off half of the phase.
+                            dwBrush = cell.ApplyBlinkPhase(dwBrush, this._cursorBlinkOn);
                             var dwRun = new CachedTextRun(null, runStartX, cellCount, null,
                                                           UnderlineStyle: dwUnderline, UnderlineBrush: dwBrush);
                             DrawUnderline(context, dwRun, position, Math.Max(0, endX - startX), rowHeight);

@@ -264,6 +264,14 @@ public class RendererViewportTests
 
         Assert.That(Occurrences(source, "ApplyBlinkPhase(foreground"), Is.EqualTo(3),
             "every path that shapes a cell's text must apply the blink phase; add the call, then update this count");
+
+        // And the two places an SGR 58 underline resolves its OWN colour, which does not pass
+        // through the foreground and so needs the phase applied separately -- the sized-block pass
+        // draws no underline, which is why there are two of these and three above.
+        Assert.That(Occurrences(source, "ApplyBlinkPhase(underlineBrush"), Is.EqualTo(1),
+            "the run path's independently coloured underline must blink with its text");
+        Assert.That(Occurrences(source, "ApplyBlinkPhase(dwBrush"), Is.EqualTo(1),
+            "and so must a doubled row's");
     }
 
     private static int Occurrences(string haystack, string needle)
@@ -380,5 +388,146 @@ public class RendererViewportTests
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.That(m, Is.Not.Null, $"{name} has been renamed; this test needs updating");
         return (T)m!.Invoke(view, new object[] { arg })!;
+    }
+
+    // -------------------------------------------- blink reaches the underline
+
+    [AvaloniaTest]
+    public void A_coloured_underline_blinks_with_its_text()
+    {
+        // SGR 58 resolves the underline's own colour, independent of the foreground -- which means
+        // the blink phase has to be applied to it separately. An underline WITHOUT a colour borrows
+        // the (already transparent) foreground and blinked for free; one WITH a colour stayed lit
+        // through the off half, blinking the text under a steady underline -- on the classic path
+        // only, while the Skia renderer suppressed both together.
+        var (view, window) = Realised();
+        try
+        {
+            SetField(view, "_cursorBlinkOn", false);
+            view.Terminal.Write($"{Esc}[5;4;58:2::255:0:0merror");
+
+            var off = FirstUnderlinedRun(view);
+            Assert.That(((ISolidColorBrush)off.UnderlineBrush!).Color.A, Is.EqualTo(0),
+                "the dark half of the phase hides the underline with the glyph");
+
+            // The lit half draws it exactly as SGR 58 asked. The cache is dropped by hand because
+            // the blink TICK owns that in production, and this test drives the phase directly.
+            var line = view.Terminal.Buffer.GetLine(view.Terminal.Buffer.YBase + view.Terminal.Buffer.Y);
+            line!.Cache = null;
+            SetField(view, "_cursorBlinkOn", true);
+
+            var on = FirstUnderlinedRun(view);
+            Assert.That(((ISolidColorBrush)on.UnderlineBrush!).Color,
+                Is.EqualTo(Color.FromRgb(255, 0, 0)),
+                "and the lit half draws the colour the program named");
+        }
+        finally { window.Close(); }
+    }
+
+    // ------------------------------------------ DECSCNM inverts the whole sheet
+
+    [AvaloniaTest]
+    public void DECSCNM_paints_the_surface_in_the_inverted_colour()
+    {
+        // The band-of-page-colour bug (#149), asserted on what is actually PAINTED rather than on
+        // the per-cell fill rule: most of an inverted screen is rows no program ever wrote, and
+        // they are covered only by the surface fill. Reverting the surface half of the fix would
+        // leave the per-cell assertions green and bring the band back.
+        var (view, window) = Realised();
+        try
+        {
+            // An opaque host brush is what the emulator's pair replaces; a translucent one is a
+            // host asking to be seen through and is deliberately left alone.
+            view.Background = Brushes.Black;
+
+            view.Terminal.Write($"{Esc}[?5h");
+            var palette = view.Terminal.Colors.Take();
+
+            Assert.That(SurfaceColour(view), Is.EqualTo(Rgb(palette.Foreground)),
+                "under DECSCNM the sheet behind the empty rows is the inverted colour");
+
+            view.Terminal.Write($"{Esc}[?5l");
+            Assert.That(SurfaceColour(view), Is.EqualTo(Rgb(palette.Background)),
+                "and clearing the mode hands the surface back");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void The_Skia_snapshot_carries_the_inverted_surface_too()
+    {
+        // The direct path clears with the snapshot's Surface, taken from the same decision the
+        // classic path paints -- asserted on the snapshot the render actually built, because the
+        // custom draw operation needs a Skia lease this platform does not grant.
+        var (view, window) = Realised();
+        try
+        {
+            view.Background = Brushes.Black;
+            view.UseSkiaRenderer = true;
+            view.Terminal.Write($"{Esc}[?5h");
+
+            // The direct path declines while the cell metrics are unmeasured, and they are measured
+            // lazily -- real layout forces them before any frame, headless layout does not. The
+            // public property is the documented way to force them.
+            Assert.That(view.CharWidth, Is.GreaterThan(0), "sanity: the cell metrics can be measured");
+
+            // A bitmap context rather than a DrawingGroup: recording a DrawingGroup rejects custom
+            // draw operations, and Render treats that rejection as a mid-read race and quietly
+            // drops the layer this test exists to read.
+            using var target = new global::Avalonia.Media.Imaging.RenderTargetBitmap(new global::Avalonia.PixelSize(800, 600));
+            using (var context = target.CreateDrawingContext())
+                view.Render(context);
+
+            var layer = typeof(TerminalView)
+                .GetField("_lastSkiaLayer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(view);
+            Assert.That(layer, Is.Not.Null, "the render built no Skia layer; the direct path did not run");
+
+            var snapshot = (Iciclecreek.Terminal.Skia.TerminalSnapshot)layer!.GetType()
+                .GetField("_snapshot", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(layer)!;
+
+            var palette = view.Terminal.Colors.Take();
+            var expected = 0xFF000000u | (uint)palette.Foreground;
+            Assert.That(snapshot.Surface, Is.EqualTo(expected),
+                "the snapshot's clear colour is the inverted surface, same as the classic sheet");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>The colour of the first fill of a fresh frame, which is the surface.</summary>
+    private static Color SurfaceColour(TerminalView view)
+    {
+        var group = new DrawingGroup();
+        using (var context = group.Open())
+            view.Render(context);
+
+        var fill = group.Children.OfType<GeometryDrawing>().FirstOrDefault();
+        Assert.That(fill, Is.Not.Null, "the frame painted no surface at all");
+        return ((ISolidColorBrush)fill!.Brush!).Color;
+    }
+
+    /// <summary>Render a frame and hand back the first underlined run the first row decided on.</summary>
+    private static TerminalView.CachedTextRun FirstUnderlinedRun(TerminalView view)
+    {
+        var group = new DrawingGroup();
+        using (var context = group.Open())
+            view.Render(context);
+
+        var line = view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY];
+        var runs = line!.Cache as List<TerminalView.CachedTextRun>;
+        Assert.That(runs, Is.Not.Null, "the row produced no cached runs");
+        return runs!.First(r => r.UnderlineStyle != XTerm.Common.UnderlineStyle.None);
+    }
+
+    private static Color Rgb(int v)
+        => Color.FromRgb((byte)((v >> 16) & 0xFF), (byte)((v >> 8) & 0xFF), (byte)(v & 0xFF));
+
+    private static void SetField(TerminalView view, string name, object value)
+    {
+        var f = typeof(TerminalView).GetField(name,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(f, Is.Not.Null, $"{name} has been renamed; this test needs updating");
+        f!.SetValue(view, value);
     }
 }

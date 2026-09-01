@@ -12,8 +12,8 @@ namespace Iciclecreek.Terminal.Tests;
 /// <para>The XTERM window-operation family — move, resize, minimise, maximise, restore, raise,
 /// lower, fullscreen — plus DECCOLM's 80/132 switch, which asks for a resize by the same route.
 /// This host forwarded all of them unconditionally; xterm gates the same set behind a resource of
-/// this name and defaults it OFF. It is left ON here so hosts gain a control rather than lose
-/// behaviour.</para>
+/// this name and defaults it OFF, and so does this property -- rearranging the user's desktop is
+/// something a host opts into, which is the behaviour under test below.</para>
 /// <para>Refusal is silent: nothing is raised, so no host acts, and a bare view with its own
 /// handler is covered as well as <c>TerminalWindow</c>.</para>
 /// </remarks>
@@ -152,6 +152,57 @@ public class AllowWindowOpsTests
             view.Terminal.Write($"{Esc}[8;32;102t");
             Dispatcher.UIThread.RunJobs();
             Assert.That(count, Is.EqualTo(1), "and off again means off again");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void The_one_switch_is_enough_on_a_default_view()
+    {
+        // No hand-tuned WindowOptions here, deliberately -- the fixtures above pre-open the
+        // emulator's own per-command gate so they can isolate THIS control's gate. A host reads
+        // none of that; it sets the one documented property. So the property has to open the
+        // emulator's gate too, or a default view that opted in got DECCOLM and nothing else while
+        // every XTERM manipulation command died upstream of the gated handlers.
+        var view = new TerminalView { Process = "", AllowWindowOps = true };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            var asked = false;
+            view.WindowResized += (_, _) => asked = true;
+
+            view.Terminal.Write($"{Esc}[8;30;100t");
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(asked, Is.True,
+                "the advertised switch is the whole opt-in; no second, undocumented gate");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Opting_in_after_startup_reaches_the_live_emulator()
+    {
+        // The other order: the emulator is built with the gate shut, and the host says yes later.
+        // The property change has to open the LIVE emulator's flags, not the snapshot the next
+        // emulator would be built from.
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            view.AllowWindowOps = true;
+
+            var asked = false;
+            view.WindowResized += (_, _) => asked = true;
+
+            view.Terminal.Write($"{Esc}[8;30;100t");
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(asked, Is.True, "saying yes after startup counts the same as before it");
         }
         finally { window.Close(); }
     }

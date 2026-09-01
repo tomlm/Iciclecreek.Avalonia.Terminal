@@ -1140,14 +1140,14 @@ namespace Iciclecreek.Terminal
             // not exist yet, so the value is carried across here instead of being silently lost.
             options.Scrollback = _bufferSize;
 
-            // On Linux the pty does not convert LF to CRLF (ONLCR is off in raw mode), so the
-            // emulator has to treat a bare line feed as an implicit CRLF. That is still the default
-            // everywhere but Windows -- see ConvertEol, which now carries it.
-            //
-            // Through the PROPERTY rather than forced on, because forcing it took a decision away
-            // from the program. The emulator asks `Options.ConvertEol || LineFeedMode`, so a host
-            // that hard-set this left LNM half-wired: a program could set it and never reset it,
-            // and CSI 20 l did nothing on macOS and Linux for anyone.
+            // Off by default on EVERY platform now -- see ConvertEol, which carries the host's
+            // choice. This used to be forced on everywhere but Windows, on the theory that a raw
+            // pty delivers bare line feeds; what it actually did was take LNM away from programs.
+            // The emulator asks `Options.ConvertEol || LineFeedMode`, so a host that hard-set this
+            // left LNM half-wired: a program could set it and never reset it, and CSI 20 l did
+            // nothing on macOS and Linux for anyone. Translating bare line feeds is the tty line
+            // discipline's job (ONLCR on the slave); a transport that truly cannot do it can turn
+            // the property on.
             options.ConvertEol = ConvertEol;
 
             // Foreground and Background ARE the terminal's default colour pair, so they are seeded into the
@@ -1171,6 +1171,16 @@ namespace Iciclecreek.Terminal
             options.WindowOptions.GetWinSizeChars = true;
             options.WindowOptions.GetWinSizePixels = true;
             options.WindowOptions.GetScreenSizePixels = true;
+
+            // One switch, both gates. The emulator has a flag per manipulation command, all off,
+            // and AllowWindowOps is this control's single advertised answer to "may the program
+            // rearrange the window" -- so a yes has to open the emulator's gate too. Without this
+            // the switch governed only DECCOLM (whose re-grid lives behind a mode the program sets
+            // for itself) and the XTERM move/resize/minimise family was discarded upstream before
+            // the gated handlers ever ran; a host that set the one documented property got one
+            // command out of nine.
+            if (AllowWindowOps)
+                EnableWindowManipulation(options.WindowOptions);
 
             _terminal = new XT.Terminal(options);
 
@@ -1702,6 +1712,30 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Opens the emulator's own per-command gate for the window-manipulation family, which is
+        /// the second half of what <see cref="AllowWindowOps"/> promises: without these flags the
+        /// emulator discards the commands before this control's gated handlers ever see them.
+        /// </summary>
+        /// <remarks>
+        /// The manipulation commands only -- the Get* reports have their own defaults, set where the
+        /// emulator is built, and refusing to be moved is not a reason to stop answering questions.
+        /// The same set <c>TerminalWindow.EnableWindowCommands</c> turns on.
+        /// </remarks>
+        private static void EnableWindowManipulation(XTerm.Options.WindowOptions windowOptions)
+        {
+            windowOptions.SetWinPosition = true;
+            windowOptions.SetWinSizePixels = true;
+            windowOptions.SetWinSizeChars = true;
+            windowOptions.RaiseWin = true;
+            windowOptions.LowerWin = true;
+            windowOptions.RefreshWin = true;
+            windowOptions.RestoreWin = true;
+            windowOptions.MaximizeWin = true;
+            windowOptions.MinimizeWin = true;
+            windowOptions.FullscreenWin = true;
+        }
+
+        /// <summary>
         /// Gets or sets whether a bare line feed also returns the carriage.
         /// </summary>
         /// <remarks>
@@ -1877,6 +1911,14 @@ namespace Iciclecreek.Terminal
                 // replayed rather than rebuilt — without the purge the switch would only reach
                 // lines that happen to change afterwards, which looks like it half worked.
                 InvalidateRunCaches();
+            }
+            else if (change.Property == AllowWindowOpsProperty && (bool)change.NewValue!)
+            {
+                // The same both-gates rule OnInitialized applies, for a host that says yes after the
+                // emulator is built. One-way on purpose: revoking is already handled by the gated
+                // handlers reading the CURRENT value, and TerminalWindow turns the emulator flags on
+                // unconditionally -- turning them off here would fight it for no protection gained.
+                EnableWindowManipulation(_terminal.Options.WindowOptions);
             }
             else if (change.Property == CursorStyleProperty)
             {
@@ -3521,6 +3563,13 @@ namespace Iciclecreek.Terminal
                     underlineBrush = cell.GetUnderlineColor(_palette) is { } uc
                         ? new ImmutableSolidColorBrush(uc)
                         : foreground;
+
+                    // Through the blink phase like the glyph. An underline WITHOUT SGR 58 borrows
+                    // the foreground and inherits its transparency for free; one WITH its own
+                    // colour resolved opaque here and stayed lit through the off half -- blinking
+                    // text under a steady underline, on the classic path only, while the Skia
+                    // renderer suppressed both together.
+                    underlineBrush = cell.ApplyBlinkPhase(underlineBrush, this._cursorBlinkOn);
                 }
 
                 // A run of blanks with no decoration has nothing to draw. Most of a terminal is exactly
