@@ -58,7 +58,7 @@ namespace Iciclecreek.Terminal
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalView, bool>(
                 nameof(UseSkiaRenderer),
-                defaultValue: true);
+                defaultValue: false);
 
         /// <summary>Whether the cell grid is drawn straight onto the Skia canvas. See <see cref="UseSkiaRendererProperty"/>.</summary>
         public bool UseSkiaRenderer

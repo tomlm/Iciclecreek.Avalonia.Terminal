@@ -106,7 +106,7 @@ namespace Iciclecreek.Terminal
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalControl, bool>(
                 nameof(UseSkiaRenderer),
-                defaultValue: true);
+                defaultValue: false);
 
         // Cursor appearance. Real StyledProperties with the same defaults as TerminalView's, reaching the
         // view through the template — a forwarder would drop anything set before the template applied, which
