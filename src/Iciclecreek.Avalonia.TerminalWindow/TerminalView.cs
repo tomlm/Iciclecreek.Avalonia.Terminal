@@ -299,6 +299,31 @@ namespace Iciclecreek.Terminal
         // IME (Input Method Editor) support
         private TerminalInputMethodClient? _inputMethodClient;
 
+        /// <summary>
+        /// The least time between two output-driven IME notifications.
+        /// </summary>
+        /// <remarks>
+        /// Ten a second. Each one reaches IMM32 on the UI thread, which is expensive enough that a
+        /// full-screen application redrawing at fifty frames a second could wedge the window with
+        /// nothing else going on. Nothing a person does with an input method needs finer than this
+        /// -- the rectangle only has to be right by the time they start composing.
+        /// </remarks>
+        private static readonly TimeSpan ImeNotifyInterval = TimeSpan.FromMilliseconds(100);
+
+        /// <summary>Whether this view holds keyboard focus, readable off the UI thread.</summary>
+        /// <remarks>
+        /// A plain field rather than the IsFocused property, because the pty reader thread is what
+        /// asks and an Avalonia property is not its to read. Volatile is enough: it is written on
+        /// the UI thread when focus changes and read on the reader thread, and a reader that sees
+        /// the previous value for a moment either sends one notification it need not have or skips
+        /// one it could have sent, neither of which matters at a focus change.
+        /// </remarks>
+        private volatile bool _imeFocused;
+
+        // When the last output-driven IME notification was queued, as a Stopwatch timestamp.
+        // Interlocked because the pty reader thread writes it and reads it.
+        private long _imeNotifiedAt;
+
         // 1 while an IME notification is already queued on the dispatcher and has not run yet.
         // Read and written from the pty reader thread and the UI thread, hence Interlocked; see
         // NotifyInputMethodCoalesced for why one notification in flight is enough.

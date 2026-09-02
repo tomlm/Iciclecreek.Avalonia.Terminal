@@ -560,6 +560,9 @@ namespace Iciclecreek.Terminal
         {
             base.OnGotFocus(e);
 
+            // Read by the pty reader thread, which cannot ask an Avalonia property for this.
+            _imeFocused = true;
+
             Debug.WriteLine($"[TerminalView] OnGotFocus: Source={e.Source?.GetType().Name}");
 
             // Reset blink state to visible when focused
@@ -584,6 +587,9 @@ namespace Iciclecreek.Terminal
         protected override async void OnLostFocus(FocusChangedEventArgs e)
         {
             base.OnLostFocus(e);
+
+            // No focus, no composition, so nothing the IME could want the cursor rectangle for.
+            _imeFocused = false;
 
             // A key held while focus moves away never sends its release here, and would otherwise
             // stay in the set for ever -- so the next real press of it would report as a repeat.

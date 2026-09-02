@@ -82,6 +82,53 @@ public class ReaderThreadDeadlockTests
     }
 
     [AvaloniaTest]
+    public void A_synchronised_update_does_not_throw_on_the_thread_that_wrote_it()
+    {
+        // DEC private mode 2026. An application that double-buffers wraps every frame in these, so
+        // this pair arrives fifty times a second for as long as it runs -- and it arrives on the
+        // READER thread, like every other seam raised from Terminal.Write.
+        //
+        // The handler behind it starts a DispatcherTimer, which is UI-affine. Off the UI thread
+        // that throws, the exception unwinds through Terminal.Write into the read loop's catch-all,
+        // and the loop ends: the terminal shows nothing further for the rest of its life. Which
+        // looks, from the outside, exactly like the application hanging.
+        var (view, window) = Realised();
+        try
+        {
+            var opened = WriteReturnsWithoutTheUIThread(view, $"{Esc}[?2026h");
+
+            Assert.That(opened, Is.True,
+                "the opening half of a synchronised update blocked the reader on the UI thread");
+
+            var closed = WriteReturnsWithoutTheUIThread(view, $"{Esc}[?2026l");
+
+            Assert.That(closed, Is.True,
+                "the closing half of a synchronised update blocked the reader on the UI thread");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_run_of_synchronised_updates_does_not_throw_on_the_reader_thread()
+    {
+        // One pair can pass on a timer that has not been started yet; the failure wants the SECOND
+        // Begin, which disposes the timer the first one created. A full-screen animation does this
+        // continuously, which is why it shows there and not on a one-shot.
+        var (view, window) = Realised();
+        try
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                Assert.That(WriteReturnsWithoutTheUIThread(view, $"{Esc}[?2026h"), Is.True,
+                    $"frame {i}: the opening half blocked the reader");
+                Assert.That(WriteReturnsWithoutTheUIThread(view, $"{Esc}[?2026l"), Is.True,
+                    $"frame {i}: the closing half blocked the reader");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
     public void An_OSC7_directory_report_does_not_block_the_thread_that_wrote_it()
     {
         var (view, window) = Realised();
