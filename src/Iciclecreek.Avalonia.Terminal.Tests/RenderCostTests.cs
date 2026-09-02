@@ -174,6 +174,8 @@ public class RenderCostTests
         var (view, window) = Realised();
         try
         {
+            FocusForIme(view);
+
             for (var i = 0; i < 50; i++)
                 FeedChunk(view, $"line {i}\r\n");
 
@@ -191,16 +193,103 @@ public class RenderCostTests
         // "One at a time", not "once ever". An IME caches what it was last told, so a chunk arriving
         // after the notification has run still has to say the line moved -- otherwise composition
         // happens against text the buffer no longer holds.
+        //
+        // Past the rate limit before the second chunk, because that is the guarantee under test: a
+        // later chunk queues another notification. That it does NOT queue one straight away is a
+        // different guarantee, pinned below.
         var (view, window) = Realised();
         try
         {
+            FocusForIme(view);
+
             FeedChunk(view, "first\r\n");
             Dispatcher.UIThread.RunJobs();
             Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(0), "sanity: the first one ran");
 
+            Thread.Sleep(ImeInterval + TimeSpan.FromMilliseconds(40));
             FeedChunk(view, "second\r\n");
 
             Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(1));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>The rate limit itself, which coalescing alone did not provide.</summary>
+    private static readonly TimeSpan ImeInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Gives the view keyboard focus, which output-driven IME notification now requires.
+    /// </summary>
+    /// <remarks>
+    /// Asserted rather than assumed. Every test below asserts a notification was or was not
+    /// QUEUED, and an unfocused view queues nothing at all -- so without focus the negative tests
+    /// pass while testing nothing, which is exactly how this fixture briefly behaved.
+    /// </remarks>
+    private static void FocusForIme(TerminalView view)
+    {
+        view.Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(Field<bool>(view, "_imeFocused"), Is.True,
+            "the view did not take focus, so nothing below would queue an IME notification and the "
+            + "assertions would hold vacuously");
+    }
+
+    [AvaloniaTest]
+    public void Output_does_not_notify_the_ime_faster_than_the_rate_limit()
+    {
+        // The failure this exists for was a frozen window, diagnosed from a dump: the UI thread sat
+        // in ImmSetCandidateWindow, reached from the cursor-rectangle notification, while the pty
+        // reader was parked in ReadFile with nothing left to do. The terminal was not behind on its
+        // input -- it was spending the UI thread inside the IME.
+        //
+        // Coalescing bounds how many notifications are QUEUED at once; it does nothing about how
+        // often they are queued. A full-screen application redrawing fifty times a second retires
+        // one per drain and so still reaches IMM32 tens of times a second, which is what wedged the
+        // window. Draining between chunks is what makes this test see the rate and not the latch.
+        var (view, window) = Realised();
+        try
+        {
+            FocusForIme(view);
+
+            FeedChunk(view, "first\r\n");
+
+            // The first one must actually queue, or the loop below proves nothing.
+            Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(1),
+                "sanity: a focused view queues the first notification");
+
+            Dispatcher.UIThread.RunJobs();
+
+            for (var i = 0; i < 30; i++)
+            {
+                FeedChunk(view, $"burst {i}\r\n");
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(0),
+                    $"chunk {i} queued an IME notification inside the rate limit; coalescing bounds "
+                    + "the queue depth, not the rate, and the rate is what reaches IMM32");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void An_unfocused_view_never_notifies_the_ime_at_all()
+    {
+        // Nothing without focus can be composing, so nothing without focus needs the cursor
+        // rectangle. A terminal in a background tab should cost nothing however hard its process
+        // is writing -- and every IME notification is a blocking IMM32 call on the UI thread, which
+        // is shared with every other terminal in the window.
+        var (view, window) = Realised();
+        try
+        {
+            Assert.That(Field<bool>(view, "_imeFocused"), Is.False, "sanity: not focused");
+
+            for (var i = 0; i < 50; i++)
+                FeedChunk(view, $"line {i}\r\n");
+
+            Assert.That(Field<int>(view, "_imeNotifyQueued"), Is.EqualTo(0),
+                "an unfocused view queued an IME notification");
         }
         finally { window.Close(); }
     }

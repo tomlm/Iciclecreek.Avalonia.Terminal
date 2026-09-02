@@ -606,8 +606,37 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void NotifyInputMethodCoalesced()
         {
+            // Coalescing alone was not enough, and a dump of a frozen window is what said so: the
+            // UI thread sat in ImmSetCandidateWindow, reached from Imm32InputMethod.SetCursorRect,
+            // while the pty reader was parked in ReadFile with nothing to do. The terminal was not
+            // behind on its input at all -- it was spending the UI thread inside the IME.
+            //
+            // One notification per dispatcher drain is still one IMM32 call per drain, and against
+            // a full-screen animation that is tens of blocking calls a second, for a cursor the
+            // user is not typing at. So the OUTPUT-driven notification is rate limited as well as
+            // coalesced. An IME needs the rectangle to be right when composition starts, not to
+            // track a running animation; a tenth of a second is far below anything a person can
+            // act on and two orders of magnitude off the flood.
+            //
+            // Deliberately time-based rather than "only when the cursor moved": a full-screen
+            // application moves the cursor on every frame by definition, so a movement test admits
+            // exactly the case that hurts and excludes the quiet one it would help.
+            // Nothing unfocused can be composing, so nothing unfocused needs telling. This is
+            // the free half of the fix: a terminal in a background tab or an unfocused window now
+            // costs nothing at all, however hard its process is writing.
+            if (!_imeFocused)
+                return;
+
+            long now = Stopwatch.GetTimestamp();
+            long last = Interlocked.Read(ref _imeNotifiedAt);
+
+            if (last != 0 && Stopwatch.GetElapsedTime(last, now) < ImeNotifyInterval)
+                return;
+
             if (Interlocked.CompareExchange(ref _imeNotifyQueued, 1, 0) != 0)
                 return;
+
+            Interlocked.Exchange(ref _imeNotifiedAt, now);
 
             Dispatcher.UIThread.Post(() =>
             {
