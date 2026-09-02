@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Avalonia.Media;
@@ -26,22 +27,31 @@ namespace Iciclecreek.Terminal.Skia
     internal sealed class SnapshotBuilder
     {
         /// <summary>
-        /// How many frame headers rotate.
+        /// The most headers kept for reuse.
         ///
-        /// Only the header rotates — the rows it points at belong to their lines. Two would nearly do,
-        /// but a frame can still be in flight on the render thread when the next is assembled, and
-        /// overwriting a header being read shows as a torn screen. Three is cheap and settles it.
+        /// Only the header is pooled — the rows it points at belong to their lines. A header comes
+        /// back when the frame using it RETIRES, which Avalonia signals by disposing the operation
+        /// (see TerminalSkiaLayer.Dispose), so the free list settles at the depth the compositor
+        /// actually runs at rather than a number guessed here. This cap only bounds what a
+        /// pathological run can retain; past it a header is not pooled, which costs an allocation
+        /// and never a shared header.
+        ///
+        /// Headers rotated on a counter three deep before, which is the same bet made blind. A
+        /// fourth frame assembled before the first retired overwrote a header the render thread was
+        /// still reading — and by then the other half of that frame, the rows the classic path drew
+        /// from <c>Deferred</c>, had already been recorded into the display list against the OLD
+        /// contents. The two halves disagree, rows draw twice or not at all, the next unrelated
+        /// repaint clears it, and it reproduces on nobody's machine.
         /// </summary>
-        private const int PoolDepth = 3;
+        private const int MaxPooled = 8;
 
-        private readonly TerminalSnapshot[] _pool = new TerminalSnapshot[PoolDepth];
-        private int _next;
+        private readonly Stack<TerminalSnapshot> _free = new();
 
-        public SnapshotBuilder()
-        {
-            for (var i = 0; i < PoolDepth; i++)
-                _pool[i] = new TerminalSnapshot();
-        }
+        /// <summary>
+        /// Stamped on every header and captured by the operation that will draw it. Only ever
+        /// incremented here, on the UI thread; the render thread only reads.
+        /// </summary>
+        private long _frameId;
 
         public TerminalSnapshot Build(
             XTerm.Terminal terminal,
@@ -62,8 +72,11 @@ namespace Iciclecreek.Terminal.Skia
             bool boldIsBright,
             MinimumContrast? minimumContrast)
         {
-            var snapshot = _pool[_next];
-            _next = (_next + 1) % PoolDepth;
+            TerminalSnapshot snapshot;
+            lock (_free)
+                snapshot = _free.Count > 0 ? _free.Pop() : new TerminalSnapshot();
+
+            snapshot.FrameId = ++_frameId;
 
             snapshot.EnsureCapacity(rows, cols);
             snapshot.CellWidth = cellWidth;
@@ -159,6 +172,35 @@ namespace Iciclecreek.Terminal.Skia
             }
 
             return snapshot;
+        }
+
+        /// <summary>
+        /// Takes a header back, once the frame that used it has retired.
+        /// </summary>
+        /// <remarks>
+        /// Called from TerminalSkiaLayer.Dispose, which Avalonia runs on the RENDER thread when the
+        /// frame leaves the scene — the same signal the layer already relies on to free its shaping
+        /// buffer. <see cref="Build"/> rents on the UI thread, which is what the lock is for.
+        ///
+        /// A header Avalonia never disposes is simply never reused: the next Build allocates a
+        /// replacement and the free list stabilises one deeper. Losing a header costs an allocation;
+        /// reusing one too early costs a torn frame, so the asymmetry is deliberate.
+        /// </remarks>
+        public void Return(TerminalSnapshot snapshot)
+        {
+            // The rows stay on their lines, where the cache keeps them. Dropping the pointers here
+            // lets a retired frame's rows be collected once their lines have moved on, instead of
+            // being held alive by a header sitting in the free list.
+            if (snapshot.RowCount > 0)
+                Array.Clear(snapshot.Rows, 0, Math.Min(snapshot.RowCount, snapshot.Rows.Length));
+
+            snapshot.FrameId = 0;
+
+            lock (_free)
+            {
+                if (_free.Count < MaxPooled)
+                    _free.Push(snapshot);
+            }
         }
 
         private static void Fill(SnapshotRow row, BufferLine line, ColorSnapshot palette,

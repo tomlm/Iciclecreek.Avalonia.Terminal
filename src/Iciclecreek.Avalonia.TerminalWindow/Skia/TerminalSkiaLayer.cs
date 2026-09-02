@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using Avalonia;
 using Avalonia.Media;
@@ -36,14 +36,31 @@ namespace Iciclecreek.Terminal.Skia
     {
         private readonly TerminalSnapshot _snapshot;
         private readonly SkiaFontCache _fonts;
+        private readonly SnapshotBuilder? _owner;
+        private readonly Action? _requestPaint;
+
+        /// <summary>The header's frame at the moment this operation was built. See <see cref="Render"/>.</summary>
+        private readonly long _frameId;
+
+        private int _released;
 
         public Rect Bounds { get; }
 
-        public TerminalSkiaLayer(TerminalSnapshot snapshot, SkiaFontCache fonts, Rect bounds)
+        /// <param name="owner">
+        /// The builder to hand the header back to when this operation retires. Null for a caller
+        /// that owns its snapshot outright -- the benches build one synthetically and draw it
+        /// directly -- in which case nothing is pooled and nothing is returned.
+        /// </param>
+        /// <param name="requestPaint">Asks for another frame; safe from the render thread.</param>
+        public TerminalSkiaLayer(TerminalSnapshot snapshot, SkiaFontCache fonts, Rect bounds,
+                                 SnapshotBuilder? owner = null, Action? requestPaint = null)
         {
             _snapshot = snapshot;
             _fonts = fonts;
             Bounds = bounds;
+            _owner = owner;
+            _requestPaint = requestPaint;
+            _frameId = snapshot.FrameId;
         }
 
         public bool HitTest(Point p) => false;
@@ -57,11 +74,50 @@ namespace Iciclecreek.Terminal.Skia
         {
             _blobs?.Dispose();
             _blobs = null;
+
+            // And the header goes back, exactly once. This is the whole reason the pool can be
+            // driven by retirement rather than by a fixed depth: Avalonia is already telling us,
+            // right here, that nothing will read this frame again.
+            if (_owner is not null && Interlocked.Exchange(ref _released, 1) == 0)
+                _owner.Return(_snapshot);
         }
+
+        /// <summary>
+        /// Never equal to another operation, including one over the same snapshot.
+        /// </summary>
+        /// <remarks>
+        /// Avalonia keeps the OLD operation where this returns true. A content comparison looks like
+        /// an obvious saving — most frames change few rows — but what it buys is the compositor
+        /// going on drawing a header that has since been handed back and refilled. That is the
+        /// stale-frame bug the rest of this class is arranged to prevent.
+        /// </remarks>
         public bool Equals(ICustomDrawOperation? other) => false;
 
         public void Render(ImmediateDrawingContext context)
         {
+            // Both halves of a frame have to BE the same frame. These rows are read here, at
+            // composite time, out of a header the UI thread owns; the rows the classic path drew
+            // were recorded into the display list back when Build ran, against this header's
+            // Deferred. A header recycled in between makes those two disagree, and the screen shows
+            // rows twice or not at all.
+            //
+            // Retirement-driven pooling is what stops that, so this cannot fire -- which is exactly
+            // why it is worth having. Drawing nothing and asking for another frame makes the
+            // failure a blank grid for one frame; leaving it makes it a torn screen that waits for
+            // an unrelated repaint, and that is the version that costs an afternoon to find.
+            //
+            // One check, before the draw, is enough: the header cannot be recycled until THIS
+            // operation is disposed, because Dispose is what hands it back and it does so exactly
+            // once. Avalonia does not dispose an operation while it is rendering it -- the same
+            // ordering the shaping buffer freed in Dispose has always relied on, where a Dispose
+            // racing a Draw would be a native use-after-free long before it was a torn frame.
+            if (_snapshot.FrameId != _frameId)
+            {
+                Volatile.Write(ref _stale, 1);
+                _requestPaint?.Invoke();
+                return;
+            }
+
             var feature = context.TryGetFeature<ISkiaSharpApiLeaseFeature>();
             if (feature is null)
             {
@@ -97,6 +153,15 @@ namespace Iciclecreek.Terminal.Skia
         public bool Unsupported => Volatile.Read(ref _unsupported) != 0;
 
         private int _unsupported;
+
+        /// <summary>
+        /// Set by <see cref="Render"/> when the header it was handed had been recycled before the
+        /// frame reached the compositor. Under retirement-driven pooling this cannot happen; it is
+        /// here so that if it ever does, it is a reportable fact rather than a screenshot.
+        /// </summary>
+        public bool Stale => Volatile.Read(ref _stale) != 0;
+
+        private int _stale;
 
         /// <summary>
         /// To the device pixel grid, exactly as the classic path's Snap does. Without it the cell

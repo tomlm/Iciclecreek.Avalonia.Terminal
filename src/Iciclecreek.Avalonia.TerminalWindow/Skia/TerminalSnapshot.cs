@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace Iciclecreek.Terminal.Skia
 {
@@ -222,6 +222,18 @@ namespace Iciclecreek.Terminal.Skia
         public SnapshotRow?[] Rows = Array.Empty<SnapshotRow?>();
         public int RowCount;
         public int Cols;
+
+        /// <summary>
+        /// Identifies the frame this header was built for. The operation that will draw it captures
+        /// the value at construction and compares before drawing, so a header recycled while its
+        /// frame was still in flight is DETECTABLE rather than merely unlikely -- the one way the
+        /// two halves of a frame (these rows, and the classic rows recorded against
+        /// <see cref="Deferred"/>) can come from different frames.
+        ///
+        /// A tripwire, not a lock. On a runtime without atomic 64-bit loads a torn read reports a
+        /// mismatch that is not one, and what that costs is a skipped frame and a repaint.
+        /// </summary>
+        public long FrameId;
 
         public double CellWidth;
         public double CellHeight;

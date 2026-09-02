@@ -377,7 +377,8 @@ namespace Iciclecreek.Terminal
                 snapshot.RenderScale = scale;
 
                 var layer = new Skia.TerminalSkiaLayer(snapshot, _skiaFonts,
-                    new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight));
+                    new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight),
+                    _snapshotBuilder, RequestPaint);
                 context.Custom(layer);
 
                 skiaSnapshot = snapshot;
