@@ -95,6 +95,12 @@ namespace Iciclecreek.Terminal.Skia
                 //
                 // A real hit is the name that comes back: FromFamilyName never returns null, it
                 // returns the default face under whatever name the default has.
+                //
+                // Only the FIRST name is the host's own choice; every name after it is one the host
+                // named in case the one before it is absent, and the grid has to survive whichever of
+                // them ends up answering. So the primary is taken on its word and the rest have to
+                // measure like a terminal font as well as exist -- see HasUniformLatin.
+                var isPrimary = true;
                 foreach (var candidate in key.Family.Split(','))
                 {
                     var name = candidate.Trim();
@@ -103,8 +109,10 @@ namespace Iciclecreek.Terminal.Skia
 
                     var face = SKTypeface.FromFamilyName(name, weight, SKFontStyleWidth.Normal, slant);
                     if (face is not null && string.Equals(face.FamilyName, name, StringComparison.OrdinalIgnoreCase)
-                        && CanDrawText(face))
+                        && CanDrawText(face) && (isPrimary || HasUniformLatin(face)))
                         return face;
+
+                    isPrimary = false;
                 }
 
                 // "monospace" is a GENERIC ALIAS rather than a family, and the chain ends in one on
@@ -144,12 +152,42 @@ namespace Iciclecreek.Terminal.Skia
         /// missed the primary face and went through the per-codepoint fallback, which answers 'a' with the
         /// platform's proportional default — so the glyphs came out proportional on a monospace grid,
         /// columns landing correctly and the characters inside them not.</para>
-        /// <para>Asked as "does it have Latin" rather than "is it fixed pitch": a host naming a proportional
-        /// face has chosen one and is owed it, and an emoji font reports fixed pitch anyway (measured: Noto
-        /// Color Emoji does), so pitch does not separate these two cases and this does.</para>
+        /// <para>This on its OWN is not enough, and the two emoji families are built oppositely enough
+        /// to prove it: Noto Color Emoji has no Latin and reports fixed pitch, while Segoe UI Emoji is
+        /// the exact reverse. Either test alone lets one of the two through, so both are asked -- see
+        /// HasUniformLatin, which is the half that catches Segoe UI Emoji.</para>
         /// </remarks>
         private static bool CanDrawText(SKTypeface face)
             => face.GetGlyph('M') != 0 && face.GetGlyph('a') != 0;
+
+        /// <summary>
+        /// Whether the face measures every Latin character the same, which is what a cell grid needs.
+        /// </summary>
+        /// <remarks>
+        /// <para>CanDrawText's companion, and the half that keeps Segoe UI Emoji out. It is a real family
+        /// that round-trips its own name, and it carries the whole of Segoe UI's PROPORTIONAL Latin set --
+        /// measured on Windows 11, GetGlyph('M')=48, GetGlyph('a')=68, IsFixedPitch=False, advances i/M/.
+        /// of 3.875/14.367/3.469 at 16px against Cascadia Mono's uniform 9.375 -- so "has Latin" passes it
+        /// outright and it was taken as the cell face.</para>
+        /// <para>Not a hypothetical: this repo's own Demo.Desktop chain hits it on any Windows machine
+        /// where Cascadia Code is not SYSTEM-installed, which is the normal case, because
+        /// "fonts:CascadiaCode#Cascadia Code" is an EMBEDDED avares:// font that Avalonia's text stack
+        /// loads and DirectWrite never sees. The first name misses, Segoe UI Emoji is next, and the cells
+        /// came out proportional on a grid measured from the embedded monospace face.</para>
+        /// <para>Asked as the measured ADVANCE rather than IsFixedPitch, which would also have caught this
+        /// one: the flag is a claim in the font's tables, the advance is the thing the grid is actually
+        /// laid out from. Compared exactly rather than within a tolerance because a monospace face's
+        /// characters share one advance scaled by one factor -- verified equal to the bit across sizes and
+        /// subpixel settings on every installed fixed-pitch family here.</para>
+        /// <para>Off the hot path: Face() is memoized per (chain, style), so this costs three measurements
+        /// per distinct chain, not per glyph.</para>
+        /// </remarks>
+        private static bool HasUniformLatin(SKTypeface face)
+        {
+            using var probe = new SKFont(face, 16f);
+            var advance = probe.MeasureText("i");
+            return advance == probe.MeasureText("M") && advance == probe.MeasureText(".");
+        }
 
         /// <summary>
         /// Distance from the top of a cell to the text baseline, for the face actually being drawn with.
@@ -444,6 +482,17 @@ namespace Iciclecreek.Terminal.Skia
             });
         }
 
+        /// <summary>The face resolved for a codepoint, for tests that assert the resolution itself.</summary>
+        internal SKTypeface? FallbackFace(int codePoint) => _fallback.GetOrAdd(codePoint, ResolveFallback);
+
+        /// <summary>
+        /// Whether a drawable glyph is held for this codepoint against this font, for tests that
+        /// assert the cache is actually being populated. Nothing about the rendered output shows
+        /// the difference between a cache that works and one that misses every time.
+        /// </summary>
+        internal bool HasCachedGlyph(int codePoint, SKFont font) =>
+            _glyphBlobs.TryGetValue((font.Typeface.Handle, font.Size, codePoint), out var blob) && blob is not null;
+
         /// <summary>
         /// Which installed face can actually draw a codepoint the terminal font lacks.
         /// </summary>
@@ -464,17 +513,6 @@ namespace Iciclecreek.Terminal.Skia
         /// 51ms exhaustive across 183 families here — paid once per distinct codepoint and then
         /// cached forever, so a prompt costs a handful of frames once and never again.</para>
         /// </remarks>
-        /// <summary>The face resolved for a codepoint, for tests that assert the resolution itself.</summary>
-        internal SKTypeface? FallbackFace(int codePoint) => _fallback.GetOrAdd(codePoint, ResolveFallback);
-
-        /// <summary>
-        /// Whether a drawable glyph is held for this codepoint against this font, for tests that
-        /// assert the cache is actually being populated. Nothing about the rendered output shows
-        /// the difference between a cache that works and one that misses every time.
-        /// </summary>
-        internal bool HasCachedGlyph(int codePoint, SKFont font) =>
-            _glyphBlobs.TryGetValue((font.Typeface.Handle, font.Size, codePoint), out var blob) && blob is not null;
-
         private static SKTypeface? ResolveFallback(int codePoint)
         {
             var matched = SKFontManager.Default.MatchCharacter(codePoint);
