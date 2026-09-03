@@ -63,11 +63,8 @@ namespace Iciclecreek.Terminal
 
             UnsubscribeTerminalEvents();
 
-            // A view detached mid-update must not keep the gate closed or the timer alive. The
-            // timeout would self-heal in 150 ms, but the timer holds the view for that window, and
-            // a view re-attached inside it would start out refusing to paint for no reason.
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = null;
+            // A view detached mid-update must not keep the gate closed: a view re-attached inside
+            // that window would start out refusing to paint for no reason.
             _atomicUpdate = false;
 
             if (!_suppressCleanupOnDetach)

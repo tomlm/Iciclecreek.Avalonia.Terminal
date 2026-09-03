@@ -118,8 +118,13 @@ namespace Iciclecreek.Terminal
         /// and half new, which is the tearing you see when a TUI repaints under load. While this is
         /// set the view stops asking for frames, so the last complete one stays on screen, and the end
         /// of the update asks for exactly one.
+        /// <para>Volatile because the two sides are different threads: it is set and cleared on the PTY
+        /// reader thread, and read on the UI thread as well — the cursor blink, the animation clock, and
+        /// every mouse, key and selection path reach <c>RequestPaint</c>. The volatile write is what
+        /// publishes <see cref="_atomicUpdateStartedAt"/> along with it; see <see cref="BeginAtomicUpdate"/>
+        /// for what a reader that saw the flag without the timestamp would do.</para>
         /// </remarks>
-        private bool _atomicUpdate;
+        private volatile bool _atomicUpdate;
 
         /// <summary>Complete frames of the viewport, published by the reader for the renderer.</summary>
         /// <remarks>See <see cref="FrameCapturePool"/> for the tearing this exists to stop.</remarks>
@@ -136,8 +141,16 @@ namespace Iciclecreek.Terminal
         /// completes, and is current from the moment it exists.
         /// </remarks>
         private long _liveWriteGeneration;
-
-        private IDisposable? _atomicUpdateTimeout;
+        /// <summary>When the open atomic update began, as a Stopwatch timestamp.</summary>
+        /// <remarks>
+        /// Written beside <see cref="_atomicUpdate"/> on the reader thread and read wherever the
+        /// deadline is tested. Only meaningful while that flag is set, and always written BEFORE
+        /// it: the flag is volatile, so writing it releases this one, and a reader that sees the
+        /// flag set sees the timestamp that belongs to it. Plain rather than volatile itself for
+        /// exactly that reason — the flag publishes it, and it is never read except after the flag
+        /// has been found set.
+        /// </remarks>
+        private long _atomicUpdateStartedAt;
 
         /// <summary>
         /// How long a hold may last before the view paints anyway.
@@ -1638,26 +1651,39 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// An application has declared the start of an atomic update — DEC private mode 2026.
+        /// </summary>
+        /// <remarks>
+        /// <para>A timestamp rather than a timer, and that is a correctness fix rather than a
+        /// tidying. This is raised from Terminal.Write, so it runs on the PTY READER thread, and
+        /// what it used to do there was dispose one DispatcherTimer and create another — UI-owned
+        /// state, mutated off the UI thread, once per frame for as long as an application
+        /// double-buffers.</para>
+        /// <para>Disposing a DispatcherTimer does not recall a tick it has already queued. So a
+        /// timeout armed for frame N could fire during frame N+2, find <c>_atomicUpdate</c> true
+        /// because a LATER update was open, and end that one early. Ending an update early paints
+        /// a frame the application had not finished writing, which is a torn frame — and the faster
+        /// the frames, the likelier the overlap, which is why it showed on the heaviest demo and
+        /// not the lighter ones.</para>
+        /// <para>Nothing here touches the dispatcher now. The deadline is checked where it is
+        /// already free to check: see <c>RequestPaint</c>.</para>
+        /// <para>Order matters, and so does the volatile on the flag. The timestamp is written
+        /// first and the flag second; a reader tests the flag first and the timestamp second. The
+        /// volatile write releases the timestamp with the flag, so no thread can see the update as
+        /// open while still holding the PREVIOUS timestamp — or zero, whose elapsed time is the age
+        /// of the process, which would look like a deadline blown the instant the update began and
+        /// paint the half-written frame this exists to prevent. x64 would not reorder those two
+        /// stores; arm64 is free to.</para>
+        /// </remarks>
         private void BeginAtomicUpdate()
         {
+            _atomicUpdateStartedAt = Stopwatch.GetTimestamp();
             _atomicUpdate = true;
-
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = DispatcherTimer.RunOnce(
-                () =>
-                {
-                    // The application never finished. Paint what there is rather than stay frozen.
-                    if (_atomicUpdate)
-                        EndAtomicUpdate();
-                },
-                AtomicUpdateTimeout);
         }
 
         private void EndAtomicUpdate()
         {
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = null;
-
             if (!_atomicUpdate)
                 return;
 
@@ -2194,8 +2220,6 @@ namespace Iciclecreek.Terminal
             _cursorBlinkTimer?.Stop();
             _animationTimer?.Stop();
 
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = null;
             _atomicUpdate = false;
 
             // Takes the pty, the cancellation source and the cached bitmaps with it. An ATTACHED

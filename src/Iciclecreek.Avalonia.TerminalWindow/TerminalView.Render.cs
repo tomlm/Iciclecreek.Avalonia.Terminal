@@ -86,10 +86,36 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Ask for a frame, unless an application is mid-update.
         /// </summary>
+        /// <remarks>
+        /// <para>Where the atomic-update deadline is enforced, because this is the one place that
+        /// already asks the question and it costs a timestamp comparison to answer. An update held
+        /// open past the deadline is a broken application rather than a synchronised update — it
+        /// set the mode and never cleared it — and the frame is drawn rather than withheld for
+        /// ever.</para>
+        /// <para>Called from both sides. The PTY reader thread reaches it when output arrives; the
+        /// UI thread reaches it from the cursor blink and the animation clock, and from the mouse,
+        /// keyboard and selection paths. Nothing here arms or cancels a dispatcher timer, which is
+        /// the part the reader thread had no business doing — and a stale tick from that churn could
+        /// end a LATER update early and tear the frame. That the flag is read from more than one
+        /// thread is why it is volatile: see <c>BeginAtomicUpdate</c>.</para>
+        /// <para>So an update left open outlives its deadline only until something asks for a
+        /// frame, and output is not the only thing that asks: a blinking cursor on a focused view
+        /// asks about twice a second, an animation asks every frame, and any mouse or key that
+        /// reaches the view asks at once. Whichever comes first drops the hold and paints. With
+        /// none of them — unfocused, nothing animating, no input, no output — the screen keeps the
+        /// last COMPLETE frame rather than a half-written one, which is the better of the two and
+        /// is not a wedge: the next byte of output recovers it, and both teardown paths clear the
+        /// flag outright.</para>
+        /// </remarks>
         private void RequestPaint()
         {
             if (_atomicUpdate)
-                return;
+            {
+                if (Stopwatch.GetElapsedTime(_atomicUpdateStartedAt) < AtomicUpdateTimeout)
+                    return;
+
+                _atomicUpdate = false;
+            }
 
             TerminalRenderThrottle.RequestInvalidate(this);
         }
