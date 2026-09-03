@@ -92,13 +92,20 @@ namespace Iciclecreek.Terminal
         /// open past the deadline is a broken application rather than a synchronised update — it
         /// set the mode and never cleared it — and the frame is drawn rather than withheld for
         /// ever.</para>
-        /// <para>This runs on whichever thread had output to show, so no dispatcher timer is armed
-        /// or cancelled per frame. That churn was UI-owned state being mutated from the reader
-        /// thread, and a stale tick from it could end a LATER update early and tear the frame.</para>
-        /// <para>If output stops entirely while an update is open, nothing calls this and the
-        /// screen keeps the last COMPLETE frame rather than a half-written one. That is the better
-        /// of the two, and it is not a wedge: the next byte of output recovers it, and both
-        /// teardown paths clear the flag outright.</para>
+        /// <para>Called from both sides. The PTY reader thread reaches it when output arrives; the
+        /// UI thread reaches it from the cursor blink and the animation clock, and from the mouse,
+        /// keyboard and selection paths. Nothing here arms or cancels a dispatcher timer, which is
+        /// the part the reader thread had no business doing — and a stale tick from that churn could
+        /// end a LATER update early and tear the frame. That the flag is read from more than one
+        /// thread is why it is volatile: see <c>BeginAtomicUpdate</c>.</para>
+        /// <para>So an update left open outlives its deadline only until something asks for a
+        /// frame, and output is not the only thing that asks: a blinking cursor on a focused view
+        /// asks about twice a second, an animation asks every frame, and any mouse or key that
+        /// reaches the view asks at once. Whichever comes first drops the hold and paints. With
+        /// none of them — unfocused, nothing animating, no input, no output — the screen keeps the
+        /// last COMPLETE frame rather than a half-written one, which is the better of the two and
+        /// is not a wedge: the next byte of output recovers it, and both teardown paths clear the
+        /// flag outright.</para>
         /// </remarks>
         private void RequestPaint()
         {

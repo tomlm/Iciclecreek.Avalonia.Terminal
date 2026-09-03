@@ -323,6 +323,31 @@ public class ControlSurfaceTests
         finally { window.Close(); }
     }
 
+    [Test]
+    public void The_atomic_update_flag_is_volatile()
+    {
+        // _atomicUpdateStartedAt is written on the pty reader thread immediately BEFORE
+        // _atomicUpdate, and both are read in RequestPaint -- which the UI thread calls too, off the
+        // cursor blink, the animation clock, and every mouse, key and selection path. Only the
+        // volatile on the flag orders those two stores against each other. Without it a UI-thread
+        // reader may see the update open while still holding the PREVIOUS timestamp, or zero, whose
+        // elapsed time is the age of the process -- so it blows the deadline on the spot and paints
+        // the half-written frame this feature exists to prevent. That is the same early end the
+        // stale DispatcherTimer tick used to cause, arriving by a different road.
+        //
+        // Asserted on the declaration rather than by racing threads on purpose. x64 does not
+        // reorder store-store, so a behavioural test would pass on the hardware CI runs on whether
+        // or not the barrier is there -- it would prove nothing, and arm64 is where this bites.
+        // Removing the modifier fails this, which is the regression worth catching.
+        var f = typeof(TerminalView).GetField("_atomicUpdate",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(f, Is.Not.Null, "_atomicUpdate has been renamed; this test needs updating");
+        Assert.That(f!.GetRequiredCustomModifiers(),
+            Has.Member(typeof(System.Runtime.CompilerServices.IsVolatile)),
+            "_atomicUpdate must stay volatile: writing it is what publishes _atomicUpdateStartedAt "
+            + "to the threads that test the deadline");
+    }
+
     private static void RequestPaint(TerminalView view)
     {
         var m = typeof(TerminalView).GetMethod("RequestPaint",

@@ -118,8 +118,13 @@ namespace Iciclecreek.Terminal
         /// and half new, which is the tearing you see when a TUI repaints under load. While this is
         /// set the view stops asking for frames, so the last complete one stays on screen, and the end
         /// of the update asks for exactly one.
+        /// <para>Volatile because the two sides are different threads: it is set and cleared on the PTY
+        /// reader thread, and read on the UI thread as well — the cursor blink, the animation clock, and
+        /// every mouse, key and selection path reach <c>RequestPaint</c>. The volatile write is what
+        /// publishes <see cref="_atomicUpdateStartedAt"/> along with it; see <see cref="BeginAtomicUpdate"/>
+        /// for what a reader that saw the flag without the timestamp would do.</para>
         /// </remarks>
-        private bool _atomicUpdate;
+        private volatile bool _atomicUpdate;
 
         /// <summary>Complete frames of the viewport, published by the reader for the renderer.</summary>
         /// <remarks>See <see cref="FrameCapturePool"/> for the tearing this exists to stop.</remarks>
@@ -139,8 +144,11 @@ namespace Iciclecreek.Terminal
         /// <summary>When the open atomic update began, as a Stopwatch timestamp.</summary>
         /// <remarks>
         /// Written beside <see cref="_atomicUpdate"/> on the reader thread and read wherever the
-        /// deadline is tested. Only meaningful while that flag is set, and always written before
-        /// it, so a reader that sees the flag set sees a timestamp that belongs to it.
+        /// deadline is tested. Only meaningful while that flag is set, and always written BEFORE
+        /// it: the flag is volatile, so writing it releases this one, and a reader that sees the
+        /// flag set sees the timestamp that belongs to it. Plain rather than volatile itself for
+        /// exactly that reason — the flag publishes it, and it is never read except after the flag
+        /// has been found set.
         /// </remarks>
         private long _atomicUpdateStartedAt;
 
@@ -1660,6 +1668,13 @@ namespace Iciclecreek.Terminal
         /// not the lighter ones.</para>
         /// <para>Nothing here touches the dispatcher now. The deadline is checked where it is
         /// already free to check: see <c>RequestPaint</c>.</para>
+        /// <para>Order matters, and so does the volatile on the flag. The timestamp is written
+        /// first and the flag second; a reader tests the flag first and the timestamp second. The
+        /// volatile write releases the timestamp with the flag, so no thread can see the update as
+        /// open while still holding the PREVIOUS timestamp — or zero, whose elapsed time is the age
+        /// of the process, which would look like a deadline blown the instant the update began and
+        /// paint the half-written frame this exists to prevent. x64 would not reorder those two
+        /// stores; arm64 is free to.</para>
         /// </remarks>
         private void BeginAtomicUpdate()
         {
