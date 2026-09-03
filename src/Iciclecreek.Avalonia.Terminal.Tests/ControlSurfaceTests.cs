@@ -241,6 +241,96 @@ public class ControlSurfaceTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTest]
+    public void A_run_of_updates_never_ends_one_before_its_own_ESU()
+    {
+        // The tearing. An atomic update used to arm a 150ms DispatcherTimer as its safety net, and
+        // it did so from the pty READER thread -- disposing the previous one and creating another,
+        // once per frame, against state the UI thread owns. Disposing a DispatcherTimer does not
+        // recall a tick it has already queued, so a timeout armed for one frame could fire during a
+        // LATER frame's update, find the flag set, and end that update early.
+        //
+        // Ending an update early paints a frame the application had not finished writing. That is a
+        // torn frame, and the faster the frames the likelier the overlap -- which is why it showed
+        // on a heavy full-screen demo and not on light ones.
+        //
+        // The loop runs longer than the old 150ms timeout on purpose: a stale tick had to have time
+        // to come due while a later update was open, and pumping between each step is what would
+        // have run it.
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            var esc = ((char)0x1B).ToString();
+
+            for (var frame = 0; frame < 40; frame++)
+            {
+                view.Terminal.Write($"{esc}[?2026h");
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.That(AtomicUpdate(view), Is.True,
+                    $"frame {frame}: the update was ended by something other than its own ESU");
+
+                Thread.Sleep(5);
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.That(AtomicUpdate(view), Is.True,
+                    $"frame {frame}: the update ended while the frame was still being written");
+
+                view.Terminal.Write($"{esc}[?2026l");
+                Dispatcher.UIThread.RunJobs();
+
+                Assert.That(AtomicUpdate(view), Is.False, $"frame {frame}: ESU must end it");
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void An_update_held_past_the_deadline_paints_anyway()
+    {
+        // The safety net the timer used to provide, now enforced where the question is already
+        // asked. An application that sets the mode and never clears it is broken, and the terminal
+        // must not withhold every frame for the rest of the session on its account.
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        try
+        {
+            var esc = ((char)0x1B).ToString();
+
+            view.Terminal.Write($"{esc}[?2026h");
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(AtomicUpdate(view), Is.True, "sanity: the update is open");
+
+            // Inside the deadline nothing changes -- which is the half that stops this passing for
+            // the wrong reason, by simply never holding a frame at all.
+            RequestPaint(view);
+            Assert.That(AtomicUpdate(view), Is.True,
+                "a frame inside the deadline must still be held; an update that is not held is not "
+                + "an atomic update");
+
+            Thread.Sleep(200);
+
+            RequestPaint(view);
+            Assert.That(AtomicUpdate(view), Is.False,
+                "an update held past the deadline must give way, or a broken application freezes "
+                + "the display for the rest of the session");
+        }
+        finally { window.Close(); }
+    }
+
+    private static void RequestPaint(TerminalView view)
+    {
+        var m = typeof(TerminalView).GetMethod("RequestPaint",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(m, Is.Not.Null, "RequestPaint has been renamed; this test needs updating");
+        m!.Invoke(view, null);
+    }
+
     private static bool AtomicUpdate(TerminalView view)
     {
         var f = typeof(TerminalView).GetField("_atomicUpdate",

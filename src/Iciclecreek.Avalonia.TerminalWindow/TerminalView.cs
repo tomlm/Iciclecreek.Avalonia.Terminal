@@ -136,8 +136,13 @@ namespace Iciclecreek.Terminal
         /// completes, and is current from the moment it exists.
         /// </remarks>
         private long _liveWriteGeneration;
-
-        private IDisposable? _atomicUpdateTimeout;
+        /// <summary>When the open atomic update began, as a Stopwatch timestamp.</summary>
+        /// <remarks>
+        /// Written beside <see cref="_atomicUpdate"/> on the reader thread and read wherever the
+        /// deadline is tested. Only meaningful while that flag is set, and always written before
+        /// it, so a reader that sees the flag set sees a timestamp that belongs to it.
+        /// </remarks>
+        private long _atomicUpdateStartedAt;
 
         /// <summary>
         /// How long a hold may last before the view paints anyway.
@@ -1638,26 +1643,32 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>
+        /// An application has declared the start of an atomic update — DEC private mode 2026.
+        /// </summary>
+        /// <remarks>
+        /// <para>A timestamp rather than a timer, and that is a correctness fix rather than a
+        /// tidying. This is raised from Terminal.Write, so it runs on the PTY READER thread, and
+        /// what it used to do there was dispose one DispatcherTimer and create another — UI-owned
+        /// state, mutated off the UI thread, once per frame for as long as an application
+        /// double-buffers.</para>
+        /// <para>Disposing a DispatcherTimer does not recall a tick it has already queued. So a
+        /// timeout armed for frame N could fire during frame N+2, find <c>_atomicUpdate</c> true
+        /// because a LATER update was open, and end that one early. Ending an update early paints
+        /// a frame the application had not finished writing, which is a torn frame — and the faster
+        /// the frames, the likelier the overlap, which is why it showed on the heaviest demo and
+        /// not the lighter ones.</para>
+        /// <para>Nothing here touches the dispatcher now. The deadline is checked where it is
+        /// already free to check: see <c>RequestPaint</c>.</para>
+        /// </remarks>
         private void BeginAtomicUpdate()
         {
+            _atomicUpdateStartedAt = Stopwatch.GetTimestamp();
             _atomicUpdate = true;
-
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = DispatcherTimer.RunOnce(
-                () =>
-                {
-                    // The application never finished. Paint what there is rather than stay frozen.
-                    if (_atomicUpdate)
-                        EndAtomicUpdate();
-                },
-                AtomicUpdateTimeout);
         }
 
         private void EndAtomicUpdate()
         {
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = null;
-
             if (!_atomicUpdate)
                 return;
 
@@ -2194,8 +2205,6 @@ namespace Iciclecreek.Terminal
             _cursorBlinkTimer?.Stop();
             _animationTimer?.Stop();
 
-            _atomicUpdateTimeout?.Dispose();
-            _atomicUpdateTimeout = null;
             _atomicUpdate = false;
 
             // Takes the pty, the cancellation source and the cached bitmaps with it. An ATTACHED

@@ -86,10 +86,29 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Ask for a frame, unless an application is mid-update.
         /// </summary>
+        /// <remarks>
+        /// <para>Where the atomic-update deadline is enforced, because this is the one place that
+        /// already asks the question and it costs a timestamp comparison to answer. An update held
+        /// open past the deadline is a broken application rather than a synchronised update — it
+        /// set the mode and never cleared it — and the frame is drawn rather than withheld for
+        /// ever.</para>
+        /// <para>This runs on whichever thread had output to show, so no dispatcher timer is armed
+        /// or cancelled per frame. That churn was UI-owned state being mutated from the reader
+        /// thread, and a stale tick from it could end a LATER update early and tear the frame.</para>
+        /// <para>If output stops entirely while an update is open, nothing calls this and the
+        /// screen keeps the last COMPLETE frame rather than a half-written one. That is the better
+        /// of the two, and it is not a wedge: the next byte of output recovers it, and both
+        /// teardown paths clear the flag outright.</para>
+        /// </remarks>
         private void RequestPaint()
         {
             if (_atomicUpdate)
-                return;
+            {
+                if (Stopwatch.GetElapsedTime(_atomicUpdateStartedAt) < AtomicUpdateTimeout)
+                    return;
+
+                _atomicUpdate = false;
+            }
 
             TerminalRenderThrottle.RequestInvalidate(this);
         }
