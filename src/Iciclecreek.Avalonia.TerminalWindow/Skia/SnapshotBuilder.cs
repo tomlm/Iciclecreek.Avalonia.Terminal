@@ -70,7 +70,8 @@ namespace Iciclecreek.Terminal.Skia
             bool reverseVideo,
             bool blinkOn,
             bool boldIsBright,
-            MinimumContrast? minimumContrast)
+            MinimumContrast? minimumContrast,
+            CapturedFrame? capturedFrame = null)
         {
             TerminalSnapshot snapshot;
             lock (_free)
@@ -91,7 +92,13 @@ namespace Iciclecreek.Terminal.Skia
             for (var row = 0; row < rows; row++)
             {
                 var absolute = startLine + row;
-                var line = absolute >= 0 && absolute < terminal.Buffer.Length
+
+                // A captured row is a complete frame's worth of this line, read without racing the
+                // writer; rows the capture declined (pictures, sized runs, doubled lines) come back
+                // null from it and fall through to the live line, as they always did.
+                var line = capturedFrame?.LineAt(absolute);
+
+                line ??= absolute >= 0 && absolute < terminal.Buffer.Length
                     ? terminal.Buffer.GetLine(absolute)
                     : null;
 

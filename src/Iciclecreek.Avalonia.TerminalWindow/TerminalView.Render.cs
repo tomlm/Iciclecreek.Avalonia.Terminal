@@ -151,6 +151,10 @@ namespace Iciclecreek.Terminal
                     line.Cache = null;
             }
 
+            // The captured lines carry their own copies of those caches, and would replay runs
+            // resolved against the palette this invalidation is retiring.
+            _frameCapture.InvalidateAll();
+
             InvalidateVisual();
         }
 
@@ -336,6 +340,14 @@ namespace Iciclecreek.Terminal
             int startLine = viewportY;
             int endLine = Math.Min(_terminal.Buffer.Length, startLine + viewportLines);
 
+            // The frame this render draws from, when one is usable: complete, captured at a frame
+            // boundary, still describing this viewport. Null sends every row to the live buffer,
+            // which is exactly the path that existed before captures did. Pinned for as long as the
+            // NEXT render might replay runs built from it, which the pool accounts for.
+            var capturedFrame = _frameCapture.PinForRender(
+                startLine, _terminal.Cols, viewportLines,
+                Interlocked.Read(ref _liveWriteGeneration), _atomicUpdate);
+
             // The direct renderer draws the cell grid onto the Skia canvas instead of recording a fill
             // and a text draw per run. Everything after it — cursor, selection, the hovered link —
             // still goes through DrawingContext and lands on top, because Custom() enqueues into the
@@ -372,7 +384,8 @@ namespace Iciclecreek.Terminal
                     _terminal, _palette, startLine, viewportLines, _terminal.Cols,
                     _charWidth, _charHeight, FontSize, _fontFamilyChain,
                     GetValue(ForegroundProperty), surface, RequestPaint, Ligatures,
-                    _terminal.ReverseVideo, _cursorBlinkOn, _boldIsBright, _minimumContrast);
+                    _terminal.ReverseVideo, _cursorBlinkOn, _boldIsBright, _minimumContrast,
+                    capturedFrame);
 
                 snapshot.RenderScale = scale;
 
@@ -455,7 +468,10 @@ namespace Iciclecreek.Terminal
                     if (y >= _terminal.Buffer.Length)
                         break;
 
-                    var line = _terminal.Buffer.GetLine(y);
+                    // The captured row when there is one; the live line for the rows a capture
+                    // cannot represent (pictures, sized runs, doubled lines) and whenever no
+                    // capture is usable at all.
+                    var line = capturedFrame?.LineAt(y) ?? _terminal.Buffer.GetLine(y);
                     if (line == null)
                         continue;
 

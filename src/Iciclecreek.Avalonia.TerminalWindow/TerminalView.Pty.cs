@@ -486,6 +486,11 @@ namespace Iciclecreek.Terminal
 
             lock (_terminalLock)
             {
+                // Any capture taken before this write describes a buffer that no longer exists
+                // once it lands; bumping FIRST means a capture published from inside the write —
+                // the ESU handler — carries the new generation and is current on arrival.
+                Interlocked.Increment(ref _liveWriteGeneration);
+
                 // Bytes straight through, no UTF-16 round trip. This fixes a real defect, not just
                 // an allocation: decoding each read on its own corrupts any multi-byte sequence the
                 // read boundary happens to split, and pty reads end wherever they end. The parser
@@ -502,6 +507,14 @@ namespace Iciclecreek.Terminal
                     _lastOutputRow = cursorRow;
                     _inputStartPending = !_semanticPrompt;
                 }
+
+                // For output that never declares a frame, the chunk boundary is the closest thing
+                // to one: the buffer is quiescent here, still under the lock, on the thread that
+                // owns it. Skipped mid-update — a capture there would freeze exactly the half-drawn
+                // state this machinery exists to keep off the screen — and throttled, because a
+                // chunk boundary is worth at most a paint interval of freshness.
+                if (!_atomicUpdate)
+                    _frameCapture.PublishThrottled(_terminal, Interlocked.Read(ref _liveWriteGeneration));
             }
 
             // Signal on the first chunk only. Posting per chunk would keep queueing UI-thread

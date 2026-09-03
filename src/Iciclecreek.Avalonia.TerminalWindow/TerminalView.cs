@@ -121,6 +121,22 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private bool _atomicUpdate;
 
+        /// <summary>Complete frames of the viewport, published by the reader for the renderer.</summary>
+        /// <remarks>See <see cref="FrameCapturePool"/> for the tearing this exists to stop.</remarks>
+        private readonly FrameCapturePool _frameCapture = new();
+
+        /// <summary>
+        /// Counts every write this view delivers into the emulator's buffer.
+        /// </summary>
+        /// <remarks>
+        /// The freshness key for a captured frame: a capture taken at generation G is exact while
+        /// the generation is still G, because nothing has written the buffer since. Bumped BEFORE
+        /// each write, so a capture published from inside that write — the ESU handler runs inside
+        /// <c>Terminal.Write</c> — records the generation the buffer will be at when the write
+        /// completes, and is current from the moment it exists.
+        /// </remarks>
+        private long _liveWriteGeneration;
+
         private IDisposable? _atomicUpdateTimeout;
 
         /// <summary>
@@ -889,6 +905,7 @@ namespace Iciclecreek.Terminal
 
                 _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
 
+                Interlocked.Increment(ref _liveWriteGeneration);
                 _terminal.WriteLine(text);
 
                 // Alternate-buffer apps position their own cursor and are left alone, as in the read loop.
@@ -1524,6 +1541,7 @@ namespace Iciclecreek.Terminal
 
             lock (_terminalLock)
             {
+                Interlocked.Increment(ref _liveWriteGeneration);
                 _terminal.Write("\u001b[H\u001b[2J\u001b[3J");   // home · erase screen · erase scrollback
                 _terminal.Buffer.ScrollToBottom();
             }
@@ -1605,9 +1623,19 @@ namespace Iciclecreek.Terminal
         private void OnSynchronizedOutputChanged(object? sender, XT.Events.TerminalEvents.SynchronizedOutputEventArgs e)
         {
             if (e.Active)
+            {
                 BeginAtomicUpdate();
+            }
             else
+            {
+                // The one moment the buffer is both COMPLETE and OWNED: the application has just
+                // said the frame is whole, and this handler runs from inside Terminal.Write on the
+                // thread delivering it, so nothing can write until it returns. Captured before the
+                // paint below is requested, so the paint has a whole frame to draw.
+                _frameCapture.Publish(_terminal, Interlocked.Read(ref _liveWriteGeneration));
+
                 EndAtomicUpdate();
+            }
         }
 
         private void BeginAtomicUpdate()
