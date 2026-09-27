@@ -158,6 +158,7 @@ public class RenderCostTests
             new ReadOnlyMemory<byte>(System.Text.Encoding.UTF8.GetBytes(text)),
             true,
             System.Threading.CancellationToken.None,
+            0L,   // sessionId: which pty produced the chunk. Irrelevant to the posting rate under test.
         };
 
         consume!.Invoke(view, args);

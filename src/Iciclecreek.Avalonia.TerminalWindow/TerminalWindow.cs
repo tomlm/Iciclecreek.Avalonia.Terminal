@@ -551,6 +551,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.IsLive"/>
         public bool IsLive => _terminalControl?.IsLive ?? false;
 
+        /// <inheritdoc cref="TerminalView.SessionId"/>
+        public long SessionId => _terminalControl?.SessionId ?? 0;
+
         /// <inheritdoc cref="TerminalControl.BeginReparent"/>
         public void BeginReparent() => _terminalControl?.BeginReparent();
 

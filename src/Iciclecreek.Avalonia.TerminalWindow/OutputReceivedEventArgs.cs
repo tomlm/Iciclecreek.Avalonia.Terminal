@@ -45,6 +45,21 @@ namespace Iciclecreek.Terminal
         public string Output => _output ??= Encoding.UTF8.GetString(_bytes.Span);
 
         /// <summary>
+        /// Identifies the pty session that produced this chunk. Compare with
+        /// <c>TerminalView.SessionId</c> (or <c>TerminalControl.SessionId</c>) to tell whether the chunk
+        /// came from the process the view is hosting NOW.
+        /// </summary>
+        /// <remarks>
+        /// <para>A subscriber cannot answer that from the view's own state. This event is raised off the
+        /// read task and, on the dispatcher path, hops to the UI thread — so a chunk from a process that
+        /// has since been replaced can arrive after the replacement is installed, and a flag like
+        /// <c>IsLive</c> is true for BOTH. A host that promotes itself on output was promoting on the
+        /// dying shell's last bytes.</para>
+        /// <para>0 means "no session recorded" — an instance constructed by something other than the view.</para>
+        /// </remarks>
+        public long SessionId { get; init; }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="OutputReceivedEventArgs"/> class.
         /// </summary>
         /// <param name="bytes">The output chunk, as it came off the pty. Must not alias a reused buffer.</param>
