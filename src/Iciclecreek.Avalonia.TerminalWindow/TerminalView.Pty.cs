@@ -880,7 +880,52 @@ namespace Iciclecreek.Terminal
                 if (_processExitHandled != 0)
                     return;
 
+                // A read that FAILS is how a Unix pty reports the child is gone. Once the slave side is
+                // closed, read() on the master returns EIO — an exception here — rather than the 0 bytes
+                // the EOF path above is written to wait for. On Linux that is the ORDINARY end of a
+                // process, not an exceptional one.
+                //
+                // Treating it as nothing but a message to print stranded the host. The interlock stayed
+                // unclaimed and the connection installed, so IsLive kept answering true and ProcessExited
+                // was never raised AT ALL for a process that had already died: a pane that never learns
+                // its shell ended, waiting on a notification that is not coming. The EOF path states the
+                // principle this one was missing — the notification is the part a host cannot reconstruct
+                // — and then does the work; this now does the same.
+                //
+                // So establish whether the child is actually gone before calling this an error.
+                var reaped = false;
+                try { reaped = connection.WaitForExit(ExitReapGraceMs); }
+                catch { /* disposed underneath us — the exit is moot, and so is the error */ }
+
+                if (reaped)
+                {
+                    // Not an error at all: the expected end of a process, reached by the platform's other
+                    // route. Report it exactly as the EOF path would, code and all.
+                    if (TryClaimExit(connection))
+                    {
+                        int? code = null;
+                        try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
+
+                        WriteOwnLine(code is { } c
+                            ? $"\nProcess exited with code: {c}\n"
+                            : "\nProcess exited\n");
+
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            ProcessExited?.Invoke(this, code is { } c
+                                ? new ProcessExitedEventArgs(c)
+                                : ProcessExitedEventArgs.UnknownCode());
+                        });
+                    }
+
+                    return;
+                }
+
+                // The child is still there, so this really is an I/O failure — say so. The exit is still
+                // handed off rather than abandoned: a process that dies a moment later must still be
+                // announced, for the same reason the EOF path hands off a slow reap.
                 WriteOwnLine($"\nError reading from process: {ex.Message}\n");
+                ReapInBackground(connection);
             }
         }
 

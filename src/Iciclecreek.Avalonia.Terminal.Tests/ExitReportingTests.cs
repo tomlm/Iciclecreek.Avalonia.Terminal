@@ -112,6 +112,128 @@ public class ExitReportingTests
     }
 
     /// <summary>
+    /// A stream whose read FAILS, which is how a Unix pty says the child is gone: once the slave side
+    /// closes, read() on the master returns EIO rather than the 0 bytes that means EOF elsewhere. On
+    /// Linux this is the ordinary end of a process, so it is the ordinary case to model.
+    /// </summary>
+    private sealed class EioOnRead : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("Input/output error");
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => throw new IOException("Input/output error");
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => throw new IOException("Input/output error");
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A connection whose reader fails with EIO — the Unix "the child is gone" signal — and whose
+    /// ProcessExited never fires, so the read loop's error path is the only one that can report.
+    /// </summary>
+    private sealed class ReadFailsWhenChildIsGone : IPtyConnection
+    {
+        private readonly int _realExitCode;
+        private readonly int _reapsOnCall;
+        private int _waitCalls;
+        private bool _reaped;
+
+        /// <param name="reapsOnCall">
+        /// Which <see cref="WaitForExit"/> call succeeds, 1-based. 1 is the ordinary case: the read failed
+        /// BECAUSE the child died, so it reaps at once. A higher value models a genuine I/O error on a
+        /// process that is still running and only dies later — the case that must still end in a report
+        /// rather than in silence.
+        /// </param>
+        public ReadFailsWhenChildIsGone(int realExitCode, int reapsOnCall = 1)
+        {
+            _realExitCode = realExitCode;
+            _reapsOnCall = reapsOnCall;
+        }
+
+        public int ExitCode => _reaped ? _realExitCode : 0;
+
+        public bool WaitForExit(int milliseconds)
+        {
+            _waitCalls++;
+            _reaped = _waitCalls >= _reapsOnCall;
+            return _reaped;
+        }
+
+        public Stream ReaderStream { get; } = new EioOnRead();
+        public Stream WriterStream { get; } = new MemoryStream();
+
+        public int Pid => -1;
+        public void Kill() { }
+        public void Resize(int columns, int rows) { }
+        public void Dispose() { }
+
+        /// <summary>Never raised: the error path alone has to drive this, which is the point.</summary>
+        public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
+    }
+
+    /// <summary>
+    /// A read that fails because the child is gone must still report the exit.
+    ///
+    /// <para>This is the ordinary end of a process on Linux — EIO on the master, not a 0-byte read — and
+    /// it used to end in nothing but a printed error: the exit interlock stayed unclaimed and the
+    /// connection installed, so <see cref="TerminalView.IsLive"/> kept answering true and ProcessExited
+    /// was never raised for a process that had already died. A host waiting to be told its shell ended
+    /// waited forever, and no second notification was ever coming.</para>
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_that_fails_because_the_child_is_gone_still_reports_the_exit() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        Pump(window);
+
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e.ExitCode);
+
+        view.AttachConnection(new ReadFailsWhenChildIsGone(realExitCode: 3));
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.That(done, Is.SameAs(exited.Task), "EIO is how the platform ended this process; silence strands the host");
+        Assert.That(exited.Task.Result, Is.EqualTo(3), "the real code, read after the reap");
+
+        await WaitUntil(() => !view.IsLive, "the view stops claiming a live process once the exit is reported");
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// A genuine I/O error on a process that is still running is still an error — and still ends in a
+    /// report when that process later dies, rather than in silence. The hand-off is what stops "we could
+    /// not read" from becoming "you are never told".
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_error_on_a_live_child_still_reports_the_exit_when_it_comes() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        Pump(window);
+
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e.ExitCode);
+
+        // Not reaped on the read loop's own attempt: the error is real, and the child dies afterwards.
+        view.AttachConnection(new ReadFailsWhenChildIsGone(realExitCode: 7, reapsOnCall: 2));
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(20)));
+        Assert.That(done, Is.SameAs(exited.Task), "the exit must be handed off, not abandoned with the error message");
+        Assert.That(exited.Task.Result, Is.EqualTo(7));
+
+        window.Close();
+    });
+
+    /// <summary>
     /// The contract, stated without a race: when the read loop sees EOF it must report what the
     /// process ACTUALLY returned, which means not reading the exit code until the child has been
     /// reaped. Before the fix this reported 0 for a process that returned 3, every time.
