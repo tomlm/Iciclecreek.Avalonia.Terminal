@@ -148,7 +148,7 @@ namespace Iciclecreek.Terminal
             // Same ordering as the spawn path: publish the connection, SUBSCRIBE, then start the reader. An
             // attached connection may already have a live process behind it, so an exit can arrive immediately
             // — subscribing after the reader starts is a window in which it is missed entirely.
-            InstallConnection(connection);
+            var sessionId = InstallConnection(connection);
             connection.ProcessExited += OnPtyProcessExited;
 
             // Bytes a detached reader stole before this attach are the EARLIEST unread output, so
@@ -158,7 +158,7 @@ namespace Iciclecreek.Terminal
             if (PendingHandoverBytes.ClaimOnAttach(connection) is { Length: > 0 } parked)
             {
                 var replayLatch = true;   // mid-session bytes; readiness must not re-announce
-                ConsumeOutputChunk(parked, ref replayLatch, _processCts.Token);
+                ConsumeOutputChunk(parked, ref replayLatch, _processCts.Token, sessionId);
             }
 
             // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
@@ -177,7 +177,7 @@ namespace Iciclecreek.Terminal
             var readerToken = _processCts.Token;
 
             _readLoopTask = Task.Factory.StartNew(
-                () => ReadPtyOutputAsync(connection, readerToken),
+                () => ReadPtyOutputAsync(connection, sessionId, readerToken),
                 CancellationToken.None,
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default).Unwrap();
@@ -361,7 +361,7 @@ namespace Iciclecreek.Terminal
                 }
 
                 var spawned = await PtyProvider.SpawnAsync(options, _processCts.Token);
-                InstallConnection(spawned);
+                var spawnedSessionId = InstallConnection(spawned);
 
                 // Subscribe to process exit event for reliable exit detection
                 spawned.ProcessExited += OnPtyProcessExited;
@@ -380,7 +380,7 @@ namespace Iciclecreek.Terminal
                 // idle developer machine and was near-total on a contended CI box.
                 var readerUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 _readLoopTask = Task.Factory.StartNew(
-                    () => ReadPtyOutputAsync(spawned, _processCts.Token, readerUp),
+                    () => ReadPtyOutputAsync(spawned, spawnedSessionId, _processCts.Token, readerUp),
                     CancellationToken.None,
                     TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                     TaskScheduler.Default).Unwrap();
@@ -427,7 +427,7 @@ namespace Iciclecreek.Terminal
         /// loop's token, which two of the posted callbacks compare against the CURRENT process's to
         /// refuse stale delivery — a replay passes the current one.
         /// </remarks>
-        private void ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken)
+        private void ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
         {
 
             // Guarded so an unsubscribed terminal pays nothing: without it every chunk allocates a
@@ -448,7 +448,7 @@ namespace Iciclecreek.Terminal
                     // different reason: an escaping exception here propagates into ReadPtyOutputAsync
                     // and ends the read loop, leaving a live process with a frozen view and nothing
                     // reported.
-                    try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk)); }
+                    try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk) { SessionId = sessionId }); }
                     catch { /* a sniffer must never kill the read loop */ }
                 }
                 else
@@ -461,7 +461,7 @@ namespace Iciclecreek.Terminal
                         if (_processCts?.Token != cancellationToken)
                             return;
 
-                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk)); }
+                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk) { SessionId = sessionId }); }
                         catch { /* a sniffer must never take the app down */ }
                     });
                 }
@@ -683,8 +683,13 @@ namespace Iciclecreek.Terminal
         /// on it, reading its exit code, and claiming the exit interlock LaunchProcess had just
         /// reset for it, which swallows that process's own exit.
         /// </param>
+        /// <param name="sessionId">
+        /// Identity of <paramref name="connection"/>, stamped on every chunk this loop reports. Passed in for
+        /// the same reason the connection is: by the time a chunk reaches a subscriber the view may have moved
+        /// on, and the subscriber needs to know which process it is hearing rather than only that one is live.
+        /// </param>
         private async Task ReadPtyOutputAsync(
-            IPtyConnection connection, CancellationToken cancellationToken, TaskCompletionSource? up = null)
+            IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up = null)
         {
             // Raised BEFORE the first read, and deliberately not after one. Signalling after a read would
             // make readiness depend on the process PRODUCING output, so a shell that prints nothing on
@@ -825,7 +830,7 @@ namespace Iciclecreek.Terminal
                         // TryClaimExit rather than a bare interlock: this loop may have been waiting on a read
                         // while a relaunch replaced the connection, in which case the exit it is holding belongs
                         // to a process this view has already moved on from.
-                        if (reaped && TryClaimExit(connection))
+                        if (reaped && TryClaimExit(connection, out var exitSessionId))
                         {
                             var exitCode = connection.ExitCode;
 
@@ -833,7 +838,7 @@ namespace Iciclecreek.Terminal
 
                             await Dispatcher.UIThread.InvokeAsync(() =>
                             {
-                                ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode));
+                                ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode) { SessionId = exitSessionId });
                             });
                         }
                         break;
@@ -846,7 +851,7 @@ namespace Iciclecreek.Terminal
                     var chunk = OutputReceived != null
                         ? new ReadOnlyMemory<byte>(buffer.AsSpan(0, bytesRead).ToArray())
                         : buffer.AsMemory(0, bytesRead);
-                    ConsumeOutputChunk(chunk, ref shellReadyPosted, cancellationToken);
+                    ConsumeOutputChunk(chunk, ref shellReadyPosted, cancellationToken, sessionId);
                 }
             }
             catch (OperationCanceledException)
@@ -883,12 +888,17 @@ namespace Iciclecreek.Terminal
         /// Make <paramref name="connection"/> the live one and arm the exit interlock for it, atomically.
         /// Null clears both — the teardown case.
         /// </summary>
-        private void InstallConnection(IPtyConnection? connection)
+        /// <returns>The id minted for <paramref name="connection"/>, to stamp on the events it produces;
+        /// 0 when clearing. Returned rather than read back from <see cref="SessionId"/> afterwards, because
+        /// by then a relaunch may already have installed the next one.</returns>
+        private long InstallConnection(IPtyConnection? connection)
         {
             lock (_exitGate)
             {
                 _ptyConnection = connection;
                 Interlocked.Exchange(ref _processExitHandled, 0);
+                _sessionId = connection is null ? 0 : ++_sessionCounter;
+                return _sessionId;
             }
         }
 
@@ -896,12 +906,17 @@ namespace Iciclecreek.Terminal
         /// Claim the right to report the exit OF THIS CONNECTION. False when somebody already reported it, and
         /// false when the connection is no longer the live one — a stale loop must not speak for its successor.
         /// </summary>
-        private bool TryClaimExit(IPtyConnection connection)
+        /// <param name="sessionId">The id of the connection claimed, for stamping the exit event. Read under
+        /// the same lock as the claim: taken afterwards it could belong to a connection installed since.</param>
+        private bool TryClaimExit(IPtyConnection connection, out long sessionId)
         {
             lock (_exitGate)
             {
+                sessionId = 0;
                 if (!ReferenceEquals(_ptyConnection, connection)) return false;
-                return Interlocked.Exchange(ref _processExitHandled, 1) == 0;
+                if (Interlocked.Exchange(ref _processExitHandled, 1) != 0) return false;
+                sessionId = _sessionId;
+                return true;
             }
         }
 
@@ -941,7 +956,7 @@ namespace Iciclecreek.Terminal
                     await Task.Yield();
                 }
 
-                if (!TryClaimExit(connection)) return;
+                if (!TryClaimExit(connection, out var exitSessionId)) return;
 
                 int? code = null;
                 if (reaped)
@@ -956,8 +971,8 @@ namespace Iciclecreek.Terminal
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     ProcessExited?.Invoke(this, code is { } c
-                        ? new ProcessExitedEventArgs(c)
-                        : ProcessExitedEventArgs.UnknownCode());
+                        ? new ProcessExitedEventArgs(c) { SessionId = exitSessionId }
+                        : ProcessExitedEventArgs.UnknownCode(exitSessionId));
                 });
             });
         }
@@ -967,16 +982,23 @@ namespace Iciclecreek.Terminal
             // Interlocked ensures only one of (event, EOF path, exception path) prints the message.
             // Claims for the connection that raised it, so a late event from a replaced connection cannot
             // speak for its successor either. A null sender predates this and is treated as the live one.
-            if (sender is IPtyConnection origin ? !TryClaimExit(origin)
-                                                : Interlocked.Exchange(ref _processExitHandled, 1) != 0)
-                return;
+            long exitSessionId;
+            if (sender is IPtyConnection origin)
+            {
+                if (!TryClaimExit(origin, out exitSessionId)) return;
+            }
+            else
+            {
+                if (Interlocked.Exchange(ref _processExitHandled, 1) != 0) return;
+                exitSessionId = SessionId;
+            }
 
             WriteOwnLine($"\nProcess exited with code: {e.ExitCode}\n");
 
             Dispatcher.UIThread.InvokeAsync(() =>
             {
                 // Raise event on UI thread so subscribers can safely update UI
-                var args = new ProcessExitedEventArgs(e.ExitCode);
+                var args = new ProcessExitedEventArgs(e.ExitCode) { SessionId = exitSessionId };
                 ProcessExited?.Invoke(this, args);
             });
         }

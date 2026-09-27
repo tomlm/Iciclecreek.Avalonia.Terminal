@@ -194,6 +194,12 @@ namespace Iciclecreek.Terminal
         /// </summary>
         private readonly object _exitGate = new object();
 
+        /// <summary>Identity of the installed connection, handed out on every output and exit event so a
+        /// subscriber can tell WHICH process it is hearing from. Monotonic per view, never reused; 0 means
+        /// nothing is installed. Guarded by <see cref="_exitGate"/>, like the connection it describes.</summary>
+        private long _sessionId;
+        private long _sessionCounter;
+
         /// <summary>Ceiling on waiting for an already-exited child to be reaped so its real exit
         /// code is readable. See the EOF branch of <see cref="ReadPtyOutputAsync"/>.</summary>
         private const int ExitReapGraceMs = 1000;
@@ -3407,6 +3413,23 @@ namespace Iciclecreek.Terminal
         /// A host that shows a terminal only once there is something to show needs to ask this — the alternative
         /// is tracking it in parallel from <see cref="ProcessExited"/> and guessing at the starting state.
         /// </remarks>
+        /// <summary>
+        /// The pty session the view is hosting now, or 0 when nothing is installed. Increments on every
+        /// connection this view installs, spawned or attached, and is never reused.
+        /// </summary>
+        /// <remarks>
+        /// Exists so a subscriber can attribute an event to a process. <see cref="IsLive"/> answers "is
+        /// something running", which is a different question and the wrong one after a relaunch: it is true
+        /// for the replacement while the previous process's last output and exit are still in flight, so a
+        /// host that keys off it acts on the dead shell's bytes as though they were the new one's. Compare
+        /// <c>OutputReceivedEventArgs.SessionId</c> or <c>ProcessExitedEventArgs.SessionId</c> against this
+        /// instead.
+        /// </remarks>
+        public long SessionId
+        {
+            get { lock (_exitGate) { return _sessionId; } }
+        }
+
         public bool IsLive
         {
             get

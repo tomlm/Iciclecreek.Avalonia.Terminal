@@ -464,6 +464,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.IsLive"/>
         public bool IsLive => _terminalView?.IsLive ?? false;
 
+        /// <inheritdoc cref="TerminalView.SessionId"/>
+        public long SessionId => _terminalView?.SessionId ?? 0;
+
         /// <summary>
         /// Call before removing this control from one visual tree and adding it to another
         /// (e.g. moving between windows). Prevents the PTY process from being killed

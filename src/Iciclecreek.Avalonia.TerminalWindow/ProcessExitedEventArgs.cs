@@ -21,6 +21,14 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         public bool ExitCodeKnown { get; }
 
+        /// <summary>
+        /// Identifies the pty session that exited. Compare with <c>TerminalView.SessionId</c> to tell
+        /// whether this is the process the view is hosting now — the exit is raised on the UI thread, so
+        /// a replacement can be installed between the death and the notification.
+        /// </summary>
+        /// <remarks>0 means "no session recorded".</remarks>
+        public long SessionId { get; init; }
+
         public ProcessExitedEventArgs(int exitCode)
         {
             ExitCode = exitCode;
@@ -35,5 +43,12 @@ namespace Iciclecreek.Terminal
 
         /// <summary>The process ended but its status was unreadable. See <see cref="ExitCodeKnown"/>.</summary>
         public static ProcessExitedEventArgs UnknownCode() => new ProcessExitedEventArgs();
+
+        /// <summary>
+        /// The process ended but its status was unreadable, carrying the session it belonged to.
+        /// See <see cref="ExitCodeKnown"/> and <see cref="SessionId"/>.
+        /// </summary>
+        public static ProcessExitedEventArgs UnknownCode(long sessionId) =>
+            new ProcessExitedEventArgs { SessionId = sessionId };
     }
 }
