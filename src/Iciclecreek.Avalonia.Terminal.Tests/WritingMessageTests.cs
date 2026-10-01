@@ -222,4 +222,49 @@ public class WritingMessageTests
         Assert.That(BufferText(view), Does.Not.Contain("Process exited"));
         window.Close();
     }
+
+    [AvaloniaTest]
+    public async Task TerminalControl_forwards_the_message_and_its_answer()
+    {
+        // The control forwards the view's args object itself, so what is set out here is what the view acts on.
+        var control = new TerminalControl { Process = "" };
+        var host = TerminalHost.Show(control);
+        var connection = new PushConnection();
+        var exited = false;
+        object? sender = null;
+
+        control.ProcessExited += (_, _) => exited = true;
+        control.WritingMessage += (s, e) => { sender = s; e.Text = "\n[control]\n"; };
+        control.AttachConnection(connection);
+
+        connection.Done();
+        await WaitUntil(() => exited, "the exit was reported");
+
+        var text = BufferText(control.View());
+        Assert.That(sender, Is.SameAs(control));
+        Assert.That(text, Does.Contain("[control]"));
+        Assert.That(text, Does.Not.Contain("Process exited"));
+        host.Close();
+    }
+
+    [AvaloniaTest]
+    public async Task TerminalWindow_forwards_the_message_and_its_answer()
+    {
+        // Kept open on exit, so the buffer is still there to read.
+        var window = new TerminalWindow { Process = "", CloseOnProcessExit = false }.Realise();
+        var connection = new PushConnection();
+        var exited = false;
+        object? sender = null;
+
+        window.ProcessExited += (_, _) => exited = true;
+        window.WritingMessage += (s, e) => { sender = s; e.Handled = true; };
+        window.AttachConnection(connection);
+
+        connection.Done();
+        await WaitUntil(() => exited, "the exit was reported");
+
+        Assert.That(sender, Is.SameAs(window));
+        Assert.That(BufferText(window.Control().View()), Does.Not.Contain("Process exited"));
+        window.Close();
+    }
 }
