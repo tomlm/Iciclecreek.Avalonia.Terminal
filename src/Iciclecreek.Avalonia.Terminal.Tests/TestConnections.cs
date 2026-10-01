@@ -98,6 +98,18 @@ internal sealed class PushStream : Stream
     public void Push(byte[] bytes) => _queue.Add(bytes);
     public void Done() => _queue.CompleteAdding();
 
+    private volatile Exception? _failure;
+
+    /// <summary>
+    /// Ends the stream with <paramref name="failure"/> thrown from the next read that finds nothing queued,
+    /// instead of EOF -- what a Unix pty's blocking stream does when the child closes its end.
+    /// </summary>
+    public void Fail(Exception failure)
+    {
+        _failure = failure;
+        _queue.CompleteAdding();
+    }
+
     public override int Read(byte[] buffer, int offset, int count)
     {
         ValidateBufferArguments(buffer, offset, count);
@@ -108,6 +120,7 @@ internal sealed class PushStream : Stream
         while (_chunk == null || _consumed == _chunk.Length)
         {
             try { _chunk = _queue.Take(); }               // blocks; throws when completed and drained
+            catch (InvalidOperationException) when (_failure is { } failure) { throw failure; }
             catch (InvalidOperationException) { return 0; }   // EOF
             _consumed = 0;
         }
@@ -138,6 +151,7 @@ internal sealed class PushConnection : IPtyConnection
     public void Push(string text) => _stream.Push(text);
     public void Push(byte[] bytes) => _stream.Push(bytes);
     public void Done() => _stream.Done();
+    public void Fail(Exception failure) => _stream.Fail(failure);
 
     public int ExitCode => 0;
     public bool WaitForExit(int milliseconds) => true;

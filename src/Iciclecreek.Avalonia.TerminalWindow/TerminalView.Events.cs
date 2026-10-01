@@ -202,6 +202,22 @@ namespace Iciclecreek.Terminal
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
         /// <summary>
+        /// Raised on the UI thread just before the view writes one of its own lines into the terminal --
+        /// a read error, or the process-exited notice -- so the host can reword it through
+        /// <see cref="TerminalMessageEventArgs.Text"/> or suppress it with
+        /// <see cref="TerminalMessageEventArgs.Handled"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>The line is written only after every handler has returned, so setting
+        /// <see cref="TerminalMessageEventArgs.Handled"/> is never a race against the write. For the exit,
+        /// this is raised before <see cref="ProcessExited"/>, which keeps the order the buffer has always
+        /// had: the notice is in it by the time the host hears the process ended.</para>
+        /// <para>A handler that throws is not allowed to cost the user the line: the exception is logged and
+        /// <see cref="TerminalMessageEventArgs.DefaultText"/> is written as though nobody had intervened.</para>
+        /// </remarks>
+        public event EventHandler<TerminalMessageEventArgs>? WritingMessage;
+
+        /// <summary>
         /// Event raised for each chunk of output the terminal receives from the PTY process.
         /// </summary>
         /// <remarks>
