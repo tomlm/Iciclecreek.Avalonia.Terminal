@@ -919,7 +919,13 @@ namespace Iciclecreek.Terminal
                     message.Text = message.DefaultText;
                 }
 
-                if (!message.Handled)
+                // Asked again here, after the callers' guards, because this callback runs LATER than they did:
+                // it was queued behind whatever the UI thread had pending, and a handler is free to relaunch
+                // or re-attach. Either installs a new session, and the line would then describe a process the
+                // buffer no longer belongs to -- "Process exited" under the prompt of its successor.
+                // TerminalControl always subscribes to forward the event, so this is the path most hosts are
+                // on, not a corner. The handler still saw the message; its SessionId says whose it was.
+                if (!message.Handled && message.SessionId == SessionId)
                     WriteOwnLine(message.Text);
             });
         }

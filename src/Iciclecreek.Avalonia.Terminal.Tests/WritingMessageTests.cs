@@ -204,4 +204,22 @@ public class WritingMessageTests
 
         window.Close();
     }
+
+    [AvaloniaTest]
+    public async Task A_message_for_a_session_the_view_has_left_is_not_written()
+    {
+        // The handler re-attaches, as a host that restarts on exit would. The line it was offered is the old
+        // session's, and writing it after the handler returns would put "Process exited" under the new one.
+        TerminalMessageEventArgs? seen = null;
+        var (view, window) = await RunToExit(v => v.WritingMessage += (_, e) =>
+        {
+            seen = e;
+            v.AttachConnection(new PushConnection());
+        });
+
+        Assert.That(seen, Is.Not.Null, "the handler was never offered the exit line, so nothing was tested");
+        Assert.That(view.SessionId, Is.Not.EqualTo(seen!.SessionId));
+        Assert.That(BufferText(view), Does.Not.Contain("Process exited"));
+        window.Close();
+    }
 }

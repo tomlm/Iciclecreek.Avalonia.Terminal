@@ -214,6 +214,10 @@ namespace Iciclecreek.Terminal
         /// had: the notice is in it by the time the host hears the process ended.</para>
         /// <para>A handler that throws is not allowed to cost the user the line: the exception is logged and
         /// <see cref="TerminalMessageEventArgs.DefaultText"/> is written as though nobody had intervened.</para>
+        /// <para>Nothing is written if, by the time the handlers return, the view has moved on to another
+        /// session -- a relaunch, a re-attach, a detach -- since the line would describe a process the buffer
+        /// no longer belongs to. Compare <see cref="TerminalMessageEventArgs.SessionId"/> with
+        /// <see cref="SessionId"/> to tell such a message apart.</para>
         /// </remarks>
         public event EventHandler<TerminalMessageEventArgs>? WritingMessage;
 
