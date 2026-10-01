@@ -834,7 +834,7 @@ namespace Iciclecreek.Terminal
                         {
                             var exitCode = connection.ExitCode;
 
-                            WriteOwnLine($"\nProcess exited with code: {exitCode}\n");
+                            await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(exitCode, exitSessionId));
 
                             await Dispatcher.UIThread.InvokeAsync(() =>
                             {
@@ -880,8 +880,54 @@ namespace Iciclecreek.Terminal
                 if (_processExitHandled != 0)
                     return;
 
-                WriteOwnLine($"\nError reading from process: {ex.Message}\n");
+                await WriteMessageAsync(TerminalMessageEventArgs.ReadError(ex, sessionId));
             }
+        }
+
+        /// <summary>
+        /// Write one of the view's own lines, giving <see cref="WritingMessage"/> its say first.
+        /// </summary>
+        /// <remarks>
+        /// <para>With no handler this is <see cref="WriteOwnLine"/> on the calling thread, exactly as before
+        /// the event existed. With one, the handler and the write run together in a single UI-thread
+        /// callback: the handler has to finish before the write, or <c>Handled</c> would be racing the line
+        /// it means to stop, and doing both in one post keeps lines in the order they were queued -- the read
+        /// error ahead of the exit notice that usually follows it.</para>
+        /// <para>Every caller has already passed its interlock or ownership check; this only decides what,
+        /// if anything, is written.</para>
+        /// </remarks>
+        private async Task WriteMessageAsync(TerminalMessageEventArgs message)
+        {
+            if (WritingMessage == null)
+            {
+                WriteOwnLine(message.Text);
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                try
+                {
+                    WritingMessage?.Invoke(this, message);
+                }
+                catch (Exception ex)
+                {
+                    // The host's bug should not cost the user the line, nor stop the exit from being
+                    // reported -- the callers go on to raise ProcessExited after this returns.
+                    Debug.WriteLine($"TerminalView: a WritingMessage handler threw; writing the default line. {ex}");
+                    message.Handled = false;
+                    message.Text = message.DefaultText;
+                }
+
+                // Asked again here, after the callers' guards, because this callback runs LATER than they did:
+                // it was queued behind whatever the UI thread had pending, and a handler is free to relaunch
+                // or re-attach. Either installs a new session, and the line would then describe a process the
+                // buffer no longer belongs to -- "Process exited" under the prompt of its successor.
+                // TerminalControl always subscribes to forward the event, so this is the path most hosts are
+                // on, not a corner. The handler still saw the message; its SessionId says whose it was.
+                if (!message.Handled && message.SessionId == SessionId)
+                    WriteOwnLine(message.Text);
+            });
         }
 
         /// <summary>
@@ -964,9 +1010,7 @@ namespace Iciclecreek.Terminal
                     try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
                 }
 
-                WriteOwnLine(code is { } c
-                    ? $"\nProcess exited with code: {c}\n"
-                    : "\nProcess exited\n");
+                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(code, exitSessionId));
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -993,14 +1037,21 @@ namespace Iciclecreek.Terminal
                 exitSessionId = SessionId;
             }
 
-            WriteOwnLine($"\nProcess exited with code: {e.ExitCode}\n");
+            _ = ReportAsync();
 
-            Dispatcher.UIThread.InvokeAsync(() =>
+            // The notice first and the event second, as the other two exit paths do; a pty-layer callback
+            // cannot be awaited, so the pair runs on without holding it.
+            async Task ReportAsync()
             {
-                // Raise event on UI thread so subscribers can safely update UI
-                var args = new ProcessExitedEventArgs(e.ExitCode) { SessionId = exitSessionId };
-                ProcessExited?.Invoke(this, args);
-            });
+                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(e.ExitCode, exitSessionId));
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    // Raise event on UI thread so subscribers can safely update UI
+                    var args = new ProcessExitedEventArgs(e.ExitCode) { SessionId = exitSessionId };
+                    ProcessExited?.Invoke(this, args);
+                });
+            }
         }
 
         private void CleanupProcess()

@@ -134,6 +134,8 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.ShellReady"/>
         public event EventHandler? ShellReady;
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
+        /// <inheritdoc cref="TerminalView.WritingMessage"/>
+        public event EventHandler<TerminalMessageEventArgs>? WritingMessage;
         /// <inheritdoc cref="TerminalView.OutputReceived"/>
         public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
@@ -789,6 +791,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminalView.PropertyChanged -= OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited -= OnTerminalViewProcessExited;
+                _terminalView.WritingMessage -= OnTerminalViewWritingMessage;
                 _terminalView.ShellReady -= OnTerminalViewShellReady;
                 _terminalView.OutputReceived -= OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
@@ -816,6 +819,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.Options = Options ?? new XTerm.Options.TerminalOptions();
                 _terminalView.PropertyChanged += OnTerminalViewPropertyChanged;
                 _terminalView.ProcessExited += OnTerminalViewProcessExited;
+                _terminalView.WritingMessage += OnTerminalViewWritingMessage;
                 _terminalView.ShellReady += OnTerminalViewShellReady;
                 _terminalView.OutputReceived += OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
@@ -894,6 +898,12 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewProcessExited(object? sender, ProcessExitedEventArgs e)
         {
             ProcessExited?.Invoke(this, e);
+        }
+
+        // The same args object travels up, so Handled and Text set out here are what the view acts on.
+        private void OnTerminalViewWritingMessage(object? sender, TerminalMessageEventArgs e)
+        {
+            WritingMessage?.Invoke(this, e);
         }
 
         private void OnTerminalViewShellReady(object? sender, EventArgs e)

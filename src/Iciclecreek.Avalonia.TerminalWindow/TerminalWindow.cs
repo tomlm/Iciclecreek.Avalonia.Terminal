@@ -142,6 +142,9 @@ namespace Iciclecreek.Terminal
 
         public event EventHandler<ProcessExitedEventArgs>? ProcessExited;
 
+        /// <inheritdoc cref="TerminalView.WritingMessage"/>
+        public event EventHandler<TerminalMessageEventArgs>? WritingMessage;
+
         /// <inheritdoc cref="TerminalView.OutputReceived"/>
         public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
 
@@ -700,6 +703,7 @@ namespace Iciclecreek.Terminal
 
             // Subscribe to terminal events.
             _terminalControl.ProcessExited += OnTerminalControlProcessExited;
+            _terminalControl.WritingMessage += OnTerminalControlWritingMessage;
             _terminalControl.ShellReady += OnTerminalControlShellReady;
             _terminalControl.OutputReceived += OnTerminalControlOutputReceived;
             _terminalControl.UrlClicked += OnTerminalControlUrlClicked;
@@ -892,6 +896,7 @@ namespace Iciclecreek.Terminal
             {
                 _terminalControl.PropertyChanged -= OnTerminalControlPropertyChanged;
                 _terminalControl.ProcessExited -= OnTerminalControlProcessExited;
+                _terminalControl.WritingMessage -= OnTerminalControlWritingMessage;
                 _terminalControl.ShellReady -= OnTerminalControlShellReady;
                 _terminalControl.OutputReceived -= OnTerminalControlOutputReceived;
                 _terminalControl.UrlClicked -= OnTerminalControlUrlClicked;
@@ -956,6 +961,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalControlUrlClicked(object? sender, UrlClickedEventArgs e)
         {
             UrlClicked?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlWritingMessage(object? sender, TerminalMessageEventArgs e)
+        {
+            WritingMessage?.Invoke(this, e);
         }
 
         private void OnTerminalControlProcessExited(object? sender, ProcessExitedEventArgs e)
