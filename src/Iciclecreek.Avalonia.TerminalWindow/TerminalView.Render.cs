@@ -296,6 +296,7 @@ namespace Iciclecreek.Terminal
         public override void Render(DrawingContext context)
         {
             _sizedBlockDraws.Clear();
+            _frontImageDraws.Clear();
             // The terminal's own background, painted once for the whole surface.
             //
             // Nothing else paints it. TerminalView is a plain Control, so Avalonia has no Background of its
@@ -545,6 +546,10 @@ namespace Iciclecreek.Terminal
                 // selection and the cursor still draw over scaled text, as they do over plain text.
                 RenderSizedBlocks(context, scale);
 
+                // Pictures in front of the text, once every row's text -- sized blocks included -- is
+                // down, and still under the overlays.
+                RenderFrontImages(context, scale);
+
                 // Search highlights under the selection, so a selected match still reads as selected.
                 RenderSearchHighlights(context, viewportY, scale);
 
@@ -575,7 +580,35 @@ namespace Iciclecreek.Terminal
 
             textRuns ??= CollectLineRuns(line, startYPos, rowHeight);
 
-            DrawLineRuns(context, textRuns, startYPos, rowHeight, scale);
+            DrawLineRuns(context, textRuns, startYPos, rowHeight, scale, deferFrontImages: true);
+        }
+
+        /// <summary>
+        /// Draws the pictures whose z-index puts them in front of the text, after every row.
+        /// </summary>
+        /// <remarks>
+        /// Rows render top to bottom, so anything a row draws past its own edge lands on the row
+        /// above if that row was already finished. Text does that routinely -- block elements,
+        /// antialiased glyph edges, tall scripts -- and for a picture BEHIND the text that is
+        /// correct. For one in front of it, it is a strip of text showing through the picture at
+        /// every row boundary. Each draw still goes through the same planning and clip as before;
+        /// only the moment it happens has moved.
+        /// </remarks>
+        private void RenderFrontImages(DrawingContext context, double scale)
+        {
+            foreach (var draw in _frontImageDraws)
+            {
+                var run = draw.Run;
+                if (run.Background is not null)
+                {
+                    var startX = Snap(run.StartX * _charWidth, scale);
+                    var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);
+                    context.FillRectangle(run.Background,
+                        new Rect(startX, draw.StartYPos, Math.Max(0, endX - startX), draw.RowHeight));
+                }
+
+                DrawImageRun(context, run, draw.StartYPos, draw.RowHeight, scale);
+            }
         }
 
         /// <summary>
@@ -588,10 +621,22 @@ namespace Iciclecreek.Terminal
         /// READS, which is also what lets it be retried -- see <see cref="CollectLineRuns"/>.
         /// </remarks>
         private void DrawLineRuns(DrawingContext context, List<CachedTextRun> textRuns,
-                                  double startYPos, double rowHeight, double scale)
+                                  double startYPos, double rowHeight, double scale,
+                                  bool deferFrontImages = false)
         {
             foreach (var run in textRuns)
             {
+                // A picture in front of the text is in front of ALL of it, not just this row's -- see
+                // RenderFrontImages. Drawn here, the next row's glyphs went down after it, and a font's
+                // block elements reach a pixel past their cell: notcurses paints its gradients in
+                // half blocks, and every row of a sprite over one carried a gradient-coloured seam
+                // along its bottom edge.
+                if (deferFrontImages && run.IsImage && run.Placement is { ZIndex: >= 0 })
+                {
+                    _frontImageDraws.Add(new FrontImageDraw(run, startYPos, rowHeight));
+                    continue;
+                }
+
                 // Recalculate position based on current screen row
                 var startX = Snap(run.StartX * _charWidth, scale);
                 var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);
@@ -743,16 +788,24 @@ namespace Iciclecreek.Terminal
             if (cellCount <= 0)
                 return;
 
-            // The cell's own background goes under the picture, which is what a Sixel drawn with
-            // background select 1 needs: its unset pixels are transparent and the cell colour is
-            // meant to show through them.
+            // The cell's own background goes under a picture BEHIND the text: the cells' fill is
+            // suppressed there so it cannot cover the picture, and this puts the colour back beneath.
             //
             // Only where nothing has painted it already. Runs are drawn back to front, so a nearer
             // picture repainting the background would erase the one behind it rather than blend over
             // it -- which is the whole of what overlapping placements are for.
+            //
+            // And never under a picture IN FRONT of the text -- a Kitty one with z >= 0, or any
+            // Sixel. The text and each cell's own background are already down beneath it, and its
+            // transparent pixels are meant to show them. Filling there painted the first cell's
+            // colour across the whole run, over the glyphs -- every row of a sprite became a flat
+            // band, and notcurses' orca sat in a solid rectangle with the text around it cut away.
             var first = line[start];
             var background = first.GetBackgroundBrush(_palette, this.Background);
-            var fill = first.GetBackgroundColor(_palette).HasValue
+            var overlay = placement.Kind == XT.Graphics.PlacementKind.Sixel
+                          || (placement.Kind == XT.Graphics.PlacementKind.Kitty && placement.ZIndex >= 0);
+            var fill = !overlay
+                       && first.GetBackgroundColor(_palette).HasValue
                        && !OverlapsAny(alreadyPainted, start, end)
                        ? background
                        : null;
@@ -976,33 +1029,6 @@ namespace Iciclecreek.Terminal
         /// costs the upper run's spare columns their background, which errs toward leaving a picture
         /// alone rather than painting over one.</para>
         /// </remarks>
-        /// <summary>
-        /// Whether a Sixel covers this column, and so has replaced whatever text was under it.
-        /// </summary>
-        /// <remarks>
-        /// <para>The one place the two protocols have to be told apart. A Kitty placement is an
-        /// OVERLAY: the cell keeps its character, both are drawn, and the z-index decides which one
-        /// is seen. A Sixel is CONTENT: it replaced what was there, which is why the emulator splits
-        /// a Sixel run when something prints over it and leaves a Kitty run alone.</para>
-        /// <para>The emulator does not clear the cells a Sixel covers -- placing one only adds a run
-        /// -- so they keep whatever was on screen beforehand. Drawing them puts that text under the
-        /// picture: invisible beneath an opaque one, and showing through a Sixel drawn with
-        /// background select 1, whose unset pixels are transparent so that the cell's own colour
-        /// comes through. The cell's colour, not the previous screen's text.</para>
-        /// </remarks>
-        private static bool CoveredBySixel(BufferLine line, int column)
-        {
-            if (!line.HasImages)
-                return false;
-
-            foreach (var placement in line.Placements)
-            {
-                if (placement.Kind == XT.Graphics.PlacementKind.Sixel && placement.Covers(column))
-                    return true;
-            }
-
-            return false;
-        }
 
         /// <summary>
         /// Whether a picture has already been drawn UNDER the columns <paramref name="start"/> to

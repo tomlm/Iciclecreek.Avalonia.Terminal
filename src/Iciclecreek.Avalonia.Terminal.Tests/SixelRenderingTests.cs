@@ -134,20 +134,21 @@ public class SixelRenderingTests
     /// it and never drawn.
     /// </summary>
     /// <summary>
-    /// A Sixel replaced what was under it, so the text it covered is not drawn.
+    /// The text a Sixel covers is still drawn, beneath it, as xterm draws it.
     /// </summary>
     /// <remarks>
     /// <para>The emulator does not clear the cells a Sixel covers — placing one only adds a run —
-    /// so they still hold whatever was printed there. Drawing them puts that text under the
-    /// picture: invisible beneath an opaque one, and showing through a Sixel drawn with background
-    /// select 1, whose unset pixels are transparent precisely so the cell's own colour comes
-    /// through. The cell's colour, not the previous screen's text.</para>
-    /// <para>The contrast is <c>A_front_picture_leaves_no_text_over_it</c>, where a Kitty placement
-    /// over the same text keeps it: that one is an overlay and the z-index decides what is seen.
-    /// The two together are the whole of why the renderer has to tell the protocols apart.</para>
+    /// so they still hold whatever was printed there. Drawn beneath the picture, that text is
+    /// invisible under an opaque pixel and shows through one left unset under background select 1.
+    /// notcurses relies on that: it lets text through a sprite by rebuilding the Sixel with those
+    /// pixels unset. This test once asserted the opposite, and the renderer skipped the covered
+    /// cells -- their backgrounds too -- so a transparent Sixel showed black or a single flat
+    /// colour where the text and its colours should have been.</para>
+    /// <para>Printing OVER a Sixel is still different from a Kitty overlay: the emulator splits the
+    /// Sixel run there, so the new text replaces that part of the picture.</para>
     /// </remarks>
     [AvaloniaTest]
-    public void Text_a_sixel_covered_is_not_drawn_under_it()
+    public void Text_a_sixel_covers_is_drawn_beneath_it()
     {
         var (view, window) = Realised();
         try
@@ -156,12 +157,15 @@ public class SixelRenderingTests
             view.Terminal.Write(Esc + "[1;1H");
             PlaceImage(view);
 
-            var runs = RunsForRow(view, 0);
+            var runs = RunsForRow(view, 0).ToList();
+            var picture = runs.FindIndex(r => r.IsImage);
+            var text = runs.FindIndex(r => r.Text is not null && r.StartX < 2 && r.StartX + r.CellCount > 0);
 
-            Assert.That(runs.Any(r => r.IsImage), Is.True, "the picture should be drawn");
-            Assert.That(runs.Where(r => r.Text is not null).Any(r => r.StartX < 2 && r.StartX + r.CellCount > 0),
-                        Is.False,
-                        "the text the picture covered should not be drawn underneath it");
+            Assert.That(picture, Is.GreaterThanOrEqualTo(0), "the picture should be drawn");
+            Assert.That(text, Is.GreaterThanOrEqualTo(0), "the text the picture covers should still be drawn");
+            Assert.That(text, Is.LessThan(picture), "and drawn beneath the picture, not over it");
+            Assert.That(runs[picture].Background, Is.Null,
+                        "the picture must not paint a fill over the text it sits on");
         }
         finally { window.Close(); }
     }
@@ -1269,6 +1273,8 @@ public class SixelRenderingTests
     /// The background belongs to the CELLS, and a picture no longer writes any: placing one leaves
     /// the cells exactly as they were. So the colour has to be put there by text before the pictures
     /// go over it, which is also the only way a real session produces one.
+    /// <para>Behind the text, where the cells' own fill is suppressed so it cannot cover the
+    /// pictures -- which is the one place a picture still carries the fill.</para>
     /// </remarks>
     [AvaloniaTest]
     public void Only_the_bottom_picture_paints_the_cell_background()
@@ -1281,8 +1287,8 @@ public class SixelRenderingTests
             // Red-backed blanks for the pictures to sit on.
             view.Terminal.Write($"{Esc}[1;1H{Esc}[41m        {Esc}[0m");
 
-            PlaceAt(view, 1, col: 0, z: 1);
-            PlaceAt(view, 2, col: 0, z: 5);
+            PlaceAt(view, 1, col: 0, z: -5);
+            PlaceAt(view, 2, col: 0, z: -1);
 
             var filled = RunsForRow(view, 0)
                 .Where(r => r.IsImage && r.Background is not null)
@@ -1290,7 +1296,36 @@ public class SixelRenderingTests
 
             Assert.That(filled.Count, Is.EqualTo(1),
                         "the cell background belongs to the bottom picture alone");
-            Assert.That(filled[0].Placement!.Value.ZIndex, Is.EqualTo(1));
+            Assert.That(filled[0].Placement!.Value.ZIndex, Is.EqualTo(-5));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A Kitty picture in front of the text is an overlay, and fills nothing: the text and each
+    /// cell's own background are already down under it, and its transparent pixels are meant to
+    /// show them. A fill there painted the first cell's colour across the whole run, over the
+    /// glyphs -- notcurses' sprites sat in solid bands with the text around them cut away.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_picture_in_front_of_the_text_fills_nothing_under_itself()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            TransmitTwo(view);
+
+            view.Terminal.Write($"{Esc}[1;1H{Esc}[41mAAAAAAAA{Esc}[0m");
+
+            PlaceAt(view, 1, col: 0, z: 1);
+            PlaceAt(view, 2, col: 0, z: 5);
+
+            var runs = RunsForRow(view, 0);
+
+            Assert.That(runs.Where(r => r.IsImage && r.Background is not null), Is.Empty,
+                        "no picture in front of the text should paint a background");
+            Assert.That(runs.Any(r => !r.IsImage && r.Background is not null), Is.True,
+                        "sanity: the cells' own run paints their background");
         }
         finally { window.Close(); }
     }
