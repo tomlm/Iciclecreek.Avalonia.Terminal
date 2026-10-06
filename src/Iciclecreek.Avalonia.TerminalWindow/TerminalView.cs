@@ -3623,12 +3623,14 @@ namespace Iciclecreek.Terminal
                 int runStartX = 0;
                 var runHasBackdrop = CoveredByBackdrop(painted, x, x + Math.Max(1, cell.Width));
 
-                // Nothing is drawn where a Sixel covers, because a Sixel REPLACED what was there.
-                if (CoveredBySixel(line, x))
-                {
-                    x++;
-                    continue;
-                }
+                // Cells under a Sixel are drawn like any others, as xterm draws them: the picture goes
+                // over them, so an opaque pixel hides the cell and one left unset under background
+                // select 1 shows it -- text and background both. notcurses depends on exactly that:
+                // to let text through a sprite it rebuilds the Sixel with those pixels unset. These
+                // cells were once skipped outright, which left only a fill in the run's first cell
+                // colour under the picture -- black over a gradient, and the text around a sprite
+                // cut away. Printing OVER a Sixel still removes that part of it; the emulator splits
+                // the run, so nothing here needs to.
 
                 // Skip width-0 cells. There are TWO kinds, and only one of them is a placeholder.
                 //
@@ -3666,9 +3668,8 @@ namespace Iciclecreek.Terminal
 
                         // Stop if we hit a different attribute or a placeholder cell mid-run.
                         //
-                        // A KITTY picture is no reason to stop: it is an overlay, the cell under it
-                        // still carries whatever was printed there, and the z-index decides which of
-                        // them a viewer sees. A SIXEL is not -- see CoveredBySixel.
+                        // A picture is no reason to stop: the cell under it still carries whatever
+                        // was printed there, and is drawn beneath it.
                         //
                         // An OSC 66 block is a boundary too, and nothing here would otherwise notice
                         // one. A fractional block is always s=1, so its cells are a single column wide
@@ -3677,7 +3678,6 @@ namespace Iciclecreek.Terminal
                         // at base size, because the outer loop only looks for a run on the column it
                         // starts an iteration on.
                         if (currentCell.Width != 1 || currentCell.Attributes != cell.Attributes
-                            || CoveredBySixel(line, x)
                             // Background fill is cached for the whole text run. Split where backdrop
                             // coverage changes so suppressing that fill affects only columns with a
                             // negative-z picture behind them, not every same-style cell beside it.

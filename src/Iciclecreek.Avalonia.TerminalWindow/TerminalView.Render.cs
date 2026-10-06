@@ -788,22 +788,22 @@ namespace Iciclecreek.Terminal
             if (cellCount <= 0)
                 return;
 
-            // The cell's own background goes under the picture, which is what a Sixel drawn with
-            // background select 1 needs: its unset pixels are transparent and the cell colour is
-            // meant to show through them.
+            // The cell's own background goes under a picture BEHIND the text: the cells' fill is
+            // suppressed there so it cannot cover the picture, and this puts the colour back beneath.
             //
             // Only where nothing has painted it already. Runs are drawn back to front, so a nearer
             // picture repainting the background would erase the one behind it rather than blend over
             // it -- which is the whole of what overlapping placements are for.
             //
-            // And never under a Kitty picture IN FRONT of the text. That is an overlay: the text and
-            // each cell's own background are already down beneath it, and its transparent pixels are
-            // meant to show them. Filling there painted the first cell's colour across the whole run,
-            // over the glyphs -- every row of a sprite became a flat band, and notcurses' orca sat in
-            // a solid green rectangle with the text around it cut away.
+            // And never under a picture IN FRONT of the text -- a Kitty one with z >= 0, or any
+            // Sixel. The text and each cell's own background are already down beneath it, and its
+            // transparent pixels are meant to show them. Filling there painted the first cell's
+            // colour across the whole run, over the glyphs -- every row of a sprite became a flat
+            // band, and notcurses' orca sat in a solid rectangle with the text around it cut away.
             var first = line[start];
             var background = first.GetBackgroundBrush(_palette, this.Background);
-            var overlay = placement.Kind == XT.Graphics.PlacementKind.Kitty && placement.ZIndex >= 0;
+            var overlay = placement.Kind == XT.Graphics.PlacementKind.Sixel
+                          || (placement.Kind == XT.Graphics.PlacementKind.Kitty && placement.ZIndex >= 0);
             var fill = !overlay
                        && first.GetBackgroundColor(_palette).HasValue
                        && !OverlapsAny(alreadyPainted, start, end)
@@ -1029,33 +1029,6 @@ namespace Iciclecreek.Terminal
         /// costs the upper run's spare columns their background, which errs toward leaving a picture
         /// alone rather than painting over one.</para>
         /// </remarks>
-        /// <summary>
-        /// Whether a Sixel covers this column, and so has replaced whatever text was under it.
-        /// </summary>
-        /// <remarks>
-        /// <para>The one place the two protocols have to be told apart. A Kitty placement is an
-        /// OVERLAY: the cell keeps its character, both are drawn, and the z-index decides which one
-        /// is seen. A Sixel is CONTENT: it replaced what was there, which is why the emulator splits
-        /// a Sixel run when something prints over it and leaves a Kitty run alone.</para>
-        /// <para>The emulator does not clear the cells a Sixel covers -- placing one only adds a run
-        /// -- so they keep whatever was on screen beforehand. Drawing them puts that text under the
-        /// picture: invisible beneath an opaque one, and showing through a Sixel drawn with
-        /// background select 1, whose unset pixels are transparent so that the cell's own colour
-        /// comes through. The cell's colour, not the previous screen's text.</para>
-        /// </remarks>
-        private static bool CoveredBySixel(BufferLine line, int column)
-        {
-            if (!line.HasImages)
-                return false;
-
-            foreach (var placement in line.Placements)
-            {
-                if (placement.Kind == XT.Graphics.PlacementKind.Sixel && placement.Covers(column))
-                    return true;
-            }
-
-            return false;
-        }
 
         /// <summary>
         /// Whether a picture has already been drawn UNDER the columns <paramref name="start"/> to
