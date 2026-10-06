@@ -413,10 +413,17 @@ namespace Iciclecreek.Terminal
             XT.Common.UnderlineStyle UnderlineStyle = XT.Common.UnderlineStyle.None,
             IBrush? UnderlineBrush = null,
             GlyphRun? Glyphs = null,
-            IBrush? Foreground = null)
+            IBrush? Foreground = null,
+            int[]? Blocks = null)
         {
             /// <summary>Whether this run draws a picture rather than text.</summary>
             public bool IsImage => Placement is not null && Image is not null;
+
+            /// <summary>
+            /// Whether this run is block characters drawn as rectangles -- see <see cref="BlockGlyphs"/>.
+            /// <see cref="Blocks"/> holds one codepoint per cell, painted in <see cref="Foreground"/>.
+            /// </summary>
+            public bool IsBlockArt => Blocks is not null;
 
             /// <summary>
             /// The curly underline's geometry, built on first draw and replayed with the run.
@@ -484,6 +491,16 @@ namespace Iciclecreek.Terminal
         /// uses overlap. Held on the instance rather than statically so two views do not contend.
         /// </remarks>
         private readonly StringBuilder _runTextBuilder = new(256);
+
+        /// <summary>The codepoints of a block run being collected, reused for the same reason.</summary>
+        private readonly List<int> _runBlockCodePoints = new(256);
+
+        /// <summary>
+        /// Whether a cell is one block character, drawn as rectangles -- see <see cref="BlockGlyphs"/>.
+        /// ClusterId 0 is "no cluster": a block with a mark attached is text, and goes to the shaper.
+        /// </summary>
+        private static bool IsBlockCell(BufferCell cell)
+            => cell.ClusterId == 0 && BlockGlyphs.IsBlock(cell.CodePoint);
 
         /// <summary>
         /// Whether runs may be drawn as pre-shaped glyphs rather than through FormattedText.
@@ -3623,6 +3640,7 @@ namespace Iciclecreek.Terminal
                 string text = String.Empty;
                 int cellCount = 0;
                 int runStartX = 0;
+                int[]? blocks = null;
                 var runHasBackdrop = CoveredByBackdrop(painted, x, x + Math.Max(1, cell.Width));
 
                 // Cells under a Sixel are drawn like any others, as xterm draws them: the picture goes
@@ -3664,6 +3682,12 @@ namespace Iciclecreek.Terminal
                     textBuilder.Clear();
                     cellCount = 0;  // Total cell positions consumed (including wide char placeholders)
                     runStartX = x;
+
+                    // Block characters get runs of their own, drawn as rectangles rather than shaped --
+                    // see BlockGlyphs. A run is all one or all the other.
+                    var blockRun = IsBlockCell(cell);
+                    var blockCodePoints = _runBlockCodePoints;
+                    blockCodePoints.Clear();
                     while (x < line.Length && x < _terminal.Cols)
                     {
                         var currentCell = line[x];
@@ -3684,8 +3708,12 @@ namespace Iciclecreek.Terminal
                             // coverage changes so suppressing that fill affects only columns with a
                             // negative-z picture behind them, not every same-style cell beside it.
                             || CoveredByBackdrop(painted, x, x + 1) != runHasBackdrop
-                            || (hasSizedRuns && line.TryGetSizedRunAt(x, out _)))
+                            || (hasSizedRuns && line.TryGetSizedRunAt(x, out _))
+                            || IsBlockCell(currentCell) != blockRun)
                             break;
+
+                        if (blockRun)
+                            blockCodePoints.Add(currentCell.CodePoint);
                         // Append the CHARACTER, not the Content string, whenever the cell is a single
                         // codepoint in the basic plane -- which is nearly every cell of nearly every
                         // terminal. Content is derived: it looks the codepoint up in an intern table
@@ -3710,6 +3738,8 @@ namespace Iciclecreek.Terminal
                         x += currentCell.Width;
                     }
                     text = textBuilder.ToString();
+                    if (blockRun)
+                        blocks = blockCodePoints.ToArray();
                 }
                 else if (cell.Width == 2)
                 {
@@ -3723,7 +3753,10 @@ namespace Iciclecreek.Terminal
                 // collected above can be only the first component of one glyph. Pull in the rest before
                 // shaping — otherwise HarfBuzz never sees the cluster and a family emoji draws as separate
                 // people. Applies to both branches: ❤️‍🔥 starts in a width-1 cell and continues into a wide one.
-                text = GraphemeRuns.AbsorbJoinedCells(line, _terminal.Cols, cell, text, ref x, ref cellCount);
+                // A block run has no clusters to complete: every one of its cells was checked to hold a
+                // lone block codepoint.
+                if (blocks is null)
+                    text = GraphemeRuns.AbsorbJoinedCells(line, _terminal.Cols, cell, text, ref x, ref cellCount);
 
                 var background = cell.GetBackgroundBrush(_palette, this.Background);
                 var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
@@ -3813,7 +3846,8 @@ namespace Iciclecreek.Terminal
                 // and a decoration is one of those, because that is set on the FormattedText.
                 GlyphRun? glyphs = null;
                 FormattedText? formattedText = null;
-                if (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null)
+                if (blocks is null
+                    && (!IsBlankRun(text) || underlineStyle != XT.Common.UnderlineStyle.None || td != null))
                 {
                     // A run the ligature switch cares about must reach the shaper, which the
                     // fast path never does -- it maps characters to glyphs one for one.
@@ -3857,7 +3891,8 @@ namespace Iciclecreek.Terminal
                 // when pictures moved onto lines, so position no longer says which is which.
                 var run = new CachedTextRun(formattedText, runStartX, cellCount, fill,
                                             Glyphs: glyphs, Foreground: foreground,
-                                            UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush);
+                                            UnderlineStyle: underlineStyle, UnderlineBrush: underlineBrush,
+                                            Blocks: blocks);
                 textRuns.Add(run);
 
 

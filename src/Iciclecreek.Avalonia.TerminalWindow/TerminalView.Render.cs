@@ -650,6 +650,8 @@ namespace Iciclecreek.Terminal
 
                 if (run.IsImage)
                     DrawImageRun(context, run, startYPos, rowHeight, scale);
+                else if (run.IsBlockArt)
+                    DrawBlocks(context, run, startYPos, rowHeight, scale);
                 else if (run.Glyphs is not null)
                     DrawGlyphs(context, run, position);
                 else if (run.Text is not null)
@@ -657,6 +659,54 @@ namespace Iciclecreek.Terminal
 
                 if (run.UnderlineStyle != XT.Common.UnderlineStyle.None)
                     DrawUnderline(context, run, position, rect.Width, rowHeight);
+            }
+        }
+
+        /// <summary>
+        /// Paints a run of block characters as rectangles, one cell at a time.
+        /// </summary>
+        /// <remarks>
+        /// Every edge is snapped against the cell's own snapped edges -- the same Snap the backgrounds
+        /// use -- so a shape reaching its cell's edge meets the neighbour's on the same device pixel,
+        /// and a fill is never antialiased into a hairline. Drawing these from the font is what left
+        /// seams through notcurses' block-character pictures: the glyph keeps the font's metrics,
+        /// not the cell's.
+        /// </remarks>
+        private void DrawBlocks(DrawingContext context, CachedTextRun run,
+                                double startYPos, double rowHeight, double scale)
+        {
+            var brush = run.Foreground;
+            if (brush is null || run.Blocks is null)
+                return;
+
+            for (var i = 0; i < run.Blocks.Length; i++)
+            {
+                if (!BlockGlyphs.TryGet(run.Blocks[i], out var shapes))
+                    continue;
+
+                var col = run.StartX + i;
+                foreach (var shape in shapes)
+                {
+                    var left = Snap((col + shape.X0 / (double)BlockGlyphs.Units) * _charWidth, scale);
+                    var right = Snap((col + shape.X1 / (double)BlockGlyphs.Units) * _charWidth, scale);
+                    var top = Snap(startYPos + shape.Y0 * rowHeight / BlockGlyphs.Units, scale);
+                    var bottom = Snap(startYPos + shape.Y1 * rowHeight / BlockGlyphs.Units, scale);
+                    if (right <= left || bottom <= top)
+                        continue;
+
+                    var rect = new Rect(left, top, right - left, bottom - top);
+                    if (shape.Alpha >= 1f)
+                    {
+                        context.FillRectangle(brush, rect);
+                    }
+                    else
+                    {
+                        // The shades: the foreground at a fraction, over whatever the cell's
+                        // background already put down.
+                        using (context.PushOpacity(shape.Alpha))
+                            context.FillRectangle(brush, rect);
+                    }
+                }
             }
         }
 
