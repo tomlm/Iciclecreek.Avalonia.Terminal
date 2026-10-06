@@ -233,6 +233,79 @@ public class MouseAndSelectionTests
         finally { window.Close(); }
     }
 
+    // ------------------------------------------------- SGR-Pixels (DECSET 1016)
+
+    [AvaloniaTest]
+    public void Under_sgr_pixels_motion_inside_one_cell_is_still_reported()
+    {
+        // Coalescing per cell is right for cell reports and wrong for pixel ones: an application
+        // that asked for pixels asked precisely to see movement within a cell.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?1003h{Esc}[?1016h");
+            Dispatcher.UIThread.RunJobs();
+
+            var x = CharWidth(view) * 4 + 1;
+            Move(view, x, 40.0);
+            var afterFirst = AwaitOutput(pty).Length;
+            Assert.That(afterFirst, Is.GreaterThan(0), "sanity: motion is being reported at all");
+
+            Move(view, x + 2, 40.0);   // same cell, different pixel
+
+            Assert.That(AwaitOutput(pty, afterFirst).Length, Is.GreaterThan(afterFirst));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_pixel_report_divides_back_to_the_cell_a_cell_report_names()
+    {
+        // The pixel position is scaled by the same cell metrics CSI 16 t reports, so an application
+        // dividing by them lands on the cell the 1006 report would have named for the same point.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?1003h{Esc}[?1006h");
+            Dispatcher.UIThread.RunJobs();
+
+            var x = CharWidth(view) * 7 - 0.25;   // just inside a cell boundary, where rounding bites
+            var y = CharHeight(view) * 3 - 0.25;
+            Move(view, x, y);
+            var cell = LastReport(AwaitOutput(pty));
+
+            view.Terminal.Write($"{Esc}[?1016h");
+            Dispatcher.UIThread.RunJobs();
+            var before = pty.Written.Length;
+            Move(view, x, y);
+            var pixel = LastReport(AwaitOutput(pty, before));
+
+            var cw = view.Terminal.Options.CellWidthPixels;
+            var ch = view.Terminal.Options.CellHeightPixels;
+            Assert.That((pixel.X - 1) / cw, Is.EqualTo(cell.X - 1), "column");
+            Assert.That((pixel.Y - 1) / ch, Is.EqualTo(cell.Y - 1), "row");
+        }
+        finally { window.Close(); }
+    }
+
+    private static (int X, int Y) LastReport(string written)
+    {
+        var m = System.Text.RegularExpressions.Regex.Matches(written, @"\[<\d+;(\d+);(\d+)[Mm]");
+        Assert.That(m.Count, Is.GreaterThan(0), $"no SGR report in {written}");
+        var last = m[m.Count - 1];
+        return (int.Parse(last.Groups[1].Value), int.Parse(last.Groups[2].Value));
+    }
+
+    private static double CharWidth(TerminalView view)
+    {
+        var f = typeof(TerminalView).GetField("_charWidth",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.That(f, Is.Not.Null, "_charWidth has been renamed; this test needs updating");
+        var w = (double)f!.GetValue(view)!;
+        Assert.That(w, Is.GreaterThan(0), "the view has not measured its font yet");
+        return w;
+    }
+
     // -------------------------------------------------- Shift owns the wheel
 
     [AvaloniaTest]

@@ -149,7 +149,7 @@ namespace Iciclecreek.Terminal
                 var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
 
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Down, modifiers);
+                var sequence = _terminal.GenerateMouseEvent(button, col, row, PointerPixelX(point.X), PointerPixelY(point.Y), XT.Input.MouseEventType.Down, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
                     await SendToPtyAsync(sequence).ConfigureAwait(false);
@@ -216,7 +216,7 @@ namespace Iciclecreek.Terminal
                 var button = ConvertPointerButton(e.GetCurrentPoint(this).Properties, e.InitialPressMouseButton);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
 
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, XT.Input.MouseEventType.Up, modifiers);
+                var sequence = _terminal.GenerateMouseEvent(button, col, row, PointerPixelX(point.X), PointerPixelY(point.Y), XT.Input.MouseEventType.Up, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
                     await SendToPtyAsync(sequence).ConfigureAwait(false);
@@ -286,21 +286,28 @@ namespace Iciclecreek.Terminal
                     ? XT.Input.MouseEventType.Drag
                     : XT.Input.MouseEventType.Move;
 
-                // Once per CELL crossed, not once per pointer event.
+                // Once per position the report can express, not once per pointer event.
                 //
-                // The protocol reports positions in cells, so every event inside one cell produces
-                // an identical sequence -- and a modern pointer fires them at several hundred hertz.
-                // A program tracking the mouse was reading hundreds of copies of "still at 40,12" a
-                // second, which is bandwidth through the pty, parse work at the far end, and for
-                // anything that redraws on motion, a repaint per event.
+                // Cell reports are identical for every event inside one cell -- and a modern pointer
+                // fires them at several hundred hertz. A program tracking the mouse was reading
+                // hundreds of copies of "still at 40,12" a second, which is bandwidth through the
+                // pty, parse work at the far end, and for anything that redraws on motion, a repaint
+                // per event. Under SGR-Pixels (1016) the report carries pixels instead, and keying on
+                // the cell there would swallow every movement within it -- the very thing the
+                // application switched to pixels to see.
                 //
                 // Remembered per button state as well as position: a drag and a hover at the same
                 // cell are different reports, and collapsing them would swallow the button change.
-                var here = (col, row, eventType, _terminal.MouseTrackingMode, button, modifiers);
+                var pixelX = PointerPixelX(point.X);
+                var pixelY = PointerPixelY(point.Y);
+                var encoding = _terminal.MouseEncoding;
+                var pixels = encoding == XT.Input.MouseEncoding.SGRPixels;
+                var here = (pixels ? pixelX : col, pixels ? pixelY : row, encoding,
+                            eventType, _terminal.MouseTrackingMode, button, modifiers);
                 if (_lastReportedMotion == here)
                     return;
 
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
+                var sequence = _terminal.GenerateMouseEvent(button, col, row, pixelX, pixelY, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
                     // Remember only a report that actually went out. A move while tracking is off
@@ -386,10 +393,13 @@ namespace Iciclecreek.Terminal
                 var row = PointerRow(point.Y);
                 var modifiers = ConvertAvaloniaModifiers(e.KeyModifiers);
 
+                var pixelX = PointerPixelX(point.X);
+                var pixelY = PointerPixelY(point.Y);
+
                 var button = notches > 0 ? XT.Input.MouseButton.WheelUp : XT.Input.MouseButton.WheelDown;
                 var eventType = notches > 0 ? XT.Input.MouseEventType.WheelUp : XT.Input.MouseEventType.WheelDown;
 
-                var sequence = _terminal.GenerateMouseEvent(button, col, row, eventType, modifiers);
+                var sequence = _terminal.GenerateMouseEvent(button, col, row, pixelX, pixelY, eventType, modifiers);
                 if (!string.IsNullOrEmpty(sequence))
                 {
                     // Mark handled BEFORE the await — after it the event has already finished bubbling.
@@ -632,6 +642,36 @@ namespace Iciclecreek.Terminal
             => _charHeight > 0
                 ? Math.Clamp((int)(y / _charHeight), 0, Math.Max(0, _terminal.Rows - 1))
                 : 0;
+
+        /// <summary>
+        /// The pointer's horizontal offset into the cell area in device pixels, for SGR-Pixels
+        /// (DECSET 1016) reports.
+        /// </summary>
+        /// <remarks>
+        /// Scaled by the CELL metrics the application was told about (CSI 16 t), not by
+        /// RenderScaling directly. Those are rounded, so a raw device-pixel position divided by them
+        /// can land one cell off from <see cref="PointerColumn"/> near a boundary; scaling the
+        /// fractional cell position by the same integer makes that division agree with the column
+        /// exactly. Clamped like PointerColumn, to the grid and off the gutter.
+        /// </remarks>
+        private int PointerPixelX(double x)
+            => _charWidth > 0
+                ? ScaleToCellPixels((x - Math.Max(0, GutterWidth)) / _charWidth,
+                                    _terminal.Cols, _terminal.Options.CellWidthPixels)
+                : 0;
+
+        /// <summary>The vertical counterpart to <see cref="PointerPixelX"/>.</summary>
+        private int PointerPixelY(double y)
+            => _charHeight > 0
+                ? ScaleToCellPixels(y / _charHeight, _terminal.Rows, _terminal.Options.CellHeightPixels)
+                : 0;
+
+        private static int ScaleToCellPixels(double cells, int count, int cellPixels)
+        {
+            cellPixels = Math.Max(1, cellPixels);
+            var last = Math.Max(0, count * cellPixels - 1);
+            return Math.Clamp((int)(Math.Max(0, cells) * cellPixels), 0, last);
+        }
 
     }
 }
