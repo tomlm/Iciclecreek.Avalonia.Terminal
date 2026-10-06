@@ -101,12 +101,49 @@ public class BlockGlyphsTests
         Assert.That(shapes, Is.EqualTo(expected));
     }
 
+    /// <summary>
+    /// notcurses stacks wedges into two-row shapes, so a wedge that reaches its cell's bottom edge
+    /// must reach it exactly -- falling short was a band through every such shape.
+    /// </summary>
+    [Test]
+    public void Wedges_are_polygons_reaching_the_cell_edges()
+    {
+        Assert.That(BlockGlyphs.TryGet(0x1FB3C, out var lowerLeft), Is.True);   // 🬼
+        Assert.That(lowerLeft.Single().Points, Is.EqualTo(new byte[] { 0, 16, 0, 24, 12, 24 }),
+                    "lower middle left to lower centre");
+
+        Assert.That(BlockGlyphs.TryGet(0x1FB52, out var upperRight), Is.True);  // 🭒
+        Assert.That(upperRight.Single().Points, Is.EqualTo(new byte[] { 0, 0, 24, 0, 24, 24, 12, 24, 0, 16 }));
+    }
+
+    [Test]
+    public void Every_codepoint_in_the_covered_ranges_has_a_shape()
+    {
+        foreach (var (from, to) in new[] { (0x2580, 0x259F), (0x1FB00, 0x1FB8B) })
+            for (var cp = from; cp <= to; cp++)
+                Assert.That(BlockGlyphs.TryGet(cp, out var shapes) && shapes.Length > 0, Is.True, $"U+{cp:X4}");
+    }
+
+    [Test]
+    public void Triangles_meet_at_the_centre_and_eighths_are_eighths()
+    {
+        Assert.That(BlockGlyphs.TryGet(0x1FB6D, out var upper), Is.True);       // 🭭
+        Assert.That(upper.Single().Points, Is.EqualTo(new byte[] { 0, 0, 24, 0, 12, 12 }));
+        Assert.That(BlockGlyphs.TryGet(0x1FB68, out var threeQuarters), Is.True); // 🭨
+        Assert.That(threeQuarters, Has.Length.EqualTo(3));
+
+        Assert.That(Area(0x1FB82), Is.EqualTo(Cell / 4), "🮂 upper one quarter");
+        Assert.That(Area(0x1FB8B), Is.EqualTo(Cell * 7 / 8), "🮋 right seven eighths");
+        Assert.That(BlockGlyphs.TryGet(0x1FB70, out var vertical), Is.True);     // 🭰 vertical eighth 2
+        Assert.That(vertical.Single(), Is.EqualTo(new BlockGlyphs.Shape(3, 0, 6, 24)));
+    }
+
     [Test]
     public void Ordinary_characters_are_not_blocks()
     {
         Assert.That(BlockGlyphs.IsBlock('A'), Is.False);
         Assert.That(BlockGlyphs.IsBlock(0x2500), Is.False, "box drawing lines are still drawn from the font");
-        Assert.That(BlockGlyphs.IsBlock(0x1FB3C), Is.False, "the legacy-computing wedges after the sextants are not covered");
+        Assert.That(BlockGlyphs.IsBlock(0x1FB8C), Is.False, "the shaded halves after the eighths are not covered");
         Assert.That(BlockGlyphs.TryGet('A', out _), Is.False);
     }
 

@@ -185,6 +185,25 @@ namespace Iciclecreek.Terminal.Skia
 
             foreach (var shape in shapes)
             {
+                if (shape.IsPolygon)
+                {
+                    // Wedges and triangles: vertices snapped like the rectangles' edges, so only
+                    // the diagonal is antialiased and the straight sides meet the neighbours.
+                    var points = shape.Points!;
+                    using var path = new SKPath();
+                    for (var i = 0; i < points.Length; i += 2)
+                    {
+                        var px = Snap((col + points[i] / (double)BlockGlyphs.Units) * cw, scale);
+                        var py = Snap(rowTop + points[i + 1] * (double)rowHeight / BlockGlyphs.Units, scale);
+                        if (i == 0) path.MoveTo(px, py);
+                        else path.LineTo(px, py);
+                    }
+                    path.Close();
+                    paint.Color = color;
+                    canvas.DrawPath(path, paint);
+                    continue;
+                }
+
                 var left = Snap((col + shape.X0 / (double)BlockGlyphs.Units) * cw, scale);
                 var right = Snap((col + shape.X1 / (double)BlockGlyphs.Units) * cw, scale);
                 var top = Snap(rowTop + shape.Y0 * (double)rowHeight / BlockGlyphs.Units, scale);

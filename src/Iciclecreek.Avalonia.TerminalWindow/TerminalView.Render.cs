@@ -687,6 +687,12 @@ namespace Iciclecreek.Terminal
                 var col = run.StartX + i;
                 foreach (var shape in shapes)
                 {
+                    if (shape.IsPolygon)
+                    {
+                        DrawBlockPolygon(context, brush, shape.Points!, col, startYPos, rowHeight, scale);
+                        continue;
+                    }
+
                     var left = Snap((col + shape.X0 / (double)BlockGlyphs.Units) * _charWidth, scale);
                     var right = Snap((col + shape.X1 / (double)BlockGlyphs.Units) * _charWidth, scale);
                     var top = Snap(startYPos + shape.Y0 * rowHeight / BlockGlyphs.Units, scale);
@@ -708,6 +714,30 @@ namespace Iciclecreek.Terminal
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// A wedge or triangle: every vertex snapped exactly as a rectangle's edges are, so the
+        /// polygon's straight sides along the cell border meet the neighbouring cell's shapes, and only
+        /// the diagonal itself is antialiased.
+        /// </summary>
+        private void DrawBlockPolygon(DrawingContext context, IBrush brush, byte[] points, int col,
+                                      double startYPos, double rowHeight, double scale)
+        {
+            Point Vertex(int i) => new(
+                Snap((col + points[i] / (double)BlockGlyphs.Units) * _charWidth, scale),
+                Snap(startYPos + points[i + 1] * rowHeight / BlockGlyphs.Units, scale));
+
+            var geometry = new StreamGeometry();
+            using (var g = geometry.Open())
+            {
+                g.BeginFigure(Vertex(0), isFilled: true);
+                for (var i = 2; i < points.Length; i += 2)
+                    g.LineTo(Vertex(i));
+                g.EndFigure(isClosed: true);
+            }
+
+            context.DrawGeometry(brush, null, geometry);
         }
 
         /// <summary>
