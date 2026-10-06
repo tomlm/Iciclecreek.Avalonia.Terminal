@@ -172,6 +172,53 @@ namespace Iciclecreek.Terminal.Skia
         private static float Snap(double value, double scale) =>
             (float)(Math.Round(value * scale, MidpointRounding.AwayFromZero) / scale);
 
+        /// <summary>
+        /// One block character as rectangles, every edge snapped against the cell's own snapped
+        /// edges -- the same arithmetic as the backgrounds, so neighbouring blocks meet on one pixel.
+        /// </summary>
+        private static void DrawBlock(SKCanvas canvas, SKPaint paint, BlockGlyphs.Shape[] shapes,
+                                      int col, int rowIndex, float cw, float ch, double scale)
+        {
+            var rowTop = Snap(rowIndex * ch, scale);
+            var rowHeight = Snap((rowIndex + 1) * ch, scale) - rowTop;
+            var color = paint.Color;
+
+            foreach (var shape in shapes)
+            {
+                if (shape.IsPolygon)
+                {
+                    // Wedges and triangles: vertices snapped like the rectangles' edges, so only
+                    // the diagonal is antialiased and the straight sides meet the neighbours.
+                    var points = shape.Points!;
+                    using var path = new SKPath();
+                    for (var i = 0; i < points.Length; i += 2)
+                    {
+                        var px = Snap((col + points[i] / (double)BlockGlyphs.Units) * cw, scale);
+                        var py = Snap(rowTop + points[i + 1] * (double)rowHeight / BlockGlyphs.Units, scale);
+                        if (i == 0) path.MoveTo(px, py);
+                        else path.LineTo(px, py);
+                    }
+                    path.Close();
+                    paint.Color = color;
+                    canvas.DrawPath(path, paint);
+                    continue;
+                }
+
+                var left = Snap((col + shape.X0 / (double)BlockGlyphs.Units) * cw, scale);
+                var right = Snap((col + shape.X1 / (double)BlockGlyphs.Units) * cw, scale);
+                var top = Snap(rowTop + shape.Y0 * (double)rowHeight / BlockGlyphs.Units, scale);
+                var bottom = Snap(rowTop + shape.Y1 * (double)rowHeight / BlockGlyphs.Units, scale);
+                if (right <= left || bottom <= top)
+                    continue;
+
+                // The shades are the foreground at a fraction, over the background already down.
+                paint.Color = shape.Alpha >= 1f ? color : color.WithAlpha((byte)(color.Alpha * shape.Alpha));
+                canvas.DrawRect(left, top, right - left, bottom - top, paint);
+            }
+
+            paint.Color = color;
+        }
+
         /// <summary>Internal rather than private so the profiling benchmark suite can drive the
         /// exact frame-drawing path directly, without needing a live Avalonia composite.</summary>
         internal void Draw(SKCanvas canvas)
@@ -297,7 +344,10 @@ namespace Iciclecreek.Terminal.Skia
                             ? new SKColor(cell.Foreground).WithAlpha((byte)(new SKColor(cell.Foreground).Alpha * 0.4f))
                             : new SKColor(cell.Foreground);
 
-                        if (cell.ClusterIndex >= 0)
+                        if (cell.ClusterIndex < 0 && BlockGlyphs.TryGet(cell.CodePoint, out var shapes))
+                            // Rectangles snapped to the cell, not the font's glyph -- see BlockGlyphs.
+                            DrawBlock(canvas, paint, shapes, col, rowIndex, cw, ch, scale);
+                        else if (cell.ClusterIndex >= 0)
                             // Shaped, not drawn character by character. SKCanvas.DrawText maps
                             // characters to glyphs one for one, which turns a ZWJ sequence into its
                             // components — a family emoji came out as several boxes and a stray
