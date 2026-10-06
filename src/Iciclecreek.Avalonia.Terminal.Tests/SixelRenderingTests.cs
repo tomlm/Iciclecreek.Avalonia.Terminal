@@ -1269,6 +1269,8 @@ public class SixelRenderingTests
     /// The background belongs to the CELLS, and a picture no longer writes any: placing one leaves
     /// the cells exactly as they were. So the colour has to be put there by text before the pictures
     /// go over it, which is also the only way a real session produces one.
+    /// <para>Behind the text, where the cells' own fill is suppressed so it cannot cover the
+    /// pictures -- which is the one place a picture still carries the fill.</para>
     /// </remarks>
     [AvaloniaTest]
     public void Only_the_bottom_picture_paints_the_cell_background()
@@ -1281,8 +1283,8 @@ public class SixelRenderingTests
             // Red-backed blanks for the pictures to sit on.
             view.Terminal.Write($"{Esc}[1;1H{Esc}[41m        {Esc}[0m");
 
-            PlaceAt(view, 1, col: 0, z: 1);
-            PlaceAt(view, 2, col: 0, z: 5);
+            PlaceAt(view, 1, col: 0, z: -5);
+            PlaceAt(view, 2, col: 0, z: -1);
 
             var filled = RunsForRow(view, 0)
                 .Where(r => r.IsImage && r.Background is not null)
@@ -1290,7 +1292,36 @@ public class SixelRenderingTests
 
             Assert.That(filled.Count, Is.EqualTo(1),
                         "the cell background belongs to the bottom picture alone");
-            Assert.That(filled[0].Placement!.Value.ZIndex, Is.EqualTo(1));
+            Assert.That(filled[0].Placement!.Value.ZIndex, Is.EqualTo(-5));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A Kitty picture in front of the text is an overlay, and fills nothing: the text and each
+    /// cell's own background are already down under it, and its transparent pixels are meant to
+    /// show them. A fill there painted the first cell's colour across the whole run, over the
+    /// glyphs -- notcurses' sprites sat in solid bands with the text around them cut away.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_picture_in_front_of_the_text_fills_nothing_under_itself()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            TransmitTwo(view);
+
+            view.Terminal.Write($"{Esc}[1;1H{Esc}[41mAAAAAAAA{Esc}[0m");
+
+            PlaceAt(view, 1, col: 0, z: 1);
+            PlaceAt(view, 2, col: 0, z: 5);
+
+            var runs = RunsForRow(view, 0);
+
+            Assert.That(runs.Where(r => r.IsImage && r.Background is not null), Is.Empty,
+                        "no picture in front of the text should paint a background");
+            Assert.That(runs.Any(r => !r.IsImage && r.Background is not null), Is.True,
+                        "sanity: the cells' own run paints their background");
         }
         finally { window.Close(); }
     }
