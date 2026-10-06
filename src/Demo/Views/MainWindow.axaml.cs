@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     /// </summary>
     private static XTerm.Options.TerminalOptions DemoOptions() => new()
     {
+        KittyGraphicsEnabled = Environment.GetEnvironmentVariable("KITTY_GRAPHICS") is not "0",
         KittyNotificationsEnabled = true,
         PointerShapesEnabled = true,
         ClipboardReadEnabled = true,
