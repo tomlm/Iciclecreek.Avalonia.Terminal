@@ -296,6 +296,7 @@ namespace Iciclecreek.Terminal
         public override void Render(DrawingContext context)
         {
             _sizedBlockDraws.Clear();
+            _frontImageDraws.Clear();
             // The terminal's own background, painted once for the whole surface.
             //
             // Nothing else paints it. TerminalView is a plain Control, so Avalonia has no Background of its
@@ -545,6 +546,10 @@ namespace Iciclecreek.Terminal
                 // selection and the cursor still draw over scaled text, as they do over plain text.
                 RenderSizedBlocks(context, scale);
 
+                // Pictures in front of the text, once every row's text -- sized blocks included -- is
+                // down, and still under the overlays.
+                RenderFrontImages(context, scale);
+
                 // Search highlights under the selection, so a selected match still reads as selected.
                 RenderSearchHighlights(context, viewportY, scale);
 
@@ -575,7 +580,35 @@ namespace Iciclecreek.Terminal
 
             textRuns ??= CollectLineRuns(line, startYPos, rowHeight);
 
-            DrawLineRuns(context, textRuns, startYPos, rowHeight, scale);
+            DrawLineRuns(context, textRuns, startYPos, rowHeight, scale, deferFrontImages: true);
+        }
+
+        /// <summary>
+        /// Draws the pictures whose z-index puts them in front of the text, after every row.
+        /// </summary>
+        /// <remarks>
+        /// Rows render top to bottom, so anything a row draws past its own edge lands on the row
+        /// above if that row was already finished. Text does that routinely -- block elements,
+        /// antialiased glyph edges, tall scripts -- and for a picture BEHIND the text that is
+        /// correct. For one in front of it, it is a strip of text showing through the picture at
+        /// every row boundary. Each draw still goes through the same planning and clip as before;
+        /// only the moment it happens has moved.
+        /// </remarks>
+        private void RenderFrontImages(DrawingContext context, double scale)
+        {
+            foreach (var draw in _frontImageDraws)
+            {
+                var run = draw.Run;
+                if (run.Background is not null)
+                {
+                    var startX = Snap(run.StartX * _charWidth, scale);
+                    var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);
+                    context.FillRectangle(run.Background,
+                        new Rect(startX, draw.StartYPos, Math.Max(0, endX - startX), draw.RowHeight));
+                }
+
+                DrawImageRun(context, run, draw.StartYPos, draw.RowHeight, scale);
+            }
         }
 
         /// <summary>
@@ -588,10 +621,22 @@ namespace Iciclecreek.Terminal
         /// READS, which is also what lets it be retried -- see <see cref="CollectLineRuns"/>.
         /// </remarks>
         private void DrawLineRuns(DrawingContext context, List<CachedTextRun> textRuns,
-                                  double startYPos, double rowHeight, double scale)
+                                  double startYPos, double rowHeight, double scale,
+                                  bool deferFrontImages = false)
         {
             foreach (var run in textRuns)
             {
+                // A picture in front of the text is in front of ALL of it, not just this row's -- see
+                // RenderFrontImages. Drawn here, the next row's glyphs went down after it, and a font's
+                // block elements reach a pixel past their cell: notcurses paints its gradients in
+                // half blocks, and every row of a sprite over one carried a gradient-coloured seam
+                // along its bottom edge.
+                if (deferFrontImages && run.IsImage && run.Placement is { ZIndex: >= 0 })
+                {
+                    _frontImageDraws.Add(new FrontImageDraw(run, startYPos, rowHeight));
+                    continue;
+                }
+
                 // Recalculate position based on current screen row
                 var startX = Snap(run.StartX * _charWidth, scale);
                 var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);

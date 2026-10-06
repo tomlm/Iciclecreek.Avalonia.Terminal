@@ -3559,6 +3559,14 @@ namespace Iciclecreek.Terminal
         private readonly List<SizedBlockDraw> _sizedBlockDraws = new();
 
         /// <summary>
+        /// One picture run in front of the text, waiting for the pass after every row -- see
+        /// <c>RenderFrontImages</c>.
+        /// </summary>
+        private readonly record struct FrontImageDraw(CachedTextRun Run, double StartYPos, double RowHeight);
+
+        private readonly List<FrontImageDraw> _frontImageDraws = new();
+
+        /// <summary>
         /// Reads one row into runs. Reads ONLY -- see <see cref="CollectLineRuns"/> for why nothing here
         /// may paint or publish.
         /// </summary>
