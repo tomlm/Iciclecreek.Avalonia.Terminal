@@ -795,9 +795,17 @@ namespace Iciclecreek.Terminal
             // Only where nothing has painted it already. Runs are drawn back to front, so a nearer
             // picture repainting the background would erase the one behind it rather than blend over
             // it -- which is the whole of what overlapping placements are for.
+            //
+            // And never under a Kitty picture IN FRONT of the text. That is an overlay: the text and
+            // each cell's own background are already down beneath it, and its transparent pixels are
+            // meant to show them. Filling there painted the first cell's colour across the whole run,
+            // over the glyphs -- every row of a sprite became a flat band, and notcurses' orca sat in
+            // a solid green rectangle with the text around it cut away.
             var first = line[start];
             var background = first.GetBackgroundBrush(_palette, this.Background);
-            var fill = first.GetBackgroundColor(_palette).HasValue
+            var overlay = placement.Kind == XT.Graphics.PlacementKind.Kitty && placement.ZIndex >= 0;
+            var fill = !overlay
+                       && first.GetBackgroundColor(_palette).HasValue
                        && !OverlapsAny(alreadyPainted, start, end)
                        ? background
                        : null;
