@@ -503,6 +503,20 @@ namespace Iciclecreek.Terminal
             => cell.ClusterId == 0 && BlockGlyphs.IsBlock(cell.CodePoint);
 
         /// <summary>
+        /// Whether a cell holds a character the font has no glyph for, so it is drawn from a fallback
+        /// font. Such cells get runs of their own -- see <see cref="TryBuildGlyphRun"/>.
+        /// </summary>
+        /// <remarks>
+        /// Only the plain case is answered: a cluster or an astral codepoint goes to the shaper
+        /// whatever the answer, and splitting it out would change nothing. With no typeface to ask,
+        /// nothing is split, which is how every run was collected before this existed.
+        /// </remarks>
+        private static bool NeedsFallback(BufferCell cell, GlyphTypeface? primary)
+            => primary is not null
+               && cell.ClusterId == 0 && cell.CodePoint > 0 && cell.CodePoint < 0x10000
+               && !(primary.CharacterToGlyphMap.TryGetGlyph(cell.CodePoint, out var glyph) && glyph != 0);
+
+        /// <summary>
         /// Whether runs may be drawn as pre-shaped glyphs rather than through FormattedText.
         /// </summary>
         /// <remarks>
@@ -533,6 +547,12 @@ namespace Iciclecreek.Terminal
 
         /// <summary>Glyph typefaces by style and weight, so the font manager is asked once each.</summary>
         private readonly Dictionary<(FontStyle Style, FontWeight Weight), GlyphTypeface?> _glyphTypefaces = new();
+
+        /// <summary>
+        /// The fallback face for each character the font lacks, by style and weight, so the font
+        /// manager's search runs once per character rather than once per run rebuilt.
+        /// </summary>
+        private readonly Dictionary<(int CodePoint, FontStyle Style, FontWeight Weight), GlyphTypeface?> _fallbackGlyphTypefaces = new();
 
         /// <summary>
         /// The emulator's <c>DrawBoldTextInBrightColors</c>, snapshotted per frame beside the palette.
@@ -3641,6 +3661,7 @@ namespace Iciclecreek.Terminal
                 int cellCount = 0;
                 int runStartX = 0;
                 int[]? blocks = null;
+                var fallbackRun = false;
                 var runHasBackdrop = CoveredByBackdrop(painted, x, x + Math.Max(1, cell.Width));
 
                 // Cells under a Sixel are drawn like any others, as xterm draws them: the picture goes
@@ -3688,6 +3709,17 @@ namespace Iciclecreek.Terminal
                     var blockRun = IsBlockCell(cell);
                     var blockCodePoints = _runBlockCodePoints;
                     blockCodePoints.Clear();
+
+                    // So do characters the font lacks. Shaped together with the rest, a fallback
+                    // glyph keeps its OWN font's advance, which is rarely the cell's: every
+                    // character after it in the run shifts off its column, and the next run's
+                    // background, drawn after, covers the overhang. btop shows it on every core
+                    // row -- a braille graph and the red "100" share a run, and the grey "%"
+                    // that follows paints over the last 0. Split out, the fallback characters are
+                    // pinned to their cells (see TryBuildGlyphRun) and the text after them starts
+                    // at its own column again.
+                    var primaryFace = blockRun ? null : GlyphTypefaceFor(cell.GetFontStyle(), cell.GetFontWeight());
+                    fallbackRun = NeedsFallback(cell, primaryFace);
                     while (x < line.Length && x < _terminal.Cols)
                     {
                         var currentCell = line[x];
@@ -3709,7 +3741,8 @@ namespace Iciclecreek.Terminal
                             // negative-z picture behind them, not every same-style cell beside it.
                             || CoveredByBackdrop(painted, x, x + 1) != runHasBackdrop
                             || (hasSizedRuns && line.TryGetSizedRunAt(x, out _))
-                            || IsBlockCell(currentCell) != blockRun)
+                            || IsBlockCell(currentCell) != blockRun
+                            || NeedsFallback(currentCell, primaryFace) != fallbackRun)
                             break;
 
                         if (blockRun)
@@ -3852,7 +3885,7 @@ namespace Iciclecreek.Terminal
                     // A run the ligature switch cares about must reach the shaper, which the
                     // fast path never does -- it maps characters to glyphs one for one.
                     glyphs = td == null && !LigaturesWantShaping(text, style, weight)
-                        ? TryBuildGlyphRun(text, cellCount, style, weight) : null;
+                        ? TryBuildGlyphRun(text, cellCount, style, weight, fallbackRun) : null;
                     if (glyphs is null)
                     {
                         var typeface = new Typeface(FontFamily, style, weight);

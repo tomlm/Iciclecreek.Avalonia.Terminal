@@ -1458,16 +1458,23 @@ namespace Iciclecreek.Terminal
         /// the column count stop agreeing and per-cell advances cannot be assigned.</item>
         /// <item>NO SURROGATES. An astral codepoint is two chars and is usually an emoji, which needs
         /// a fallback font and often a colour one.</item>
-        /// <item>EVERY GLYPH PRESENT. Glyph 0 is .notdef -- the tofu box. The primary font not having
-        /// a character is exactly when fallback is needed, so it is exactly when to decline.</item>
+        /// <item>EVERY GLYPH PRESENT. Glyph 0 is .notdef -- the tofu box. For a run of characters the
+        /// font lacks (<paramref name="fallback"/>), "the font" is the face the font manager falls back
+        /// to for the first of them, the same search the shaper would make; a run that needs more than
+        /// that one face declines.</item>
         /// <item>NO DECORATIONS. Those are set on the FormattedText itself.</item>
         /// </list>
         /// <para>Advances are set explicitly to the cell width rather than taken from the font. For a
         /// monospace face the two agree, and pinning them means they agree by construction rather
         /// than by assumption -- a fraction of a pixel of drift per cell would be a hundred and twenty
-        /// of them across a line.</para>
+        /// of them across a line. For a fallback face they do NOT agree, and pinning them is the point:
+        /// a ▲ or a braille dot from a proportional face is wider than the cell, and at its own advance
+        /// it pushed everything after it off the grid. Pinned alone, such a glyph still reaches into the
+        /// next cell, whose background then cuts it in half, so a fallback run is also drawn smaller
+        /// until its widest glyph fits one cell, as kitty and Ghostty do.</para>
         /// </remarks>
-        private GlyphRun? TryBuildGlyphRun(string text, int cellCount, FontStyle style, FontWeight weight)
+        private GlyphRun? TryBuildGlyphRun(string text, int cellCount, FontStyle style, FontWeight weight,
+                                           bool fallback = false)
         {
             if (!GlyphRunFastPathEnabled)
                 return null;
@@ -1475,7 +1482,9 @@ namespace Iciclecreek.Terminal
             if (text.Length == 0 || text.Length != cellCount || _charWidth <= 0)
                 return null;
 
-            var glyphTypeface = GlyphTypefaceFor(style, weight);
+            var glyphTypeface = fallback
+                ? FallbackGlyphTypefaceFor(text[0], style, weight)
+                : GlyphTypefaceFor(style, weight);
             if (glyphTypeface is null)
                 return null;
 
@@ -1494,7 +1503,8 @@ namespace Iciclecreek.Terminal
                 glyphs[i] = new GlyphInfo(glyph, i, _charWidth, default);
             }
 
-            return new GlyphRun(glyphTypeface, FontSize, text.AsMemory(), glyphs,
+            var fontSize = fallback ? FallbackFontSize(glyphTypeface, glyphs) : FontSize;
+            return new GlyphRun(glyphTypeface, fontSize, text.AsMemory(), glyphs,
                                 baselineOrigin: new Point(0, _baseline));
         }
 
@@ -1518,6 +1528,54 @@ namespace Iciclecreek.Terminal
             }
 
             _glyphTypefaces[(style, weight)] = resolved;
+            return resolved;
+        }
+
+        /// <summary>
+        /// The size that fits a fallback run's widest glyph in one cell: the font size, or smaller.
+        /// </summary>
+        private double FallbackFontSize(GlyphTypeface glyphTypeface, GlyphInfo[] glyphs)
+        {
+            var em = glyphTypeface.Metrics.DesignEmHeight;
+            if (em <= 0)
+                return FontSize;
+
+            ushort widest = 0;
+            foreach (var glyph in glyphs)
+                if (glyphTypeface.TryGetHorizontalGlyphAdvance(glyph.GlyphIndex, out var advance) && advance > widest)
+                    widest = advance;
+
+            var width = widest * FontSize / em;
+            return width > _charWidth ? FontSize * _charWidth / width : FontSize;
+        }
+
+        /// <summary>
+        /// The face the font manager falls back to for a character the font lacks, or null when it
+        /// finds none. Resolved once per character, style and weight.
+        /// </summary>
+        /// <remarks>
+        /// The same search the shaper makes inside FormattedText -- the chain's own families first,
+        /// then the system's -- so a fallback glyph looks as it did before, only placed on its cell.
+        /// </remarks>
+        private GlyphTypeface? FallbackGlyphTypefaceFor(int codePoint, FontStyle style, FontWeight weight)
+        {
+            if (_fallbackGlyphTypefaces.TryGetValue((codePoint, style, weight), out var cached))
+                return cached;
+
+            GlyphTypeface? resolved = null;
+            try
+            {
+                if (FontManager.Current.TryMatchCharacter(codePoint, style, weight, FontStretch.Normal,
+                                                          FontFamily, CultureInfo.CurrentCulture, out var typeface))
+                    resolved = typeface.GlyphTypeface;
+            }
+            catch
+            {
+                // As in GlyphTypefaceFor: the run takes the FormattedText path instead.
+                resolved = null;
+            }
+
+            _fallbackGlyphTypefaces[(codePoint, style, weight)] = resolved;
             return resolved;
         }
 
