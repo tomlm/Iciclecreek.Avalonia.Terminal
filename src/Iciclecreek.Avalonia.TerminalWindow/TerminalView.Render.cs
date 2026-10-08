@@ -1189,9 +1189,11 @@ namespace Iciclecreek.Terminal
         /// are not pixel-identical to one picture except at integer scales, which is why macOS at
         /// 2.0 looked perfect while Windows at 1.25 showed seams. Drawing every row as the WHOLE
         /// picture's mapping clipped to the row makes the nine draws mathematically one draw.
-        /// The mapping is deliberately NOT snapped: it is a transform, not an edge, and snapping it
-        /// per row would hand each row a slightly different transform -- the disease again. The
-        /// CLIP (<paramref name="destination"/>) is what lands on device pixels.
+        /// The mapping is never snapped PER ROW: that would hand each row a slightly different
+        /// transform -- the disease again. What is snapped is the whole picture's edges, worked out
+        /// from the ideal row grid so every row gets the same ones; that is what lets two pictures
+        /// side by side meet without a hairline. The CLIP (<paramref name="destination"/>) lands on
+        /// device pixels too.
         /// </remarks>
         internal static bool TryPlanImageBlit(CachedTextRun run, double startYPos, double rowHeight,
                                               double charWidth, double charHeight, double scale,
@@ -1297,17 +1299,31 @@ namespace Iciclecreek.Terminal
                 ? placement.SrcHeight
                 : (clippedBottom - clippedTop) / drawnHeight * placement.SrcHeight;
 
-            // The shared whole-picture mapping, in pure ratios. rawLeft/rawTop are where THIS
-            // strip's source origin lands, so walking back by the source origin itself gives where
-            // image pixel (0,0) lands -- the same expression from every row, because rawTop moves
-            // by exactly one row as SrcY moves by exactly one row's worth of source.
+            // The shared whole-picture mapping. rawLeft is where THIS strip's source origin lands,
+            // so walking back by the source origin itself gives where image pixel (0,0) lands.
+            //
+            // Its EDGES are snapped, the same way the cell grid is. The clip lands on device
+            // pixels, and a picture edge that did not -- a whole-cell picture whose cells are 12.6
+            // device pixels wide ends at x.8 -- covered its last device column only partly; that
+            // column blended with the background, a hairline wherever two pictures meet, across a
+            // tiled picture at every tile boundary. An edge on a cell boundary now lands exactly
+            // where the clip does, both being Snap of the same position.
+            //
+            // The vertical position comes from the ideal row top rather than the snapped startYPos:
+            // startYPos is Snap(row * charHeight), whose rounding differs row to row, and the mapping
+            // must be the same from every row of the placement.
             var mapScaleX = charWidth / pxPerCellX;
             var mapScaleY = charHeight / pxPerCellY;
+            var idealRowTop = Math.Round(startYPos / charHeight) * charHeight;
+            var pictureLeft = rawLeft - placement.SrcX * mapScaleX;
+            var pictureTop = idealRowTop + offsetY - placement.SrcY * mapScaleY;
+            var snappedLeft = Snap(pictureLeft, scale);
+            var snappedTop = Snap(pictureTop, scale);
             unifiedDest = new Rect(
-                rawLeft - placement.SrcX * mapScaleX,
-                rawTop - placement.SrcY * mapScaleY,
-                run.Image.PixelWidth * mapScaleX,
-                run.Image.PixelHeight * mapScaleY);
+                snappedLeft,
+                snappedTop,
+                Snap(pictureLeft + run.Image.PixelWidth * mapScaleX, scale) - snappedLeft,
+                Snap(pictureTop + run.Image.PixelHeight * mapScaleY, scale) - snappedTop);
 
             var startX = Snap(clippedLeft, scale);
             var endX = Snap(clippedRight, scale);
