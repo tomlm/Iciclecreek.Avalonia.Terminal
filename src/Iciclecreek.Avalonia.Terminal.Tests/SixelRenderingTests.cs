@@ -622,6 +622,77 @@ public class SixelRenderingTests
         }
     }
 
+    /// <summary>
+    /// Two pictures side by side must meet exactly at a FRACTIONAL display scale.
+    /// </summary>
+    /// <remarks>
+    /// The clip is snapped to device pixels, and the picture's mapping was not: a picture four cells
+    /// wide at 10.1 x 1.25 ends at device pixel 50.5 while its clip runs on to 51. That last column was
+    /// half covered, blended with the background, and showed as a hairline between the two pictures --
+    /// at every tile boundary of a picture sent as tiles.
+    /// </remarks>
+    [AvaloniaTest]
+    public void Pictures_side_by_side_meet_exactly_at_a_fractional_scale()
+    {
+        const double charWidth = 10.1;
+        const double charHeight = 13.0;
+        const double scale = 1.25;
+        var rowHeight = Snap(charHeight, scale);
+
+        Assert.That(TerminalView.TryPlanImageBlit(Run(EvenImage(), 0, 4, 0, 0, 8, 3),
+            0, rowHeight, charWidth, charHeight, scale, out _, out var left, out var leftPicture), Is.True);
+        Assert.That(TerminalView.TryPlanImageBlit(Run(EvenImage(), 4, 4, 0, 0, 8, 3),
+            0, rowHeight, charWidth, charHeight, scale, out _, out var right, out var rightPicture), Is.True);
+
+        Assert.That(leftPicture.Right * scale, Is.EqualTo(left.Right * scale).Within(0.001),
+            "the left picture fills its clip to the last device pixel");
+        Assert.That(rightPicture.X * scale, Is.EqualTo(right.X * scale).Within(0.001),
+            "the right picture starts where its clip does");
+        Assert.That(rightPicture.X * scale, Is.EqualTo(leftPicture.Right * scale).Within(0.001),
+            "and the two meet");
+    }
+
+    /// <summary>
+    /// Two pictures one above the other must meet exactly at a FRACTIONAL display scale, and every
+    /// row of a picture must draw it through the same mapping.
+    /// </summary>
+    [AvaloniaTest]
+    public void Pictures_one_above_the_other_meet_exactly_at_a_fractional_scale()
+    {
+        const double charWidth = 10.0;
+        const double charHeight = 13.0;
+        const double scale = 1.25;
+
+        // the upper picture is two rows tall (rows 0 and 1), the lower one starts at row 2
+        Rect? upperMapping = null;
+        Rect upperLastRow = default;
+        for (var row = 0; row < 2; row++)
+        {
+            var startYPos = Snap(row * charHeight, scale);
+            var rowHeight = Snap((row + 1) * charHeight, scale) - startYPos;
+            Assert.That(TerminalView.TryPlanImageBlit(
+                Run(EvenImage(), 0, 4, 0, row * CellPixelHeight, 8, CellPixelHeight),
+                startYPos, rowHeight, charWidth, charHeight, scale,
+                out _, out upperLastRow, out var mapping), Is.True);
+
+            Assert.That(mapping, Is.EqualTo(upperMapping ?? mapping), $"row {row} draws through the same mapping");
+            upperMapping = mapping;
+        }
+
+        var lowerTop = Snap(2 * charHeight, scale);
+        Assert.That(TerminalView.TryPlanImageBlit(Run(EvenImage(), 0, 4, 0, 0, 8, CellPixelHeight),
+            lowerTop, Snap(3 * charHeight, scale) - lowerTop, charWidth, charHeight, scale,
+            out _, out var lowerFirstRow, out var lowerMapping), Is.True);
+
+        Assert.That(upperMapping!.Value.Bottom * scale, Is.EqualTo(upperLastRow.Bottom * scale).Within(0.001),
+            "the upper picture fills its last row to the last device pixel");
+        Assert.That(lowerMapping.Y * scale, Is.EqualTo(lowerFirstRow.Y * scale).Within(0.001),
+            "the lower picture starts where its first row does");
+    }
+
+    private static double Snap(double value, double scale) =>
+        Math.Round(value * scale, MidpointRounding.AwayFromZero) / scale;
+
     [AvaloniaTest]
     public void An_empty_run_is_refused()
     {
