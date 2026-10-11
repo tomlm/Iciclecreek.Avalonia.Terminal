@@ -9,7 +9,7 @@
 		WindowState="Maximized"
 		x:Class="Example.MainWindow"
 		Title="Example">
-	<term:TerminalControl x:Name="Terminal" FontSize="14" BufferSize="1000"
+	<term:TerminalControl FontSize="14" BufferSize="1000"
 						  Margin="10"
 						  UseSkiaRenderer="True" />
 </Window>
