@@ -354,6 +354,61 @@ public class MouseAndSelectionTests
         finally { window.Close(); }
     }
 
+    // ------------------------------------------------- XTSHIFTESCAPE (CSI > Ps s)
+
+    [AvaloniaTest]
+    public void Shift_click_is_the_hosts_while_the_application_has_the_mouse()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?1000h");
+            Dispatcher.UIThread.RunJobs();
+
+            Press(view, 40.0, 40.0, KeyModifiers.Shift);
+            Thread.Sleep(120);
+
+            Assert.That(pty.Written, Is.Empty, "Shift+click starts a selection; the application is not told");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Shift_click_goes_to_an_application_that_claimed_shift()
+    {
+        // A paint program constrains shapes with Shift+drag. Without XTSHIFTESCAPE it never saw the
+        // drag at all: the host turned it into a text selection over the canvas.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?1000h{Esc}[>1s");
+            Dispatcher.UIThread.RunJobs();
+
+            Press(view, 40.0, 40.0, KeyModifiers.Shift);
+
+            Assert.That(AwaitOutput(pty), Is.Not.Empty);
+            Assert.That(view.Terminal.Selection.HasSelection, Is.False);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Csi_gt_0_s_gives_shift_back_to_the_host()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?1000h{Esc}[>1s{Esc}[>0s");
+            Dispatcher.UIThread.RunJobs();
+
+            Press(view, 40.0, 40.0, KeyModifiers.Shift);
+            Thread.Sleep(120);
+
+            Assert.That(pty.Written, Is.Empty);
+        }
+        finally { window.Close(); }
+    }
+
     /// <summary>
     /// Waits until more than <paramref name="previous"/> bytes have been sent, then returns them.
     /// </summary>
@@ -389,13 +444,14 @@ public class MouseAndSelectionTests
         return h;
     }
 
-    private static void Press(TerminalView view, double x, double y)
+    private static void Press(TerminalView view, double x, double y,
+                              KeyModifiers modifiers = KeyModifiers.None)
     {
         var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
         var props = new PointerPointProperties(RawInputModifiers.LeftMouseButton,
                                                PointerUpdateKind.LeftButtonPressed);
         view.RaiseEvent(new PointerPressedEventArgs(view, pointer, view,
-            new global::Avalonia.Point(x, y), 0, props, KeyModifiers.None)
+            new global::Avalonia.Point(x, y), 0, props, modifiers)
         {
             RoutedEvent = InputElement.PointerPressedEvent,
         });

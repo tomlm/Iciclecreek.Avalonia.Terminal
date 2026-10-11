@@ -17,5 +17,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Iciclecreek.Avalonia.TerminalWindow\Iciclecreek.Avalonia.Terminal.csproj" />
+    <ProjectReference Include="..\MouseProbe\MouseProbe.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

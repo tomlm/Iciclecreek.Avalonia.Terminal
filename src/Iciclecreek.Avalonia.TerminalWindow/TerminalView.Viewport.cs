@@ -344,15 +344,16 @@ namespace Iciclecreek.Terminal
 
         /// <summary>
         /// Determines if the terminal should handle text selection vs forwarding mouse to app.
-        /// Selection is handled when: (1) app hasn't captured mouse, OR (2) Shift is held (override).
+        /// Selection is handled when: (1) app hasn't captured mouse, OR (2) Shift is held (override)
+        /// and the app has not claimed Shift for itself with XTSHIFTESCAPE (CSI &gt; 1 s).
         /// </summary>
         private bool ShouldHandleSelection(KeyModifiers modifiers)
         {
             bool appWantsMouse = _terminal.MouseTrackingMode != XT.Input.MouseTrackingMode.None;
-            bool shiftHeld = modifiers.HasFlag(KeyModifiers.Shift);
+            bool shiftOverride = modifiers.HasFlag(KeyModifiers.Shift) && !_terminal.ShiftEscape;
 
             // Handle selection if app doesn't want mouse, OR if Shift override is active
-            return !appWantsMouse || shiftHeld;
+            return !appWantsMouse || shiftOverride;
         }
 
         /// <summary>
