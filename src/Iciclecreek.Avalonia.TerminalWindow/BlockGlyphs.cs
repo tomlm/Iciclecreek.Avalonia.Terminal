@@ -37,8 +37,15 @@ namespace Iciclecreek.Terminal
         private static readonly Dictionary<int, Shape[]> Shapes = Build();
 
         /// <summary>Whether <paramref name="codePoint"/> is drawn by this table.</summary>
+        /// <remarks>
+        /// The box-drawing lines (U+2500..257F) are in the table except the arcs and diagonals, which
+        /// stay with the font. A line glyph from the font is drawn to the font's advance, not to the
+        /// cell's whole device pixels, so it reaches a pixel past its cell: a picture that later
+        /// replaces the cell is clipped to the cell and that pixel stays behind as a sliver.
+        /// </remarks>
         public static bool IsBlock(int codePoint)
-            => (codePoint >= 0x2580 && codePoint <= 0x259F) || (codePoint >= 0x1FB00 && codePoint <= 0x1FB8B);
+            => (codePoint >= 0x2580 && codePoint <= 0x259F) || (codePoint >= 0x1FB00 && codePoint <= 0x1FB8B)
+               || (codePoint >= 0x2500 && codePoint <= 0x257F && Shapes.ContainsKey(codePoint));
 
         /// <summary>The rectangles that make up <paramref name="codePoint"/>, if it is a block character.</summary>
         public static bool TryGet(int codePoint, out Shape[] shapes)
@@ -178,7 +185,198 @@ namespace Iciclecreek.Terminal
             for (var i = 0; i < upperEighths.Length; i++)                     // 🮇🮈🮉🮊🮋
                 map[0x1FB87 + i] = new[] { Columns(8 - upperEighths[i], 8) };
 
+            BoxDrawing(map);
             return map;
+        }
+
+        // Arm weights of a box-drawing glyph.
+        private const byte None = 0, Light = 1, Heavy = 2;
+
+        /// <summary>
+        /// U+2500..257F Box Drawing, as strokes along the cell's centre lines: light strokes 2 units
+        /// wide, heavy 6, double two light strokes 4 apart. An arm runs from its cell edge to the far
+        /// side of the centre stroke, so the arms of a joint overlap into one shape. The arcs
+        /// (U+256D..2570) and the diagonals (U+2571..2573) are left to the font.
+        /// </summary>
+        /// <remarks>
+        /// At small cells a stroke is thinner than a device pixel; the renderers give a stroke that
+        /// snaps to nothing one pixel, so a line is never lost and a double stays two lines with a gap.
+        /// </remarks>
+        private static void BoxDrawing(Dictionary<int, Shape[]> map)
+        {
+            // Horizontal and vertical strokes between two coordinates along the other axis.
+            static Shape H(int y0, int y1, int x0, int x1) => new((byte)x0, (byte)y0, (byte)x1, (byte)y1);
+            static Shape V(int x0, int x1, int y0, int y1) => new((byte)x0, (byte)y0, (byte)x1, (byte)y1);
+
+            // A glyph from its four arms (left, right, up, down), each none, light or heavy.
+            static Shape[] Arms(byte left, byte right, byte up, byte down)
+            {
+                var shapes = new List<Shape>(4);
+                static (int Near, int Far) Stroke(byte weight) => weight == Heavy ? (9, 15) : (11, 13);
+                if (left != None) { var (n, f) = Stroke(left); shapes.Add(H(n, f, 0, f)); }
+                if (right != None) { var (n, f) = Stroke(right); shapes.Add(H(n, f, n, Units)); }
+                if (up != None) { var (n, f) = Stroke(up); shapes.Add(V(n, f, 0, f)); }
+                if (down != None) { var (n, f) = Stroke(down); shapes.Add(V(n, f, n, Units)); }
+                return shapes.ToArray();
+            }
+
+            // U+2500..254B in Unicode order: every light/heavy combination of the four arms.
+            (byte L, byte R, byte U, byte D)[] arms =
+            {
+                (Light, Light, None, None),   // ─ 2500
+                (Heavy, Heavy, None, None),   // ━
+                (None, None, Light, Light),   // │
+                (None, None, Heavy, Heavy),   // ┃
+                default, default, default, default, default, default, default, default, // dashes, below
+                (None, Light, None, Light),   // ┌ 250C
+                (None, Heavy, None, Light),   // ┍
+                (None, Light, None, Heavy),   // ┎
+                (None, Heavy, None, Heavy),   // ┏
+                (Light, None, None, Light),   // ┐
+                (Heavy, None, None, Light),   // ┑
+                (Light, None, None, Heavy),   // ┒
+                (Heavy, None, None, Heavy),   // ┓
+                (None, Light, Light, None),   // └
+                (None, Heavy, Light, None),   // ┕
+                (None, Light, Heavy, None),   // ┖
+                (None, Heavy, Heavy, None),   // ┗
+                (Light, None, Light, None),   // ┘
+                (Heavy, None, Light, None),   // ┙
+                (Light, None, Heavy, None),   // ┚
+                (Heavy, None, Heavy, None),   // ┛
+                (None, Light, Light, Light),  // ├ 251C
+                (None, Heavy, Light, Light),  // ┝
+                (None, Light, Heavy, Light),  // ┞
+                (None, Light, Light, Heavy),  // ┟
+                (None, Light, Heavy, Heavy),  // ┠
+                (None, Heavy, Heavy, Light),  // ┡
+                (None, Heavy, Light, Heavy),  // ┢
+                (None, Heavy, Heavy, Heavy),  // ┣
+                (Light, None, Light, Light),  // ┤ 2524
+                (Heavy, None, Light, Light),  // ┥
+                (Light, None, Heavy, Light),  // ┦
+                (Light, None, Light, Heavy),  // ┧
+                (Light, None, Heavy, Heavy),  // ┨
+                (Heavy, None, Heavy, Light),  // ┩
+                (Heavy, None, Light, Heavy),  // ┪
+                (Heavy, None, Heavy, Heavy),  // ┫
+                (Light, Light, None, Light),  // ┬ 252C
+                (Heavy, Light, None, Light),  // ┭
+                (Light, Heavy, None, Light),  // ┮
+                (Heavy, Heavy, None, Light),  // ┯
+                (Light, Light, None, Heavy),  // ┰
+                (Heavy, Light, None, Heavy),  // ┱
+                (Light, Heavy, None, Heavy),  // ┲
+                (Heavy, Heavy, None, Heavy),  // ┳
+                (Light, Light, Light, None),  // ┴ 2534
+                (Heavy, Light, Light, None),  // ┵
+                (Light, Heavy, Light, None),  // ┶
+                (Heavy, Heavy, Light, None),  // ┷
+                (Light, Light, Heavy, None),  // ┸
+                (Heavy, Light, Heavy, None),  // ┹
+                (Light, Heavy, Heavy, None),  // ┺
+                (Heavy, Heavy, Heavy, None),  // ┻
+                (Light, Light, Light, Light), // ┼ 253C
+                (Heavy, Light, Light, Light), // ┽
+                (Light, Heavy, Light, Light), // ┾
+                (Heavy, Heavy, Light, Light), // ┿
+                (Light, Light, Heavy, Light), // ╀
+                (Light, Light, Light, Heavy), // ╁
+                (Light, Light, Heavy, Heavy), // ╂
+                (Heavy, Light, Heavy, Light), // ╃
+                (Light, Heavy, Heavy, Light), // ╄
+                (Heavy, Light, Light, Heavy), // ╅
+                (Light, Heavy, Light, Heavy), // ╆
+                (Heavy, Heavy, Heavy, Light), // ╇
+                (Heavy, Heavy, Light, Heavy), // ╈
+                (Heavy, Light, Heavy, Heavy), // ╉
+                (Light, Heavy, Heavy, Heavy), // ╊
+                (Heavy, Heavy, Heavy, Heavy), // ╋ 254B
+            };
+            for (var i = 0; i < arms.Length; i++)
+            {
+                var (l, r, u, d) = arms[i];
+                if (l != None || r != None || u != None || d != None)
+                    map[0x2500 + i] = Arms(l, r, u, d);
+            }
+
+            // Dashed lines: the stroke cut into equal dashes with gaps between them.
+            static Shape[] Dashes(bool horizontal, byte weight, int count)
+            {
+                var (n, f) = weight == Heavy ? (9, 15) : (11, 13);
+                var period = Units / count;
+                var gap = count == 2 ? 4 : 2;
+                var shapes = new Shape[count];
+                for (var i = 0; i < count; i++)
+                {
+                    var from = i * period + (i == 0 ? 0 : gap / 2);
+                    var to = (i + 1) * period - (i == count - 1 ? 0 : gap - gap / 2);
+                    shapes[i] = horizontal ? H(n, f, from, to) : V(n, f, from, to);
+                }
+                return shapes;
+            }
+            map[0x2504] = Dashes(true, Light, 3);   // ┄
+            map[0x2505] = Dashes(true, Heavy, 3);   // ┅
+            map[0x2506] = Dashes(false, Light, 3);  // ┆
+            map[0x2507] = Dashes(false, Heavy, 3);  // ┇
+            map[0x2508] = Dashes(true, Light, 4);   // ┈
+            map[0x2509] = Dashes(true, Heavy, 4);   // ┉
+            map[0x250A] = Dashes(false, Light, 4);  // ┊
+            map[0x250B] = Dashes(false, Heavy, 4);  // ┋
+            map[0x254C] = Dashes(true, Light, 2);   // ╌
+            map[0x254D] = Dashes(true, Heavy, 2);   // ╍
+            map[0x254E] = Dashes(false, Light, 2);  // ╎
+            map[0x254F] = Dashes(false, Heavy, 2);  // ╏
+
+            // Double lines, U+2550..256C: the two strokes at 8..10 and 14..16. At a joint the outer
+            // stroke of each arm runs through and the inner one stops at the gap, as the glyphs do.
+            map[0x2550] = new[] { H(8, 10, 0, 24), H(14, 16, 0, 24) };                                     // ═
+            map[0x2551] = new[] { V(8, 10, 0, 24), V(14, 16, 0, 24) };                                     // ║
+            map[0x2552] = new[] { V(11, 13, 8, 24), H(8, 10, 11, 24), H(14, 16, 11, 24) };                 // ╒
+            map[0x2553] = new[] { V(8, 10, 11, 24), V(14, 16, 11, 24), H(11, 13, 8, 24) };                 // ╓
+            map[0x2554] = new[] { V(8, 10, 8, 24), V(14, 16, 14, 24), H(8, 10, 8, 24), H(14, 16, 14, 24) }; // ╔
+            map[0x2555] = new[] { V(11, 13, 8, 24), H(8, 10, 0, 13), H(14, 16, 0, 13) };                   // ╕
+            map[0x2556] = new[] { V(8, 10, 11, 24), V(14, 16, 11, 24), H(11, 13, 0, 16) };                 // ╖
+            map[0x2557] = new[] { V(14, 16, 8, 24), V(8, 10, 14, 24), H(8, 10, 0, 16), H(14, 16, 0, 10) }; // ╗
+            map[0x2558] = new[] { V(11, 13, 0, 16), H(8, 10, 11, 24), H(14, 16, 11, 24) };                 // ╘
+            map[0x2559] = new[] { V(8, 10, 0, 13), V(14, 16, 0, 13), H(11, 13, 8, 24) };                   // ╙
+            map[0x255A] = new[] { V(8, 10, 0, 16), V(14, 16, 0, 10), H(14, 16, 8, 24), H(8, 10, 14, 24) }; // ╚
+            map[0x255B] = new[] { V(11, 13, 0, 16), H(8, 10, 0, 13), H(14, 16, 0, 13) };                   // ╛
+            map[0x255C] = new[] { V(8, 10, 0, 13), V(14, 16, 0, 13), H(11, 13, 0, 16) };                   // ╜
+            map[0x255D] = new[] { V(14, 16, 0, 16), V(8, 10, 0, 10), H(14, 16, 0, 16), H(8, 10, 0, 10) }; // ╝
+            map[0x255E] = new[] { V(11, 13, 0, 24), H(8, 10, 11, 24), H(14, 16, 11, 24) };                 // ╞
+            map[0x255F] = new[] { V(8, 10, 0, 24), V(14, 16, 0, 24), H(11, 13, 14, 24) };                  // ╟
+            map[0x2560] = new[] { V(8, 10, 0, 24), V(14, 16, 0, 10), V(14, 16, 14, 24), H(8, 10, 14, 24), H(14, 16, 14, 24) }; // ╠
+            map[0x2561] = new[] { V(11, 13, 0, 24), H(8, 10, 0, 13), H(14, 16, 0, 13) };                   // ╡
+            map[0x2562] = new[] { V(8, 10, 0, 24), V(14, 16, 0, 24), H(11, 13, 0, 10) };                   // ╢
+            map[0x2563] = new[] { V(14, 16, 0, 24), V(8, 10, 0, 10), V(8, 10, 14, 24), H(8, 10, 0, 10), H(14, 16, 0, 10) }; // ╣
+            map[0x2564] = new[] { H(8, 10, 0, 24), H(14, 16, 0, 24), V(11, 13, 14, 24) };                  // ╤
+            map[0x2565] = new[] { H(11, 13, 0, 24), V(8, 10, 11, 24), V(14, 16, 11, 24) };                 // ╥
+            map[0x2566] = new[] { H(8, 10, 0, 24), H(14, 16, 0, 10), H(14, 16, 14, 24), V(8, 10, 14, 24), V(14, 16, 14, 24) }; // ╦
+            map[0x2567] = new[] { H(8, 10, 0, 24), H(14, 16, 0, 24), V(11, 13, 0, 10) };                   // ╧
+            map[0x2568] = new[] { H(11, 13, 0, 24), V(8, 10, 0, 13), V(14, 16, 0, 13) };                   // ╨
+            map[0x2569] = new[] { H(14, 16, 0, 24), H(8, 10, 0, 10), H(8, 10, 14, 24), V(8, 10, 0, 10), V(14, 16, 0, 10) }; // ╩
+            map[0x256A] = new[] { V(11, 13, 0, 24), H(8, 10, 0, 24), H(14, 16, 0, 24) };                   // ╪
+            map[0x256B] = new[] { H(11, 13, 0, 24), V(8, 10, 0, 24), V(14, 16, 0, 24) };                   // ╫
+            map[0x256C] = new[]                                                                            // ╬
+            {
+                V(8, 10, 0, 10), V(8, 10, 14, 24), V(14, 16, 0, 10), V(14, 16, 14, 24),
+                H(8, 10, 0, 10), H(8, 10, 14, 24), H(14, 16, 0, 10), H(14, 16, 14, 24),
+            };
+
+            // Half lines, U+2574..257F: one arm to the centre, and the two-weight pairs.
+            map[0x2574] = new[] { H(11, 13, 0, 12) };                   // ╴
+            map[0x2575] = new[] { V(11, 13, 0, 12) };                   // ╵
+            map[0x2576] = new[] { H(11, 13, 12, 24) };                  // ╶
+            map[0x2577] = new[] { V(11, 13, 12, 24) };                  // ╷
+            map[0x2578] = new[] { H(9, 15, 0, 12) };                    // ╸
+            map[0x2579] = new[] { V(9, 15, 0, 12) };                    // ╹
+            map[0x257A] = new[] { H(9, 15, 12, 24) };                   // ╺
+            map[0x257B] = new[] { V(9, 15, 12, 24) };                   // ╻
+            map[0x257C] = new[] { H(11, 13, 0, 12), H(9, 15, 12, 24) }; // ╼
+            map[0x257D] = new[] { V(11, 13, 0, 12), V(9, 15, 12, 24) }; // ╽
+            map[0x257E] = new[] { H(9, 15, 0, 12), H(11, 13, 12, 24) }; // ╾
+            map[0x257F] = new[] { V(9, 15, 0, 12), V(11, 13, 12, 24) }; // ╿
         }
 
         /// <summary>A shape per set bit of a grid, bits numbered left to right then top to bottom.</summary>

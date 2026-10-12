@@ -697,6 +697,11 @@ namespace Iciclecreek.Terminal
                     var right = Snap((col + shape.X1 / (double)BlockGlyphs.Units) * _charWidth, scale);
                     var top = Snap(startYPos + shape.Y0 * rowHeight / BlockGlyphs.Units, scale);
                     var bottom = Snap(startYPos + shape.Y1 * rowHeight / BlockGlyphs.Units, scale);
+
+                    // A stroke thinner than a device pixel (a box-drawing line in a small cell) can
+                    // snap both edges to the same pixel; it gets that pixel rather than vanishing.
+                    if (right <= left && shape.X1 > shape.X0) right = left + 1 / scale;
+                    if (bottom <= top && shape.Y1 > shape.Y0) bottom = top + 1 / scale;
                     if (right <= left || bottom <= top)
                         continue;
 

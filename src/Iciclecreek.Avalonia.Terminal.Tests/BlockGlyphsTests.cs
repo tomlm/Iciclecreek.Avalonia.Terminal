@@ -142,9 +142,53 @@ public class BlockGlyphsTests
     public void Ordinary_characters_are_not_blocks()
     {
         Assert.That(BlockGlyphs.IsBlock('A'), Is.False);
-        Assert.That(BlockGlyphs.IsBlock(0x2500), Is.False, "box drawing lines are still drawn from the font");
+        Assert.That(BlockGlyphs.IsBlock(0x256D), Is.False, "the arcs are still drawn from the font");
+        Assert.That(BlockGlyphs.IsBlock(0x2571), Is.False, "and so are the diagonals");
         Assert.That(BlockGlyphs.IsBlock(0x1FB8C), Is.False, "the shaded halves after the eighths are not covered");
         Assert.That(BlockGlyphs.TryGet('A', out _), Is.False);
+    }
+
+    /// <summary>
+    /// Box-drawing lines are drawn from the table: a line glyph from the font reaches a pixel past
+    /// its cell, and a picture replacing the cell is clipped to the cell, which left that pixel as a
+    /// sliver wherever a dialog's border had been.
+    /// </summary>
+    [Test]
+    public void Box_drawing_lines_are_strokes_along_the_centre_lines()
+    {
+        for (var cp = 0x2500; cp <= 0x257F; cp++)
+        {
+            var fromFont = cp is >= 0x256D and <= 0x2573;
+            Assert.That(BlockGlyphs.IsBlock(cp), Is.EqualTo(!fromFont), $"U+{cp:X4}");
+            if (!fromFont)
+                Assert.That(BlockGlyphs.TryGet(cp, out var shapes) && shapes.Length > 0, Is.True, $"U+{cp:X4}");
+        }
+
+        Assert.That(BlockGlyphs.TryGet(0x2500, out var horizontal), Is.True);              // ─
+        Assert.That(horizontal, Is.EquivalentTo(new[]
+        {
+            new BlockGlyphs.Shape(0, 11, 13, 13), new BlockGlyphs.Shape(11, 11, 24, 13),
+        }), "two light arms meeting at the centre, edge to edge");
+
+        Assert.That(BlockGlyphs.TryGet(0x250F, out var heavyCorner), Is.True);             // ┏
+        Assert.That(heavyCorner, Is.EquivalentTo(new[]
+        {
+            new BlockGlyphs.Shape(9, 9, 24, 15), new BlockGlyphs.Shape(9, 9, 15, 24),
+        }), "heavy arms six units wide, overlapping at the corner");
+
+        Assert.That(BlockGlyphs.TryGet(0x2551, out var doubleVertical), Is.True);          // ║
+        Assert.That(doubleVertical.Select(s => (s.X0, s.X1)), Is.EquivalentTo(new[] { (8, 10), (14, 16) }),
+            "two light strokes four units apart");
+
+        Assert.That(BlockGlyphs.TryGet(0x256C, out var doubleCross), Is.True);             // ╬
+        Assert.That(doubleCross, Has.Length.EqualTo(8), "every arm's two strokes stop at the gap");
+        Assert.That(doubleCross.All(s => s.X1 <= 10 || s.X0 >= 14 || s.Y1 <= 10 || s.Y0 >= 14), Is.True,
+            "nothing is drawn in the centre gap");
+
+        Assert.That(BlockGlyphs.TryGet(0x2504, out var dashes), Is.True);                  // ┄
+        Assert.That(dashes, Has.Length.EqualTo(3));
+        Assert.That(dashes[0].X0, Is.Zero);
+        Assert.That(dashes[2].X1, Is.EqualTo(24), "the dashes reach the cell edges so lines continue across cells");
     }
 
     // ------------------------------------------------------------- the run split
