@@ -9,8 +9,7 @@ using System.Runtime.CompilerServices;
 // which needs the switch that chooses between them.
 [assembly: InternalsVisibleTo("Terminal.RenderBench")]
 
-// The profiling benchmark suite drives TerminalSkiaLayer.Draw directly against a synthetic
-// snapshot, which needs the same internal surface the render bench above uses.
+// The profiling benchmark suite, which needs the same internal surface the render bench above uses.
 [assembly: InternalsVisibleTo("BenchmarkSuite1")]
 
 // The Example's status bar shows the read loop's throughput counters (OutputCounters).

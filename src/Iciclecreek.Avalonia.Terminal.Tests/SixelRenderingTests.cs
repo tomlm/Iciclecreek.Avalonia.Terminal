@@ -378,6 +378,29 @@ public class SixelRenderingTests
     }
 
     /// <summary>
+    /// A Kitty placement's rows are drawn as one draw clipped to one rectangle when they stack into
+    /// one -- which they nearly always do -- and row by row when they do not. A path clip across
+    /// separate rectangles cost the GPU far more than the draws it saved.
+    /// </summary>
+    [Test]
+    public void A_placements_rows_merge_into_one_clip_only_when_they_stack()
+    {
+        var stacked = new List<Rect> { new(10, 20, 30, 10), new(10, 0, 30, 10), new(10, 10, 30, 10) };
+        Assert.That(TerminalView.OneRectangle(stacked, out var union), Is.True, "three rows, given out of order");
+        Assert.That(union, Is.EqualTo(new Rect(10, 0, 30, 30)));
+
+        var gap = new List<Rect> { new(10, 0, 30, 10), new(10, 20, 30, 10) };
+        Assert.That(TerminalView.OneRectangle(gap, out _), Is.False, "a row missing between them");
+
+        var ragged = new List<Rect> { new(10, 0, 30, 10), new(12, 10, 28, 10) };
+        Assert.That(TerminalView.OneRectangle(ragged, out _), Is.False, "rows with different edges");
+
+        var single = new List<Rect> { new(1, 2, 3, 4) };
+        Assert.That(TerminalView.OneRectangle(single, out union), Is.True);
+        Assert.That(union, Is.EqualTo(new Rect(1, 2, 3, 4)));
+    }
+
+    /// <summary>
     /// The platform under test cannot draw bitmaps at all, which is the position Consolonia is in too. The
     /// terminal has to keep rendering its text regardless.
     /// </summary>

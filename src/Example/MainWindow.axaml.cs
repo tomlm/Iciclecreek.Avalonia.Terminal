@@ -63,8 +63,6 @@ namespace Example
             TermControl.FontSize = Math.Clamp(size, 4, 72);
         }
 
-        private void OnSkiaClick(object? sender, RoutedEventArgs e) => TermControl.UseSkiaRenderer = SkiaItem.IsChecked;
-
         private void OnGraphClick(object? sender, RoutedEventArgs e)
         {
             RendererDiagnostics.DebugOverlays = GraphItem.IsChecked
@@ -163,8 +161,7 @@ namespace Example
         private string Describe()
         {
             var grid = TermControl.Terminal is { } t ? $"{t.Cols}x{t.Rows} cells, " : "";
-            var renderer = (TermControl.UseSkiaRenderer ? "Skia" : "classic") +
-                           (Program.SoftwareRendering ? " software" : "");
+            var renderer = Program.SoftwareRendering ? "software" : "GPU";
             return $"{renderer}, {CountImages()}{grid}{(int)(TermControl.Bounds.Width * RenderScaling)}x{(int)(TermControl.Bounds.Height * RenderScaling)} px";
         }
 

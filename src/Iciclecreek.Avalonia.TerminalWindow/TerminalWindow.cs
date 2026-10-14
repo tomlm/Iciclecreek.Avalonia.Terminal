@@ -114,7 +114,7 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
-                nameof(UseSkiaRenderer),
+                "UseSkiaRenderer",
                 defaultValue: false);
 
         public static readonly StyledProperty<Color> CursorColorProperty =
@@ -493,6 +493,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        [Obsolete("Has no effect. Text is drawn by the classic path and pictures by a Skia picture layer wherever Skia is available.")]
         public bool UseSkiaRenderer
         {
             get => GetValue(UseSkiaRendererProperty);
@@ -751,7 +752,6 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
             _terminalControl.Bind(TerminalControl.ConvertEolProperty, this.GetObservable(ConvertEolProperty));
             _terminalControl.Bind(TerminalControl.AllowWindowOpsProperty, this.GetObservable(AllowWindowOpsProperty));
-            _terminalControl.Bind(TerminalControl.UseSkiaRendererProperty, this.GetObservable(UseSkiaRendererProperty));
             _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkProperty, this.GetObservable(CursorBlinkProperty));
             _terminalControl.Bind(TerminalControl.CursorBlinkRateProperty, this.GetObservable(CursorBlinkRateProperty));

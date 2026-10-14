@@ -119,7 +119,6 @@ public partial class MainWindow : Window
         var terminal = new TerminalControl
         {
             Ligatures = true,
-            UseSkiaRenderer = true,
             Background = Avalonia.Media.Brushes.Black,
             Foreground = Avalonia.Media.Brushes.LightGray,
         };
@@ -146,7 +145,7 @@ public partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = "Avalonia controls over UseSkiaRenderer.\nThe grid below is the Skia layer;\nthis panel is retained-mode, translucent,\nand the button is live.",
+                        Text = "Avalonia controls over the terminal.\nThis panel is retained-mode, translucent,\nand the button is live.",
                         Foreground = Avalonia.Media.Brushes.White,
                     },
                     button,

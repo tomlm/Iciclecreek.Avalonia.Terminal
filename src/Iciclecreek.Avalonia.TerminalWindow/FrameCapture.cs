@@ -11,8 +11,8 @@ namespace Iciclecreek.Terminal
     /// </summary>
     /// <remarks>
     /// <para>This exists because the renderer walks the live buffer while the reader thread writes
-    /// into it. Every row is individually protected — the stamp-and-retry in CollectLineRuns and
-    /// SnapshotBuilder sees to that — but rows are read independently, so a painted screen can hold
+    /// into it. Every row is individually protected — the stamp-and-retry in CollectLineRuns sees to that —
+    /// but rows are read independently, so a painted screen can hold
     /// row 1 from one frame and row 40 from another. That mixture is the tear: proven with a probe
     /// that labelled every row with its frame, clean under synchronised output only while frames
     /// were small enough to land between two paints, torn as soon as they were not.</para>

@@ -26,6 +26,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using XTerm.Buffer;
 using XTerm.Events;
+using SkiaSharp;
 using XT = global::XTerm;
 
 namespace Iciclecreek.Terminal
@@ -375,62 +376,14 @@ namespace Iciclecreek.Terminal
                 startLine, _terminal.Cols, viewportLines,
                 Interlocked.Read(ref _liveWriteGeneration), _atomicUpdate, _bufferWriteInProgress);
 
-            // The direct renderer draws the cell grid onto the Skia canvas instead of recording a fill
-            // and a text draw per run. Everything after it — cursor, selection, the hovered link —
-            // still goes through DrawingContext and lands on top, because Custom() enqueues into the
-            // same list.
-            //
-            // The snapshot is taken HERE, on the UI thread. The operation runs during compositing, on
-            // another thread, while the pty read loop may be writing to the buffer; it must never
-            // touch the buffer or the palette itself.
-            // Null unless the direct path both applies and can run; the row loop below consults it
-            // to draw exactly the rows the snapshot declined.
-            Skia.TerminalSnapshot? skiaSnapshot = null;
-
-            // A custom draw operation only draws where Avalonia is on its Skia backend, and there
-            // is no way to ask before enqueuing one -- so the layer reports afterwards and this
-            // reads the report BEFORE deciding, on the frame after the one that failed. Asking
-            // inside the else of the decision (as this first did) never runs: on any frame where
-            // the direct path applies, the if branch is taken and the report is never read, so a
-            // non-Skia backend stayed silently blank forever instead of falling back once.
-            if (_lastSkiaLayer is { Unsupported: true })
+            // The picture layer reports afterwards that the backend would not lease a Skia canvas,
+            // because there is no way to ask before enqueuing it. Read here, before this frame
+            // decides, and from then on pictures go through DrawImage.
+            if (_lastPictureLayer is { Unsupported: true })
             {
-                _skiaUnsupported = true;
-                _lastSkiaLayer = null;
-            }
-
-            // INSIDE a try of its own: this reads the live buffer without the lock, exactly as the
-            // classic loop does, and the classic loop's own catch is what keeps a concurrent write
-            // from turning a race into an unhandled exception out of Render. Building outside that
-            // protection gave the two paths different failure modes for the same race.
-            try
-            {
-            if (UseSkiaRenderer && !_skiaUnsupported && _charWidth > 0 && _charHeight > 0)
-            {
-                var snapshot = _snapshotBuilder.Build(
-                    _terminal, _palette, startLine, viewportLines, _terminal.Cols,
-                    _charWidth, _charHeight, FontSize, _fontFamilyChain,
-                    GetValue(ForegroundProperty), surface, RequestPaint, Ligatures,
-                    _terminal.ReverseVideo, _cursorBlinkOn, _boldIsBright, _minimumContrast,
-                    capturedFrame);
-
-                snapshot.RenderScale = scale;
-
-                var layer = new Skia.TerminalSkiaLayer(snapshot, _skiaFonts,
-                    new Rect(0, 0, _terminal.Cols * _charWidth, viewportLines * _charHeight),
-                    _snapshotBuilder, RequestPaint);
-                context.Custom(layer);
-
-                skiaSnapshot = snapshot;
-                _lastSkiaLayer = layer;
-            }
-            }
-            catch (Exception ex)
-            {
-                // A write landed mid-read. Draw this frame classically rather than losing it, and
-                // let the write that interrupted us ask for the next one.
-                Debug.WriteLine($"[TerminalView] Skia snapshot skipped: {ex.Message}");
-                skiaSnapshot = null;
+                _picturesUnsupported = true;
+                _lastPictureLayer = null;
+                RequestPaint();
             }
 
             try
@@ -474,12 +427,6 @@ namespace Iciclecreek.Terminal
 
                 for (int y = startLine; y < endLine; y++)
                 {
-                    // With the direct path running, this loop draws only what the snapshot declined:
-                    // a doubled row, or one carrying OSC 66 sized runs. Both need what the snapshot
-                    // has no field for, and drawing them wrong is worse than not drawing them fast.
-                    if (skiaSnapshot is not null && !skiaSnapshot.IsDeferred(y - startLine))
-                        continue;
-
                     // The buffer can SHRINK underneath a render. CSI 3 J — what cmd.exe's `cls` sends —
                     // discards the entire scrollback, and it arrives on the PTY thread, so the bounds
                     // captured above can point past the end by the time we reach this line.
@@ -596,6 +543,9 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void RenderFrontImages(DrawingContext context, double scale)
         {
+            if (TryRenderFrontPicturesOnSkia(context, scale))
+                return;
+
             foreach (var draw in _frontImageDraws)
             {
                 var run = draw.Run;
@@ -613,6 +563,154 @@ namespace Iciclecreek.Terminal
                     DrawImageRun(context, run, draw.StartYPos, draw.RowHeight, scale);
             }
         }
+
+        /// <summary>One Kitty placement's rows this frame: the picture, its mapping, and the rows it shows.</summary>
+        private sealed class PictureGroup
+        {
+            public required XT.Graphics.TerminalImage Image;
+            public Rect Mapping;
+            public int ZIndex;
+            public int Serial;
+            public readonly List<Rect> Clips = new();
+        }
+
+        /// <summary>
+        /// The pictures in front of the text, drawn from GPU textures by one <see cref="Skia.PictureLayer"/>:
+        /// every row's Sixel strip, then the Kitty pictures, each placement once. False when the
+        /// backend has no Skia canvas, and the caller draws them through DrawImage instead.
+        /// </summary>
+        /// <remarks>
+        /// <para>Planned here, on the UI thread, from the same runs and the same TryPlanImageBlit the
+        /// DrawImage path uses, so the pixels are the same ones; the layer only draws.</para>
+        /// <para>Strips first: a row draws its strip before the Kitty pictures in front of it, and rows
+        /// never overlap, so all the strips may go first. Then each Kitty placement as ONE draw --
+        /// clipped to its rows, which nearly always form a single rectangle -- back to front by z and
+        /// then by placement serial. A row draws its pictures in z order and, within one z, in the
+        /// order they were placed, and serials are taken in placement order and kept by a split, so
+        /// (z, serial) is every row's own order at once: an older picture still showing under a
+        /// newer one on some row cannot end up drawn over it. Rows that do not form one rectangle are
+        /// drawn one draw per row; a path clip costs the GPU far more than the draws it saves.</para>
+        /// <para>A background fill under a picture in front of the text never happens -- such a run has
+        /// none -- but one is still drawn first, as the DrawImage path would.</para>
+        /// </remarks>
+        private bool TryRenderFrontPicturesOnSkia(DrawingContext context, double scale)
+        {
+            if (_picturesUnsupported)
+                return false;
+
+            var frame = ++_pictureFrame;
+            var draws = new List<Skia.PictureDraw>();
+            var groups = new Dictionary<(int Serial, XT.Graphics.TerminalImage Image, Rect Mapping), PictureGroup>();
+            var order = new List<PictureGroup>();
+
+            foreach (var draw in _frontImageDraws)
+            {
+                var run = draw.Run;
+                if (run.Background is not null)
+                {
+                    var startX = Snap(run.StartX * _charWidth, scale);
+                    var endX = Snap((run.StartX + run.CellCount) * _charWidth, scale);
+                    context.FillRectangle(run.Background,
+                        new Rect(startX, draw.StartYPos, Math.Max(0, endX - startX), draw.RowHeight));
+                }
+
+                if (run.IsStrip)
+                {
+                    var strip = run.Strip!;
+                    if (_pictures.GetStrip(strip, frame) is not { } upload)
+                        continue;
+
+                    var right = Snap(run.CellCount * _charWidth, scale);
+                    draws.Add(new Skia.PictureDraw(upload.AddRef(),
+                        new SKRect(0, 0, run.CellCount * strip.CellWidth, strip.CellHeight),
+                        new SKRect(0, (float)draw.StartYPos, (float)right, (float)(draw.StartYPos + draw.RowHeight)),
+                        null));
+                    continue;
+                }
+
+                if (!run.IsImage || run.Placement is not { } placement)
+                    continue;
+
+                if (!TryPlanImageBlit(run, draw.StartYPos, draw.RowHeight, _charWidth, _charHeight, scale,
+                                      out _, out var destination, out var mapping))
+                    continue;
+
+                var key = (placement.Serial, run.Image!, mapping);
+                if (!groups.TryGetValue(key, out var group))
+                {
+                    group = new PictureGroup
+                    {
+                        Image = run.Image!,
+                        Mapping = mapping,
+                        ZIndex = placement.ZIndex,
+                        Serial = placement.Serial,
+                    };
+                    groups[key] = group;
+                    order.Add(group);
+                }
+
+                group.Clips.Add(destination);
+            }
+
+            // Stable on ties -- one placement whose rows planned different mappings -- which are rows of
+            // one picture and never overlap.
+            order.Sort((a, b) => a.ZIndex != b.ZIndex ? a.ZIndex.CompareTo(b.ZIndex) : a.Serial.CompareTo(b.Serial));
+
+            foreach (var group in order)
+            {
+                if (_pictures.Get(group.Image, frame) is not { } upload)
+                    continue;
+
+                var source = new SKRect(0, 0, group.Image.PixelWidth, group.Image.PixelHeight);
+                var mapping = ToSK(group.Mapping);
+
+                if (OneRectangle(group.Clips, out var union))
+                {
+                    draws.Add(new Skia.PictureDraw(upload.AddRef(), source, mapping, ToSK(union)));
+                }
+                else
+                {
+                    foreach (var clip in group.Clips)
+                        draws.Add(new Skia.PictureDraw(upload.AddRef(), source, mapping, ToSK(clip)));
+                }
+            }
+
+            // Whatever this frame does not show is let go; the frame holds what it draws.
+            _pictures.Sweep(frame);
+
+            if (draws.Count == 0)
+                return true;
+
+            var layer = new Skia.PictureLayer(draws, new Rect(Bounds.Size));
+            context.Custom(layer);
+            _lastPictureLayer = layer;
+            return true;
+        }
+
+        /// <summary>Whether a placement's row rectangles stack into one rectangle, and that rectangle.</summary>
+        internal static bool OneRectangle(List<Rect> rects, out Rect union)
+        {
+            union = rects[0];
+            if (rects.Count == 1)
+                return true;
+
+            rects.Sort((a, b) => a.Top.CompareTo(b.Top));
+            for (var i = 1; i < rects.Count; i++)
+            {
+                var previous = rects[i - 1];
+                var next = rects[i];
+                // Snapped edges, so an exact comparison is the right one: rows of one placement share
+                // their left and right edges and meet on the same device pixel.
+                if (next.Left != previous.Left || next.Right != previous.Right || next.Top != previous.Bottom)
+                    return false;
+            }
+
+            union = new Rect(rects[0].Left, rects[0].Top, rects[0].Width, rects[^1].Bottom - rects[0].Top);
+            return true;
+        }
+
+        private static SKRect ToSK(Rect rect) =>
+            new((float)rect.X, (float)rect.Y, (float)rect.Right, (float)rect.Bottom);
 
         /// <summary>
         /// Draws a line's Sixel pixels: one bitmap across the row, the strip's cells mapped onto the
@@ -1529,6 +1627,8 @@ namespace Iciclecreek.Terminal
             }
 
             _stripBitmaps.Clear();
+
+            _pictures.Clear();
         }
 
         /// <summary>

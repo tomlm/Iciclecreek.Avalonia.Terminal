@@ -185,6 +185,18 @@ namespace Iciclecreek.Terminal.Skia
             return uploaded;
         }
 
+        /// <summary>Lets go of everything: the view is finished with it.</summary>
+        public void Clear()
+        {
+            foreach (var entry in _entries.Values)
+                entry.Image.Release();
+            _entries.Clear();
+
+            foreach (var entry in _strips.Values)
+                entry.Image.Release();
+            _strips.Clear();
+        }
+
         /// <summary>Lets go of every picture the frame <paramref name="frame"/> did not draw.</summary>
         public void Sweep(long frame)
         {

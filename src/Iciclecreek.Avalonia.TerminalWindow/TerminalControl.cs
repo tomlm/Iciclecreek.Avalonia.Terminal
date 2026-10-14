@@ -105,7 +105,7 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalControl, bool>(
-                nameof(UseSkiaRenderer),
+                "UseSkiaRenderer",
                 defaultValue: false);
 
         // Cursor appearance. Real StyledProperties with the same defaults as TerminalView's, reaching the
@@ -384,6 +384,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <inheritdoc cref="TerminalView.UseSkiaRendererProperty"/>
+        [Obsolete("Has no effect. Text is drawn by the classic path and pictures by a Skia picture layer wherever Skia is available.")]
         public bool UseSkiaRenderer
         {
             get => GetValue(UseSkiaRendererProperty);

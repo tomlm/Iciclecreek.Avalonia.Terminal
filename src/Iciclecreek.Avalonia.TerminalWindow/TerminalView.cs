@@ -47,31 +47,41 @@ namespace Iciclecreek.Terminal
 
         private XT.Terminal _terminal;
 
-        private readonly Skia.SnapshotBuilder _snapshotBuilder = new();
-        private readonly Skia.SkiaFontCache _skiaFonts = new();
+        /// <summary>The pictures on screen, uploaded for the picture layer. UI thread only.</summary>
+        private readonly Skia.SkiaPictureCache _pictures = new();
+
+        /// <summary>Counts frames for <see cref="_pictures"/>, which keeps what the last frame drew.</summary>
+        private long _pictureFrame;
+
+        /// <summary>The last picture layer enqueued, kept only to read its <c>Unsupported</c> report.</summary>
+        private Skia.PictureLayer? _lastPictureLayer;
+
+        /// <summary>Latched once a picture layer reports the backend will not lease a Skia canvas.</summary>
+        private bool _picturesUnsupported;
 
         /// <summary>
-        /// Whether the cell grid is drawn straight onto the Skia canvas instead of through
-        /// DrawingContext. Off by default — the classic path is untouched until a host opts in.
-        /// See the notes on TerminalSkiaLayer for what the direct path gives up.
+        /// No longer has any effect: kept so code that sets it still compiles.
         /// </summary>
+        /// <remarks>
+        /// This chose a second text renderer that drew the cell grid straight onto the Skia canvas.
+        /// Measured at full screen it drew text about five times slower than the classic path, which
+        /// replays each line's shaped glyph runs, and its one advantage -- drawing pictures from GPU
+        /// textures -- now belongs to every terminal: pictures go through a Skia picture layer
+        /// wherever Avalonia is on its Skia backend, and through DrawImage where it is not.
+        /// </remarks>
         public static readonly StyledProperty<bool> UseSkiaRendererProperty =
             AvaloniaProperty.Register<TerminalView, bool>(
-                nameof(UseSkiaRenderer),
+                "UseSkiaRenderer",
                 defaultValue: false);
 
-        /// <summary>Whether the cell grid is drawn straight onto the Skia canvas. See <see cref="UseSkiaRendererProperty"/>.</summary>
+        /// <inheritdoc cref="UseSkiaRendererProperty"/>
+        [Obsolete("Has no effect. Text is drawn by the classic path and pictures by a Skia picture layer wherever Skia is available.")]
         public bool UseSkiaRenderer
         {
             get => GetValue(UseSkiaRendererProperty);
             set => SetValue(UseSkiaRendererProperty, value);
         }
 
-        /// <summary>Latched once a layer reports the backend will not lease a Skia canvas.</summary>
-        private bool _skiaUnsupported;
-
-        /// <summary>The layer enqueued last frame, asked afterwards whether it could draw.</summary>
-        private Skia.TerminalSkiaLayer? _lastSkiaLayer;
 
 
         private FormattedText _measureText;
@@ -2104,12 +2114,6 @@ namespace Iciclecreek.Terminal
                 // rather than only for the brushes that fail to convert.
                 InvalidateRunCaches();
             }
-            else if (change.Property == UseSkiaRendererProperty)
-            {
-                // Nothing cached needs purging -- the classic path's run caches stay valid for a
-                // switch back -- but the frame on screen was drawn by the other path.
-                InvalidateVisual();
-            }
             else if (change.Property == ConvertEolProperty)
             {
                 // Straight through to the live emulator: this is read on every line feed, so moving
@@ -2244,16 +2248,11 @@ namespace Iciclecreek.Terminal
 
             _disposed = true;
 
-            // The Skia faces and fonts go HERE and not on visual detach. Detachment is not an
-            // ownership boundary for this view -- it happens during ordinary initialisation and
-            // during supported reparenting, both of which are followed by more painting -- and a
-            // custom draw operation already queued still holds this cache on the render thread, so
-            // disposing on detach could pull native handles out from under an in-flight composite.
-            _skiaFonts.Dispose();
-
-            // And the layer this view kept only to read its Unsupported report: it holds a snapshot,
-            // its rows, and through them any images those rows referenced.
-            _lastSkiaLayer = null;
+            // The uploads go HERE and not on visual detach: detachment happens during ordinary
+            // initialisation and reparenting, both followed by more painting. A frame still in flight
+            // holds its own references, so nothing it draws is freed under it.
+            _pictures.Clear();
+            _lastPictureLayer = null;
 
             UnsubscribeTerminalEvents();
 

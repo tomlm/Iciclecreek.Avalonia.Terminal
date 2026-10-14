@@ -28,8 +28,6 @@
 			</MenuItem>
 			<MenuItem Header="_Render">
 				<MenuItem Header="Repaint test (120 full frames)" Click="OnRepaintTestClick" />
-				<MenuItem x:Name="SkiaItem" Header="Skia renderer (off = classic DrawingContext calls)"
-						  ToggleType="CheckBox" IsChecked="True" Click="OnSkiaClick" />
 				<MenuItem x:Name="GraphItem" Header="Render time graph overlay"
 						  ToggleType="CheckBox" Click="OnGraphClick" />
 			</MenuItem>
@@ -48,7 +46,6 @@
 		</Border>
 		<term:TerminalControl x:Name="TermControl"
 							  FontSize="14" BufferSize="1000"
-							  Margin="10"
-							  UseSkiaRenderer="True" />
+							  Margin="10" />
 	</DockPanel>
 </Window>

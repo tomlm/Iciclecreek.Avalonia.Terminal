@@ -272,16 +272,6 @@ public class RendererViewportTests
             "the run path's independently coloured underline must blink with its text");
         Assert.That(Occurrences(source, "ApplyBlinkPhase(dwBrush"), Is.EqualTo(1),
             "and so must a doubled row's");
-
-        // The Skia layer expresses both conceal and the dark blink half as one snapshot flag, and
-        // its ligature fast path draws blob and decorations without consulting the per-cell flags
-        // -- so it must decline concealed runs up front, or blinking ligatured text stays lit
-        // through the off phase. Asserted at the source like the counts above, because the layer
-        // needs a Skia canvas lease this platform does not grant.
-        var skiaSource = System.IO.File.ReadAllText(System.IO.Path.Combine(
-            System.IO.Path.GetDirectoryName(SourcePath("TerminalView.cs"))!, "Skia", "TerminalSkiaLayer.cs"));
-        Assert.That(Occurrences(skiaSource, "first.Flags & SnapshotFlags.Conceal"), Is.EqualTo(1),
-            "the ligature run must decline concealed cells before it draws anything");
     }
 
     private static int Occurrences(string haystack, string needle)
@@ -459,48 +449,6 @@ public class RendererViewportTests
             view.Terminal.Write($"{Esc}[?5l");
             Assert.That(SurfaceColour(view), Is.EqualTo(Rgb(palette.Background)),
                 "and clearing the mode hands the surface back");
-        }
-        finally { window.Close(); }
-    }
-
-    [AvaloniaTest]
-    public void The_Skia_snapshot_carries_the_inverted_surface_too()
-    {
-        // The direct path clears with the snapshot's Surface, taken from the same decision the
-        // classic path paints -- asserted on the snapshot the render actually built, because the
-        // custom draw operation needs a Skia lease this platform does not grant.
-        var (view, window) = Realised();
-        try
-        {
-            view.Background = Brushes.Black;
-            view.UseSkiaRenderer = true;
-            view.Terminal.Write($"{Esc}[?5h");
-
-            // The direct path declines while the cell metrics are unmeasured, and they are measured
-            // lazily -- real layout forces them before any frame, headless layout does not. The
-            // public property is the documented way to force them.
-            Assert.That(view.CharWidth, Is.GreaterThan(0), "sanity: the cell metrics can be measured");
-
-            // A bitmap context rather than a DrawingGroup: recording a DrawingGroup rejects custom
-            // draw operations, and Render treats that rejection as a mid-read race and quietly
-            // drops the layer this test exists to read.
-            using var target = new global::Avalonia.Media.Imaging.RenderTargetBitmap(new global::Avalonia.PixelSize(800, 600));
-            using (var context = target.CreateDrawingContext())
-                view.Render(context);
-
-            var layer = typeof(TerminalView)
-                .GetField("_lastSkiaLayer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-                .GetValue(view);
-            Assert.That(layer, Is.Not.Null, "the render built no Skia layer; the direct path did not run");
-
-            var snapshot = (Iciclecreek.Terminal.Skia.TerminalSnapshot)layer!.GetType()
-                .GetField("_snapshot", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-                .GetValue(layer)!;
-
-            var palette = view.Terminal.Colors.Take();
-            var expected = 0xFF000000u | (uint)palette.Foreground;
-            Assert.That(snapshot.Surface, Is.EqualTo(expected),
-                "the snapshot's clear colour is the inverted surface, same as the classic sheet");
         }
         finally { window.Close(); }
     }
