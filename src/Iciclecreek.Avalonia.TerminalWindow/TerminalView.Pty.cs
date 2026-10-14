@@ -427,6 +427,22 @@ namespace Iciclecreek.Terminal
         /// loop's token, which two of the posted callbacks compare against the CURRENT process's to
         /// refuse stale delivery — a replay passes the current one.
         /// </remarks>
+        /// <summary>
+        /// Running totals for the read loop, for diagnostics: what came off the pty, how long waiting
+        /// for the terminal lock took, and how long <c>Terminal.Write</c> spent parsing it. Times are
+        /// in <see cref="System.Diagnostics.Stopwatch"/> ticks. Updated on the read task; read them
+        /// from anywhere with <see cref="Interlocked.Read(ref long)"/>.
+        /// </summary>
+        internal sealed class OutputCounters
+        {
+            public long Bytes;
+            public long Chunks;
+            public long LockWaitTicks;
+            public long WriteTicks;
+        }
+
+        internal OutputCounters Counters { get; } = new();
+
         private void ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
         {
 
@@ -481,8 +497,11 @@ namespace Iciclecreek.Terminal
             // skipped for them regardless, so they count as following.
             _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
 
+            long lockRequested = System.Diagnostics.Stopwatch.GetTimestamp();
             lock (_terminalLock)
             {
+                long lockTaken = System.Diagnostics.Stopwatch.GetTimestamp();
+
                 // Any capture taken before this write describes a buffer that no longer exists
                 // once it lands; bumping FIRST means a capture published from inside the write —
                 // the ESU handler — carries the new generation and is current on arrival.
@@ -508,6 +527,11 @@ namespace Iciclecreek.Terminal
                 finally
                 {
                     _bufferWriteInProgress = false;
+
+                    Interlocked.Add(ref Counters.WriteTicks, System.Diagnostics.Stopwatch.GetTimestamp() - lockTaken);
+                    Interlocked.Add(ref Counters.LockWaitTicks, lockTaken - lockRequested);
+                    Interlocked.Add(ref Counters.Bytes, chunk.Length);
+                    Interlocked.Increment(ref Counters.Chunks);
                 }
 
                 // See _inputStartRow. A change of row means the shell drew something new, so the

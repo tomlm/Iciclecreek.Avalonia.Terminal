@@ -13,5 +13,8 @@ using System.Runtime.CompilerServices;
 // snapshot, which needs the same internal surface the render bench above uses.
 [assembly: InternalsVisibleTo("BenchmarkSuite1")]
 
+// The Example's status bar shows the read loop's throughput counters (OutputCounters).
+[assembly: InternalsVisibleTo("Example")]
+
 
 [assembly: XmlnsDefinition("https://github.com/tomlm/Terminal", "Iciclecreek.Terminal")]

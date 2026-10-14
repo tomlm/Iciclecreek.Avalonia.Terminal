@@ -9,7 +9,46 @@
 		WindowState="Maximized"
 		x:Class="Example.MainWindow"
 		Title="Example">
-	<term:TerminalControl FontSize="14" BufferSize="1000"
-						  Margin="10"
-						  UseSkiaRenderer="True" />
+	<DockPanel>
+		<Menu DockPanel.Dock="Top" Background="#202020">
+			<MenuItem Header="_Font Size">
+				<MenuItem Header="8" Tag="8" Click="OnFontSizeClick" />
+				<MenuItem Header="10" Tag="10" Click="OnFontSizeClick" />
+				<MenuItem Header="12" Tag="12" Click="OnFontSizeClick" />
+				<MenuItem Header="14" Tag="14" Click="OnFontSizeClick" />
+				<MenuItem Header="16" Tag="16" Click="OnFontSizeClick" />
+				<MenuItem Header="18" Tag="18" Click="OnFontSizeClick" />
+				<MenuItem Header="20" Tag="20" Click="OnFontSizeClick" />
+				<MenuItem Header="24" Tag="24" Click="OnFontSizeClick" />
+				<MenuItem Header="28" Tag="28" Click="OnFontSizeClick" />
+				<MenuItem Header="32" Tag="32" Click="OnFontSizeClick" />
+				<Separator />
+				<MenuItem Header="Larger" InputGesture="Ctrl+OemPlus" Click="OnFontLargerClick" />
+				<MenuItem Header="Smaller" InputGesture="Ctrl+OemMinus" Click="OnFontSmallerClick" />
+			</MenuItem>
+			<MenuItem Header="_Render">
+				<MenuItem Header="Repaint test (120 full frames)" Click="OnRepaintTestClick" />
+				<MenuItem x:Name="SkiaItem" Header="Skia renderer (off = classic DrawingContext calls)"
+						  ToggleType="CheckBox" IsChecked="True" Click="OnSkiaClick" />
+				<MenuItem x:Name="GraphItem" Header="Render time graph overlay"
+						  ToggleType="CheckBox" Click="OnGraphClick" />
+			</MenuItem>
+		</Menu>
+		<!-- Fixed height and no wrapping: a panel that grew and shrank with its text resized the
+		     terminal above it every second, which is exactly what it is here to measure. Two lines for
+		     the repaint test, three for the live figures; anything longer is clipped, not wrapped. -->
+		<Border DockPanel.Dock="Bottom" Background="#202020" Padding="8,3" Height="86" ClipToBounds="True">
+			<StackPanel>
+				<SelectableTextBlock x:Name="TestText" FontFamily="Cascadia Mono,Consolas,monospace" FontSize="12"
+									 LineHeight="16" Height="32" Foreground="#FFE080" TextWrapping="NoWrap"
+									 Text="Render > Repaint test measures 120 full repaints; the result stays here." />
+				<SelectableTextBlock x:Name="TimingText" FontFamily="Cascadia Mono,Consolas,monospace" FontSize="12"
+									 LineHeight="16" Height="48" Foreground="#D0D0D0" TextWrapping="NoWrap" />
+			</StackPanel>
+		</Border>
+		<term:TerminalControl x:Name="TermControl"
+							  FontSize="14" BufferSize="1000"
+							  Margin="10"
+							  UseSkiaRenderer="True" />
+	</DockPanel>
 </Window>
