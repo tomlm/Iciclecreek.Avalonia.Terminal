@@ -787,29 +787,34 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>Copies a strip's pixels into an immutable bitmap, for the same reason pictures are.</summary>
+        /// <remarks>
+        /// Up to the last painted cell, which is all a row draws, through a pooled buffer: the strip is
+        /// held in blocks, and an upload per frame must not become a large allocation per frame.
+        /// </remarks>
         internal static Bitmap CreateStripBitmap(XT.Graphics.SixelStrip strip)
         {
-            var pixels = strip.Pixels;
-            var length = Math.Min(pixels.Length, strip.Stride * strip.PixelHeight);
+            int columns = Math.Max(1, strip.PaintedColumns);
+            int stride = columns * strip.CellWidth * 4;
+            int length = stride * strip.PixelHeight;
+            var pooled = System.Buffers.ArrayPool<byte>.Shared.Rent(length);
             var buffer = Marshal.AllocHGlobal(length);
             try
             {
-                if (MemoryMarshal.TryGetArray(pixels, out ArraySegment<byte> segment))
-                    Marshal.Copy(segment.Array!, segment.Offset, buffer, length);
-                else
-                    Marshal.Copy(pixels.ToArray(), 0, buffer, length);
+                strip.CopyPixelsTo(pooled, stride, columns);
+                Marshal.Copy(pooled, 0, buffer, length);
 
                 return new Bitmap(
                     PixelFormat.Bgra8888,
                     AlphaFormat.Unpremul,
                     buffer,
-                    new PixelSize(strip.PixelWidth, strip.PixelHeight),
+                    new PixelSize(columns * strip.CellWidth, strip.PixelHeight),
                     new Vector(96, 96),
-                    strip.Stride);
+                    stride);
             }
             finally
             {
                 Marshal.FreeHGlobal(buffer);
+                System.Buffers.ArrayPool<byte>.Shared.Return(pooled);
             }
         }
 

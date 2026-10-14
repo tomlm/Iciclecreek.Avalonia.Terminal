@@ -145,10 +145,24 @@ namespace Iciclecreek.Terminal.Skia
                 _strips.Remove(strip);
             }
 
-            var info = new SKImageInfo(strip.PixelWidth, strip.PixelHeight, SKColorType.Bgra8888, SKAlphaType.Unpremul);
-            var pixels = strip.Pixels.Span;
-            var length = Math.Min(pixels.Length, strip.Stride * strip.PixelHeight);
-            var uploaded = SKImage.FromPixelCopy(info, pixels.Slice(0, length), strip.Stride);
+            // Up to the last painted cell, which is all a row draws, through a pooled buffer: the strip
+            // is held in blocks, and an upload per frame must not become a large allocation per frame.
+            int columns = Math.Max(1, strip.PaintedColumns);
+            int stride = columns * strip.CellWidth * 4;
+            int length = stride * strip.PixelHeight;
+            var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(length);
+            SKImage? uploaded;
+            try
+            {
+                strip.CopyPixelsTo(buffer, stride, columns);
+                var info = new SKImageInfo(columns * strip.CellWidth, strip.PixelHeight, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+                uploaded = SKImage.FromPixelCopy(info, buffer.AsSpan(0, length), stride);
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+            }
+
             if (uploaded is null)
                 return null;
 
