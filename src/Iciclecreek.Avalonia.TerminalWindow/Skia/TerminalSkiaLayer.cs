@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading;
 using Avalonia;
 using Avalonia.Media;
@@ -138,7 +139,8 @@ namespace Iciclecreek.Terminal.Skia
             try
             {
                 using var lease = feature.Lease();
-                Draw(lease.SkCanvas);
+                SharedSkImage.DisposePendingTextures();
+                Draw(lease.SkCanvas, lease.GrContext);
             }
             finally
             {
@@ -226,7 +228,7 @@ namespace Iciclecreek.Terminal.Skia
 
         /// <summary>Internal rather than private so the profiling benchmark suite can drive the
         /// exact frame-drawing path directly, without needing a live Avalonia composite.</summary>
-        internal void Draw(SKCanvas canvas)
+        internal void Draw(SKCanvas canvas, GRContext? gpu = null)
         {
             var snapshot = _snapshot;
             var scale = snapshot.RenderScale;
@@ -277,11 +279,8 @@ namespace Iciclecreek.Terminal.Skia
                 }
             }
 
-            // No image pass. A line holding a picture is declined by the builder and drawn by the
-            // classic renderer, which already plans the blit from the placement's pixel offsets and
-            // per-cell scale, clips a partial edge cell, re-uploads on an animation's frame serial,
-            // and suppresses the cell background under a backdrop. Reproducing that here would be a
-            // second implementation of the subtlest part of the renderer.
+            // No image pass here: the only pictures this layer draws are in front of the text, and
+            // go down after it -- see DrawPictures. Backdrops stay with the classic renderer.
 
             // Then glyphs.
             var baseline = _fonts.Baseline(snapshot.FontFamily, snapshot.FontSize, SnapshotFlags.None);
@@ -377,7 +376,146 @@ namespace Iciclecreek.Terminal.Skia
                     }
                 }
             }
+
+            DrawStrips(canvas, snapshot, scale, gpu);
+            DrawPictures(canvas, snapshot, scale, gpu);
         }
+
+        /// <summary>
+        /// Every row's Sixel pixels, over the text and under the Kitty pictures in front of it: one draw
+        /// per row, the strip's cells mapped onto the grid's, however many Sixels painted the row.
+        /// </summary>
+        private static void DrawStrips(SKCanvas canvas, TerminalSnapshot snapshot, double scale, GRContext? gpu)
+        {
+            if (snapshot.Strips.Count == 0)
+                return;
+
+            var cw = snapshot.CellWidth;
+            var ch = snapshot.CellHeight;
+            var sampling = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+
+            foreach (var strip in snapshot.Strips)
+            {
+                var top = Snap(strip.Row * ch, scale);
+                var bottom = Snap((strip.Row + 1) * ch, scale);
+                var right = Snap(strip.Cols * cw, scale);
+                if (bottom <= top || right <= 0)
+                    continue;
+
+                canvas.DrawImage(strip.Image.ForDrawing(gpu),
+                                 new SKRect(0, 0, strip.Cols * strip.CellWidth, strip.CellHeight),
+                                 new SKRect(0, top, right, bottom), sampling);
+            }
+        }
+
+        /// <summary>
+        /// One placement's pieces this frame: the picture, the one mapping every row of it shares,
+        /// and the rows it shows -- drawn as a single draw clipped to all of them.
+        /// </summary>
+        private sealed class PictureGroup
+        {
+            public required SKImage Image;
+            public SKRect Mapping;
+            public int ZIndex;
+            public int Serial;
+            public readonly List<SKRect> Clips = new();
+        }
+
+        private readonly Dictionary<(int Serial, SKImage Image, Rect Mapping), PictureGroup> _groupIndex = new();
+        private readonly List<PictureGroup> _groups = new();
+
+        /// <summary>
+        /// The pictures in front of the text, after all of it, as the classic path's
+        /// RenderFrontImages draws them -- but each placement ONCE.
+        /// </summary>
+        /// <remarks>
+        /// <para>The classic path draws a picture a row at a time, the whole picture's mapping clipped
+        /// to that row, so nine rows sample like one draw. Here the rows of one placement are gathered
+        /// and the picture is drawn a single time, clipped to all of them at once: the same pixels from
+        /// one draw instead of nine. A SixelBuffer app's screen is hundreds of pictures in thousands of
+        /// row pieces, and the draws were the cost.</para>
+        /// <para>Back to front by z, then by the placement's serial. A row draws its pictures in z
+        /// order and, within one z, in the order they were placed -- and placements take their serials
+        /// from one counter as they are placed, while a split keeps the serial and its position. So
+        /// (z, serial) IS every row's own order at once, which is what lets one placement's rows be
+        /// drawn together: an older picture still showing under a newer one on some row cannot end up
+        /// drawn over it.</para>
+        /// <para>The plan is the classic path's own TryPlanImageBlit, from the classic path's own runs,
+        /// so the clip and the mapping are exactly the ones it would use.</para>
+        /// </remarks>
+        private void DrawPictures(SKCanvas canvas, TerminalSnapshot snapshot, double scale, GRContext? gpu)
+        {
+            var pictures = snapshot.Pictures;
+            if (pictures.Count == 0)
+                return;
+
+            var cw = snapshot.CellWidth;
+            var ch = snapshot.CellHeight;
+            var sampling = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+
+            _groupIndex.Clear();
+            _groups.Clear();
+
+            foreach (var picture in pictures)
+            {
+                var top = Snap(picture.Row * ch, scale);
+                var bottom = Snap((picture.Row + 1) * ch, scale);
+                var rowHeight = Math.Max(0, bottom - top);
+
+                if (!TerminalView.TryPlanImageBlit(picture.Run, top, rowHeight, cw, ch, scale,
+                                                   out _, out var destination, out var mapping))
+                    continue;
+
+                var placement = picture.Run.Placement!.Value;
+                var image = picture.Image.ForDrawing(gpu);
+                var key = (placement.Serial, image, mapping);
+                if (!_groupIndex.TryGetValue(key, out var group))
+                {
+                    group = new PictureGroup
+                    {
+                        Image = image,
+                        Mapping = ToSK(mapping),
+                        ZIndex = placement.ZIndex,
+                        Serial = placement.Serial,
+                    };
+                    _groupIndex[key] = group;
+                    _groups.Add(group);
+                }
+
+                group.Clips.Add(ToSK(destination));
+            }
+
+            // Stable on ties (one placement whose rows planned different mappings), which are
+            // rows of one picture and never overlap.
+            _groups.Sort((a, b) => a.ZIndex != b.ZIndex ? a.ZIndex.CompareTo(b.ZIndex) : a.Serial.CompareTo(b.Serial));
+
+            foreach (var group in _groups)
+            {
+                canvas.Save();
+                if (group.Clips.Count == 1)
+                {
+                    canvas.ClipRect(group.Clips[0], SKClipOperation.Intersect, antialias: false);
+                }
+                else
+                {
+                    using var path = new SKPath();
+                    foreach (var clip in group.Clips)
+                        path.AddRect(clip);
+                    canvas.ClipPath(path, SKClipOperation.Intersect, antialias: false);
+                }
+
+                canvas.DrawImage(group.Image,
+                                 new SKRect(0, 0, group.Image.Width, group.Image.Height),
+                                 group.Mapping, sampling);
+                canvas.Restore();
+            }
+
+            _groupIndex.Clear();
+            _groups.Clear();
+        }
+
+        private static SKRect ToSK(Rect rect) =>
+            new((float)rect.X, (float)rect.Y, (float)rect.Right, (float)rect.Bottom);
 
         /// <summary>
         /// Whether this face redraws a character when something sits beside it.

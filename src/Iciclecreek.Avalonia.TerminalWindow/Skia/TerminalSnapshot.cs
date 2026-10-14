@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 
 namespace Iciclecreek.Terminal.Skia
 {
@@ -170,6 +171,17 @@ namespace Iciclecreek.Terminal.Skia
         /// <summary>Columns this row was built for; a resize makes it stale.</summary>
         public int Cols;
 
+        /// <summary>
+        /// The pictures in front of this row's text -- Sixel, and Kitty at z &gt;= 0 -- back to front,
+        /// already clipped to the columns the line can show. The same runs the classic path builds,
+        /// so the blit is planned by the same code. Empty for almost every row.
+        /// </summary>
+        public TerminalView.CachedTextRun[] Pictures = Array.Empty<TerminalView.CachedTextRun>();
+
+        /// <summary>The line's Sixel pixels, or null, and how many cells of them the row shows.</summary>
+        public XTerm.Graphics.SixelStrip? Sixel;
+        public int SixelCols;
+
         public SnapshotRow(int cols)
         {
             Cells = new SnapshotCell[cols];
@@ -217,9 +229,24 @@ namespace Iciclecreek.Terminal.Skia
     /// did not pay for the copy, because most lines had not changed. Referencing rows means an
     /// unchanged line costs one pointer.</para>
     /// </remarks>
+    /// <summary>One row's piece of a picture in a frame: the uploaded image, the row, and the run.</summary>
+    internal readonly record struct SnapshotPicture(SharedSkImage Image, int Row, TerminalView.CachedTextRun Run);
+
+    /// <summary>One row's Sixel pixels in a frame: the upload, the row, and the strip's cells and their size.</summary>
+    internal readonly record struct SnapshotStrip(SharedSkImage Image, int Row, int Cols, int CellWidth, int CellHeight);
+
     internal sealed class TerminalSnapshot
     {
         public SnapshotRow?[] Rows = Array.Empty<SnapshotRow?>();
+
+        /// <summary>
+        /// Every picture piece the frame draws, top row first and back to front within a row. Each
+        /// holds a reference on its image, given back when the frame retires.
+        /// </summary>
+        public List<SnapshotPicture> Pictures = new();
+
+        /// <summary>Every row's Sixel strip the frame draws, each holding a reference on its upload.</summary>
+        public List<SnapshotStrip> Strips = new();
         public int RowCount;
         public int Cols;
 

@@ -414,10 +414,18 @@ namespace Iciclecreek.Terminal
             IBrush? UnderlineBrush = null,
             GlyphRun? Glyphs = null,
             IBrush? Foreground = null,
-            int[]? Blocks = null)
+            int[]? Blocks = null,
+            XT.Graphics.SixelStrip? Strip = null)
         {
             /// <summary>Whether this run draws a picture rather than text.</summary>
             public bool IsImage => Placement is not null && Image is not null;
+
+            /// <summary>
+            /// Whether this run draws the line's Sixel pixels -- one strip across
+            /// <see cref="CellCount"/> cells from column 0, over the text and under any Kitty
+            /// picture in front of it.
+            /// </summary>
+            public bool IsStrip => Strip is not null;
 
             /// <summary>
             /// Whether this run is block characters drawn as rectangles -- see <see cref="BlockGlyphs"/>.
@@ -464,6 +472,17 @@ namespace Iciclecreek.Terminal
         }
 
         private readonly System.Runtime.CompilerServices.ConditionalWeakTable<XT.Graphics.TerminalImage, CachedBitmap> _imageBitmaps = new();
+
+        /// <summary>A line's Sixel pixels as a bitmap, and which version of them it holds.</summary>
+        private sealed class CachedStripBitmap
+        {
+            public Bitmap? Bitmap;
+            public long Version;
+        }
+
+        // One bitmap per Sixel strip, uploaded again whenever the strip's version moves. Keyed weakly,
+        // like the pictures above: the bitmap goes when the line lets go of its strip.
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<XT.Graphics.SixelStrip, CachedStripBitmap> _stripBitmaps = new();
 
         // Set once if the PLATFORM cannot draw bitmaps at all. Consolonia runs this same control over a
         // text-cell backend where DrawImage means nothing; the terminal should still render its text there
@@ -3896,6 +3915,15 @@ namespace Iciclecreek.Terminal
                 textRuns.Add(run);
 
 
+            }
+
+            // The Sixel pixels: over the text, as Sixel always draws, and under any Kitty picture in
+            // front of it. One run for the whole line however many Sixels painted it.
+            if (line.Sixel is { } strip)
+            {
+                var stripCols = Math.Min(strip.PaintedColumns, Math.Min(line.Length, _terminal.Cols));
+                if (stripCols > 0)
+                    textRuns.Add(new CachedTextRun(null, 0, stripCols, null, Strip: strip));
             }
 
             // And the pictures that cover the text, still back to front, now that it is down.

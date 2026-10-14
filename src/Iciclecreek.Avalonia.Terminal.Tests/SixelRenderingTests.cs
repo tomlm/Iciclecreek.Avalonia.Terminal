@@ -70,82 +70,83 @@ public class SixelRenderingTests
     private static IReadOnlyList<TerminalView.CachedTextRun> ImageRuns(TerminalView view, int screenRow)
         => RunsForRow(view, screenRow).Where(r => r.Image is not null).ToList();
 
+    /// <summary>The run that draws a row's Sixel pixels -- at most one per row.</summary>
+    private static IReadOnlyList<TerminalView.CachedTextRun> StripRuns(TerminalView view, int screenRow)
+        => RunsForRow(view, screenRow).Where(r => r.IsStrip).ToList();
+
     // ---- what a frame decides to draw -------------------------------------------------------------
 
     [AvaloniaTest]
-    public void An_image_in_the_buffer_produces_an_image_run()
+    public void A_sixel_in_the_buffer_produces_a_strip_run()
     {
         var (view, window) = Realised();
         try
         {
             PlaceImage(view);
 
-            var runs = ImageRuns(view, 0);
+            var runs = StripRuns(view, 0);
 
-            Assert.That(runs.Count, Is.GreaterThan(0), "the picture would never have been drawn");
-            Assert.That(runs[0].Text, Is.Null, "an image run carries no text");
+            Assert.That(runs.Count, Is.EqualTo(1), "the picture would never have been drawn");
+            Assert.That(runs[0].Text, Is.Null, "a strip run carries no text");
+            Assert.That(runs[0].Image, Is.Null, "a Sixel keeps no picture, only the pixels it painted");
         }
         finally { window.Close(); }
     }
 
     /// <summary>
-    /// Adjacent tiles of one strip are a single draw, not one per cell. There is no dirty-rect culling here,
-    /// so every visible row is redrawn on every frame and the difference is per-frame cost.
+    /// A row's Sixel pixels are one draw, reaching only as far as the last painted cell: a two-cell
+    /// picture on a wide row does not draw the rest of the row's transparent pixels.
     /// </summary>
     [AvaloniaTest]
-    public void Adjacent_tiles_are_coalesced_into_one_run()
+    public void A_strip_run_covers_the_painted_cells()
     {
         var (view, window) = Realised();
         try
         {
             PlaceImage(view);
 
-            var runs = ImageRuns(view, 0);
+            var runs = StripRuns(view, 0);
 
-            Assert.That(runs.Count, Is.EqualTo(1), "two adjacent tiles should be one draw, not two");
+            Assert.That(runs.Count, Is.EqualTo(1), "a row's pixels should be one draw");
+            Assert.That(runs[0].StartX, Is.Zero);
             Assert.That(runs[0].CellCount, Is.EqualTo(2));
-            Assert.That(runs[0].Placement!.Value.SrcX, Is.Zero);
-            Assert.That(runs[0].Placement!.Value.SrcY, Is.Zero);
         }
         finally { window.Close(); }
     }
 
     [AvaloniaTest]
-    public void Each_row_of_the_picture_gets_its_own_run()
+    public void Each_row_of_the_picture_draws_its_own_strip()
     {
         var (view, window) = Realised();
         try
         {
             PlaceImage(view);
 
+            var strips = new List<XTerm.Graphics.SixelStrip>();
             for (int row = 0; row < 4; row++)
             {
-                var runs = ImageRuns(view, row);
+                var runs = StripRuns(view, row);
                 Assert.That(runs.Count, Is.EqualTo(1), $"row {row}");
-                Assert.That(runs[0].Placement!.Value.SrcY, Is.EqualTo(row * CellPixelHeight),
-                            $"row {row} drew the wrong strip");
+                Assert.That(runs[0].Strip, Is.SameAs(view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY + row]!.Sixel),
+                            $"row {row} drew another line's pixels");
+                strips.Add(runs[0].Strip!);
             }
+
+            Assert.That(strips.Distinct().Count(), Is.EqualTo(4));
         }
         finally { window.Close(); }
     }
 
-    /// <summary>
-    /// An image cell holds a space, so without an explicit break it would be swallowed by the text run beside
-    /// it and never drawn.
-    /// </summary>
     /// <summary>
     /// The text a Sixel covers is still drawn, beneath it, as xterm draws it.
     /// </summary>
     /// <remarks>
-    /// <para>The emulator does not clear the cells a Sixel covers — placing one only adds a run —
-    /// so they still hold whatever was printed there. Drawn beneath the picture, that text is
-    /// invisible under an opaque pixel and shows through one left unset under background select 1.
-    /// notcurses relies on that: it lets text through a sprite by rebuilding the Sixel with those
-    /// pixels unset. This test once asserted the opposite, and the renderer skipped the covered
-    /// cells -- their backgrounds too -- so a transparent Sixel showed black or a single flat
-    /// colour where the text and its colours should have been.</para>
-    /// <para>Printing OVER a Sixel is still different from a Kitty overlay: the emulator splits the
-    /// Sixel run there, so the new text replaces that part of the picture.</para>
+    /// <para>The emulator does not clear the cells a Sixel covers, so they still hold whatever was
+    /// printed there. Drawn beneath the pixels, that text is invisible under an opaque pixel and
+    /// shows through one left unset under background select 1. notcurses relies on that: it lets
+    /// text through a sprite by rebuilding the Sixel with those pixels unset.</para>
+    /// <para>Printing OVER a Sixel is different: the emulator clears that cell's pixels, so the new
+    /// text replaces that part of the picture.</para>
     /// </remarks>
     [AvaloniaTest]
     public void Text_a_sixel_covers_is_drawn_beneath_it()
@@ -158,7 +159,7 @@ public class SixelRenderingTests
             PlaceImage(view);
 
             var runs = RunsForRow(view, 0).ToList();
-            var picture = runs.FindIndex(r => r.IsImage);
+            var picture = runs.FindIndex(r => r.IsStrip);
             var text = runs.FindIndex(r => r.Text is not null && r.StartX < 2 && r.StartX + r.CellCount > 0);
 
             Assert.That(picture, Is.GreaterThanOrEqualTo(0), "the picture should be drawn");
@@ -192,17 +193,17 @@ public class SixelRenderingTests
         try
         {
             PlaceImage(view);
-            Assert.That(ImageRuns(view, 0)[0].CellCount, Is.EqualTo(2), "the picture starts two columns wide");
+            Assert.That(StripRuns(view, 0)[0].CellCount, Is.EqualTo(2), "the picture starts two columns wide");
 
             view.Terminal.Resize(1, view.Terminal.Rows);
-            var narrowed = ImageRuns(view, 0);
+            var narrowed = StripRuns(view, 0);
             Assert.That(narrowed.Count, Is.EqualTo(1), "the picture should still be there, only narrower");
             Assert.That(narrowed[0].CellCount, Is.EqualTo(1), "only one column can be shown");
-            Assert.That(narrowed[0].Placement!.Value.Cols, Is.EqualTo(2),
-                "the run keeps its natural width -- that is what there is to widen back into");
+            Assert.That(narrowed[0].Strip!.PaintedColumns, Is.EqualTo(2),
+                "the strip keeps its natural width -- that is what there is to widen back into");
 
             view.Terminal.Resize(20, view.Terminal.Rows);
-            var widened = ImageRuns(view, 0);
+            var widened = StripRuns(view, 0);
             Assert.That(widened.Count, Is.EqualTo(1));
             Assert.That(widened[0].CellCount, Is.EqualTo(2), "the second column should come back");
         }
@@ -222,18 +223,22 @@ public class SixelRenderingTests
             view.Terminal.Write(TwoByFourCells);
 
             var runs = RunsForRow(view, 0);
-            var images = runs.Where(r => r.Image is not null).ToList();
+            var strips = runs.Where(r => r.IsStrip).ToList();
 
-            Assert.That(images.Count, Is.EqualTo(1));
-            Assert.That(images[0].StartX, Is.EqualTo(2), "the picture was placed after the text");
+            Assert.That(strips.Count, Is.EqualTo(1));
+            Assert.That(strips[0].Strip!.HasPixelsAt(2), Is.True, "the picture was placed after the text");
+            Assert.That(strips[0].Strip!.HasPixelsAt(1), Is.False, "and not over it");
             Assert.That(runs.Any(r => r.Text is not null), Is.True, "the text beside it still draws");
         }
         finally { window.Close(); }
     }
 
-    /// <summary>Two pictures side by side are two runs; coalescing compares the image by reference.</summary>
+    /// <summary>
+    /// Two Sixels side by side are one draw: the row keeps the pixels both painted, not the pictures.
+    /// That is the point of the strips -- however many Sixels land on a row, it is one draw.
+    /// </summary>
     [AvaloniaTest]
-    public void Two_pictures_side_by_side_are_not_coalesced()
+    public void Two_sixels_side_by_side_are_one_strip()
     {
         var (view, window) = Realised();
         try
@@ -243,10 +248,10 @@ public class SixelRenderingTests
             view.Terminal.Write(Esc + "[1;3H");
             view.Terminal.Write(TwoByFourCells);
 
-            var runs = ImageRuns(view, 0);
+            var runs = StripRuns(view, 0);
 
-            Assert.That(runs.Count, Is.EqualTo(2));
-            Assert.That(runs[0].Image, Is.Not.SameAs(runs[1].Image));
+            Assert.That(runs.Count, Is.EqualTo(1));
+            Assert.That(runs[0].CellCount, Is.EqualTo(4));
         }
         finally { window.Close(); }
     }
@@ -298,14 +303,14 @@ public class SixelRenderingTests
         try
         {
             PlaceImage(view);
-            Assert.That(ImageRuns(view, 0)[0].CellCount, Is.EqualTo(2));
+            Assert.That(StripRuns(view, 0)[0].CellCount, Is.EqualTo(2));
 
             view.Terminal.Write(Esc + "[1;1HX");
 
-            var runs = ImageRuns(view, 0);
+            var runs = StripRuns(view, 0);
             Assert.That(runs.Count, Is.EqualTo(1));
-            Assert.That(runs[0].CellCount, Is.EqualTo(1), "only the untouched tile should be left");
-            Assert.That(runs[0].Placement!.Value.SrcX, Is.EqualTo(1 * CellPixelWidth));
+            Assert.That(runs[0].Strip!.HasPixelsAt(0), Is.False, "the typed cell takes its pixels back");
+            Assert.That(runs[0].Strip!.HasPixelsAt(1), Is.True, "only the untouched cell should be left");
         }
         finally { window.Close(); }
     }
@@ -317,11 +322,11 @@ public class SixelRenderingTests
         try
         {
             PlaceImage(view);
-            Assert.That(ImageRuns(view, 0), Is.Not.Empty);
+            Assert.That(StripRuns(view, 0), Is.Not.Empty);
 
             view.Terminal.Write(Esc + "[2J");
 
-            Assert.That(ImageRuns(view, 0), Is.Empty);
+            Assert.That(StripRuns(view, 0), Is.Empty);
         }
         finally { window.Close(); }
     }
@@ -338,11 +343,36 @@ public class SixelRenderingTests
         {
             PlaceImage(view);
 
-            var first = ImageRuns(view, 0);
-            var second = ImageRuns(view, 0); // this frame is served from the cache
+            var first = StripRuns(view, 0);
+            var second = StripRuns(view, 0); // this frame is served from the cache
 
             Assert.That(second.Count, Is.EqualTo(first.Count));
-            Assert.That(second[0].Image, Is.SameAs(first[0].Image));
+            Assert.That(second[0].Strip, Is.SameAs(first[0].Strip));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A strip is uploaded once per version: drawn again unchanged it reuses the bitmap, and painted
+    /// again it uploads anew.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_strip_is_uploaded_again_only_when_it_changes()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            PlaceImage(view);
+            var strip = view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY]!.Sixel!;
+
+            var first = view.GetOrCreateStripBitmap(strip);
+            Assert.That(view.GetOrCreateStripBitmap(strip), Is.SameAs(first), "an unchanged strip was uploaded again");
+
+            view.Terminal.Write(Esc + "[1;1H");
+            PlaceImage(view);
+
+            Assert.That(view.GetOrCreateStripBitmap(view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY]!.Sixel!),
+                        Is.Not.SameAs(first), "a repainted strip kept its old upload");
         }
         finally { window.Close(); }
     }
@@ -848,6 +878,11 @@ public class SixelRenderingTests
 
         using var bitmap = TerminalView.CreateBitmap(image);
 
+        // The headless platform's stub drawing backend answers every immutable bitmap made from
+        // pixels with a 1x1 placeholder, whatever was asked for; only a real backend can say.
+        if (bitmap.PixelSize == new PixelSize(1, 1))
+            Assert.Ignore("the stub drawing backend does not keep a bitmap's size");
+
         Assert.That(bitmap.PixelSize.Width, Is.EqualTo(image.PixelWidth));
         Assert.That(bitmap.PixelSize.Height, Is.EqualTo(image.PixelHeight));
     }
@@ -1249,7 +1284,11 @@ public class SixelRenderingTests
         var (view, window) = Realised();
         try
         {
-            PlaceImage(view);
+            // A Kitty picture: Sixel keeps no picture to ask, only the pixels it painted.
+            view.Terminal.Options.CellWidthPixels = CellPixelWidth;
+            view.Terminal.Options.CellHeightPixels = CellPixelHeight;
+            var pixels = Convert.ToBase64String(new byte[4 * 6 * 4]);
+            view.Terminal.Write($"{Esc}_Ga=T,f=32,s=4,v=6,q=2;{pixels}{St}");
 
             var image = ImageAt(view, 0, 0);
             Assert.That(image, Is.Not.Null);

@@ -53,6 +53,9 @@ namespace Iciclecreek.Terminal.Skia
         /// </summary>
         private long _frameId;
 
+        /// <summary>The pictures on screen, uploaded for the render thread. Touched only here, on the UI thread.</summary>
+        private readonly SkiaPictureCache _pictures = new();
+
         public TerminalSnapshot Build(
             XTerm.Terminal terminal,
             ColorSnapshot palette,
@@ -89,6 +92,9 @@ namespace Iciclecreek.Terminal.Skia
 
             var fallbackForeground = ToArgb(defaultForeground) ?? Argb(BufferCellExtensions.FromRgb(palette.Foreground));
 
+            snapshot.Pictures.Clear();
+            snapshot.Strips.Clear();
+
             for (var row = 0; row < rows; row++)
             {
                 var absolute = startLine + row;
@@ -119,6 +125,7 @@ namespace Iciclecreek.Terminal.Skia
                 if (!reverseVideo && line.Cache is SnapshotRow cachedRow && cachedRow.Cols == cols)
                 {
                     snapshot.Rows[row] = cachedRow;
+                    AddPictures(snapshot, cachedRow, row);
                     continue;
                 }
 
@@ -135,7 +142,17 @@ namespace Iciclecreek.Terminal.Skia
                 // backdrop placement, and skips the text a Sixel replaced. Reproducing all of that
                 // here would be a second implementation of the hardest part of the renderer, to
                 // speed up screens whose cost is a blit rather than glyphs.
-                if (line.HasImages || line.HasSizedRuns || line.LineAttribute != LineAttribute.Normal)
+                //
+                // Except pictures IN FRONT of the text -- every Sixel, and Kitty at z >= 0 -- which
+                // are drawn here now. They change nothing about the row beneath them: the cells keep
+                // their text and backgrounds, no fill goes under the picture, and the picture goes
+                // down after all the text. That leaves only the blit, which is planned by the classic
+                // path's own TryPlanImageBlit from the classic path's own runs. A screen that is all
+                // pictures -- a SixelBuffer app, every row of it -- otherwise fell back to the classic
+                // renderer whole, text and all, one recorded draw per picture per row.
+                // Backdrops (Kitty z < 0) still go classic: they suppress cell backgrounds and the
+                // contrast floor under them, which this row has no field for.
+                if ((line.HasImages && !AllInFront(line)) || line.HasSizedRuns || line.LineAttribute != LineAttribute.Normal)
                 {
                     snapshot.Rows[row] = null;
                     snapshot.Deferred[row] = true;
@@ -157,6 +174,13 @@ namespace Iciclecreek.Terminal.Skia
                     var built = new SnapshotRow(cols);
                     Fill(built, line, palette, cols, fallbackForeground, snapshot.Surface,
                          reverseVideo, blinkOn, boldIsBright, minimumContrast);
+                    if (line.HasImages)
+                        built.Pictures = PictureRuns(line, cols);
+                    if (line.Sixel is { } strip)
+                    {
+                        built.Sixel = strip;
+                        built.SixelCols = Math.Min(strip.PaintedColumns, Math.Min(line.Length, cols));
+                    }
 
                     if (!ReferenceEquals(line.Cache, stamp))
                     {
@@ -167,6 +191,7 @@ namespace Iciclecreek.Terminal.Skia
                         // another frame ourselves rather than trusting the writer to do it.
                         line.Cache = null;
                         snapshot.Rows[row] = built;
+                        AddPictures(snapshot, built, row);
                         requestPaint();
                         break;
                     }
@@ -174,11 +199,78 @@ namespace Iciclecreek.Terminal.Skia
                     // Not stored while the screen is inverted, for the reason above.
                     line.Cache = reverseVideo ? null : built;
                     snapshot.Rows[row] = built;
+                    AddPictures(snapshot, built, row);
                     break;
                 }
             }
 
+            // Whatever this frame does not show is let go; the frame itself holds what it draws.
+            _pictures.Sweep(snapshot.FrameId);
+
             return snapshot;
+        }
+
+        /// <summary>Whether every picture on the line is in front of its text: a Sixel, or Kitty at z &gt;= 0.</summary>
+        private static bool AllInFront(BufferLine line)
+        {
+            foreach (var placement in line.Placements)
+            {
+                if (placement.Kind != XTerm.Graphics.PlacementKind.Sixel && placement.ZIndex < 0)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// The line's pictures as the classic path's runs, back to front -- z, then the order they
+        /// were placed -- clipped to the columns the line can show, exactly as AppendImageRun clips
+        /// them. No fill: a picture in front of the text never has one.
+        /// </summary>
+        private static TerminalView.CachedTextRun[] PictureRuns(BufferLine line, int cols)
+        {
+            var runs = new List<TerminalView.CachedTextRun>();
+            foreach (var placement in line.Placements.OrderBy(p => p.ZIndex))
+            {
+                XTerm.Graphics.TerminalImage? image = null;
+                foreach (var candidate in line.Images)
+                {
+                    if (candidate.Id == placement.ImageId)
+                    {
+                        image = candidate;
+                        break;
+                    }
+                }
+
+                if (image is null)
+                    continue;
+
+                var start = Math.Max(0, placement.Column);
+                var end = Math.Min(placement.EndColumn, Math.Min(line.Length, cols));
+                if (end <= start)
+                    continue;
+
+                runs.Add(new TerminalView.CachedTextRun(null, start, end - start, null, placement, image));
+            }
+
+            return runs.ToArray();
+        }
+
+        /// <summary>Adds a row's Sixel strip and pictures to the frame, each holding a reference on its upload.</summary>
+        private void AddPictures(TerminalSnapshot snapshot, SnapshotRow row, int screenRow)
+        {
+            if (row.Sixel is { } strip && row.SixelCols > 0
+                && _pictures.GetStrip(strip, snapshot.FrameId) is { } stripUpload)
+            {
+                snapshot.Strips.Add(new SnapshotStrip(stripUpload.AddRef(), screenRow, row.SixelCols,
+                                                      strip.CellWidth, strip.CellHeight));
+            }
+
+            foreach (var run in row.Pictures)
+            {
+                if (_pictures.Get(run.Image!, snapshot.FrameId) is { } uploaded)
+                    snapshot.Pictures.Add(new SnapshotPicture(uploaded.AddRef(), screenRow, run));
+            }
         }
 
         /// <summary>
@@ -200,6 +292,16 @@ namespace Iciclecreek.Terminal.Skia
             // being held alive by a header sitting in the free list.
             if (snapshot.RowCount > 0)
                 Array.Clear(snapshot.Rows, 0, Math.Min(snapshot.RowCount, snapshot.Rows.Length));
+
+            // The frame's hold on its pictures. The cache keeps its own for as long as they stay on
+            // screen; a picture that has left it is freed here, by the last frame that drew it.
+            foreach (var picture in snapshot.Pictures)
+                picture.Image.Release();
+            snapshot.Pictures.Clear();
+
+            foreach (var strip in snapshot.Strips)
+                strip.Image.Release();
+            snapshot.Strips.Clear();
 
             snapshot.FrameId = 0;
 
@@ -274,7 +376,8 @@ namespace Iciclecreek.Terminal.Skia
                 // skips it: a fully transparent backdrop has no single colour to measure against,
                 // and the box-drawing and powerline runs are exempt because their glyphs join into
                 // shapes with their neighbours and a nudged shade breaks the join mid-line.
-                // (A run over a picture cannot arise here: lines holding one are declined above.)
+                // (A run over a backdrop cannot arise here: lines holding one are declined above.
+                // A picture in front of the text changes nothing about it, as on the classic path.)
                 if (minimumContrast is { Active: true })
                 {
                     var behind = background == 0 ? surface : background;
@@ -359,9 +462,8 @@ namespace Iciclecreek.Terminal.Skia
                 col += span;
             }
 
-            // No picture runs are collected here. A line holding one is declined above and drawn by
-            // the classic renderer; see the note there for why its geometry is not worth a second
-            // implementation.
+            // No picture runs are collected here: they are runs on the line, not cells, and
+            // PictureRuns gathers them once per row.
         }
 
         /// <summary>True when the cell's text is not simply its codepoint rendered.</summary>

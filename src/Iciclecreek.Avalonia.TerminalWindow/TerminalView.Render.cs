@@ -607,7 +607,111 @@ namespace Iciclecreek.Terminal
                         new Rect(startX, draw.StartYPos, Math.Max(0, endX - startX), draw.RowHeight));
                 }
 
-                DrawImageRun(context, run, draw.StartYPos, draw.RowHeight, scale);
+                if (run.IsStrip)
+                    DrawStripRun(context, run, draw.StartYPos, draw.RowHeight, scale);
+                else
+                    DrawImageRun(context, run, draw.StartYPos, draw.RowHeight, scale);
+            }
+        }
+
+        /// <summary>
+        /// Draws a line's Sixel pixels: one bitmap across the row, the strip's cells mapped onto the
+        /// grid's. A strip painted at another cell size -- before a font change -- is stretched onto
+        /// the current one, as a picture is.
+        /// </summary>
+        private void DrawStripRun(DrawingContext context, CachedTextRun run,
+                                  double startYPos, double rowHeight, double scale)
+        {
+            if (_imageRenderingUnavailable)
+                return;
+
+            var strip = run.Strip!;
+            var bitmap = GetOrCreateStripBitmap(strip);
+            if (bitmap is null)
+                return;
+
+            var right = Snap(run.CellCount * _charWidth, scale);
+            var source = new Rect(0, 0, run.CellCount * strip.CellWidth, strip.CellHeight);
+            var destination = new Rect(0, startYPos, right, rowHeight);
+
+            try
+            {
+                context.DrawImage(bitmap, source, destination);
+            }
+            catch (Exception ex) when (IndicatesNoRasterBackend(ex))
+            {
+                // As for pictures: a backend with no raster surface (Consolonia, headless) will not
+                // gain one, so stop asking and let the text carry on.
+                _imageRenderingUnavailable = true;
+                Debug.WriteLine($"[TerminalView] image rendering unavailable: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TerminalView] could not draw a Sixel strip: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// The bitmap for a line's Sixel pixels, uploaded again whenever the strip's version moves.
+        /// </summary>
+        /// <remarks>
+        /// The strip can be painted by the pty thread while this copies it. The version is read before
+        /// the copy and again after; if it moved, the copy may be torn, so it is used for this frame and
+        /// not remembered -- the write that moved it asks for the frame that will upload it again.
+        /// </remarks>
+        internal Bitmap? GetOrCreateStripBitmap(XT.Graphics.SixelStrip strip)
+        {
+            var version = strip.Version;
+            if (_stripBitmaps.TryGetValue(strip, out var cached) && cached.Version == version && cached.Bitmap is not null)
+                return cached.Bitmap;
+
+            Bitmap? bitmap;
+            try
+            {
+                bitmap = CreateStripBitmap(strip);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[TerminalView] could not upload a Sixel strip: {ex.Message}");
+                return null;
+            }
+
+            if (cached is null)
+            {
+                cached = new CachedStripBitmap();
+                _stripBitmaps.Add(strip, cached);
+            }
+
+            try { cached.Bitmap?.Dispose(); } catch { /* already gone */ }
+            cached.Bitmap = bitmap;
+            cached.Version = strip.Version == version ? version : -1;
+            return bitmap;
+        }
+
+        /// <summary>Copies a strip's pixels into an immutable bitmap, for the same reason pictures are.</summary>
+        internal static Bitmap CreateStripBitmap(XT.Graphics.SixelStrip strip)
+        {
+            var pixels = strip.Pixels;
+            var length = Math.Min(pixels.Length, strip.Stride * strip.PixelHeight);
+            var buffer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (MemoryMarshal.TryGetArray(pixels, out ArraySegment<byte> segment))
+                    Marshal.Copy(segment.Array!, segment.Offset, buffer, length);
+                else
+                    Marshal.Copy(pixels.ToArray(), 0, buffer, length);
+
+                return new Bitmap(
+                    PixelFormat.Bgra8888,
+                    AlphaFormat.Unpremul,
+                    buffer,
+                    new PixelSize(strip.PixelWidth, strip.PixelHeight),
+                    new Vector(96, 96),
+                    strip.Stride);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
             }
         }
 
@@ -631,7 +735,7 @@ namespace Iciclecreek.Terminal
                 // block elements reach a pixel past their cell: notcurses paints its gradients in
                 // half blocks, and every row of a sprite over one carried a gradient-coloured seam
                 // along its bottom edge.
-                if (deferFrontImages && run.IsImage && run.Placement is { ZIndex: >= 0 })
+                if (deferFrontImages && (run.IsStrip || (run.IsImage && run.Placement is { ZIndex: >= 0 })))
                 {
                     _frontImageDraws.Add(new FrontImageDraw(run, startYPos, rowHeight));
                     continue;
@@ -648,7 +752,9 @@ namespace Iciclecreek.Terminal
                 if (run.Background is not null)
                     context.FillRectangle(run.Background, rect);
 
-                if (run.IsImage)
+                if (run.IsStrip)
+                    DrawStripRun(context, run, startYPos, rowHeight, scale);
+                else if (run.IsImage)
                     DrawImageRun(context, run, startYPos, rowHeight, scale);
                 else if (run.IsBlockArt)
                     DrawBlocks(context, run, startYPos, rowHeight, scale);
@@ -1415,6 +1521,14 @@ namespace Iciclecreek.Terminal
             }
 
             _imageBitmaps.Clear();
+
+            foreach (var entry in _stripBitmaps)
+            {
+                entry.Value.Bitmap?.Dispose();
+                entry.Value.Bitmap = null;
+            }
+
+            _stripBitmaps.Clear();
         }
 
         /// <summary>
@@ -1424,21 +1538,33 @@ namespace Iciclecreek.Terminal
         /// Separated from the caching so the upload itself can be asserted: the byte order and the stride
         /// handling are the two things here that fail silently, as a picture with its colours swapped or its
         /// rows sheared rather than as an error.
+        /// <para>Immutable, not a <see cref="WriteableBitmap"/>. A picture never changes once uploaded
+        /// -- an animation frame gets a new upload -- and on a GPU-backed surface Skia can keep an
+        /// immutable image's texture and reuse it, where a mutable bitmap's pixels may change at any
+        /// time, so it is copied and sent again on every draw. With a SixelBuffer app on screen that
+        /// is hundreds of pictures, drawn a row at a time, every frame.</para>
         /// </remarks>
-        internal static WriteableBitmap CreateBitmap(XT.Graphics.TerminalImage image)
+        internal static Bitmap CreateBitmap(XT.Graphics.TerminalImage image)
         {
-            var writeable = new WriteableBitmap(
-                new PixelSize(image.PixelWidth, image.PixelHeight),
-                new Vector(96, 96),
-                PixelFormat.Bgra8888,
-                AlphaFormat.Unpremul);
-
-            using (var locked = writeable.Lock())
+            int rowBytes = image.PixelWidth * 4;
+            var buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(rowBytes * image.PixelHeight);
+            try
             {
-                CopyPixels(image, locked.Address, locked.RowBytes);
-            }
+                CopyPixels(image, buffer, rowBytes);
 
-            return writeable;
+                // The constructor copies the pixels into the bitmap, so the buffer is ours to free.
+                return new Bitmap(
+                    PixelFormat.Bgra8888,
+                    AlphaFormat.Unpremul,
+                    buffer,
+                    new PixelSize(image.PixelWidth, image.PixelHeight),
+                    new Vector(96, 96),
+                    rowBytes);
+            }
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer);
+            }
         }
 
         /// <summary>
@@ -1888,6 +2014,16 @@ namespace Iciclecreek.Terminal
                                                           UnderlineStyle: dwUnderline, UnderlineBrush: dwBrush);
                             DrawUnderline(context, dwRun, position, Math.Max(0, endX - startX), rowHeight);
                         }
+                    }
+
+                    // The Sixel pixels, over the text and under the Kitty pictures in front of it, as
+                    // on an ordinary row -- and inside the transform, so they are doubled with it.
+                    // Only the columns a doubled row can show.
+                    if (line.Sixel is { } dwStrip)
+                    {
+                        var dwStripCols = Math.Min(dwStrip.PaintedColumns, Math.Min(line.Length, effectiveCols));
+                        if (dwStripCols > 0)
+                            dwScratch.Add(new CachedTextRun(null, 0, dwStripCols, null, Strip: dwStrip));
                     }
 
                     // And the ones in FRONT of the text, after it, so the layering means the same
