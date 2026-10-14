@@ -249,8 +249,9 @@ Two things are handled for you and are worth knowing about:
   `CSI 16 t` query. That is what applications use to size their images, so a picture lines up with the
   grid it was drawn for — including after a font change or a move to a display with different scaling.
 - A picture is uploaded once and re-blitted on every frame after that, not re-decoded; the upload is
-  released when the terminal drops the picture. With `UseSkiaRenderer` the upload is a GPU texture
-  made once per picture, so a screen full of pictures costs draws, not bandwidth.
+  released when the terminal drops the picture. Wherever Avalonia runs on Skia, the pictures in front
+  of the text are drawn by a small picture layer from GPU textures made once per picture, so a screen
+  full of pictures costs draws, not bandwidth. Text is always drawn through `DrawingContext`.
 
 Sixel is drawn as **one image per line**, however many Sixels landed on it. XTerm.NET keeps the pixels
 each line shows rather than every picture that painted them, so a program that repaints small regions
@@ -259,8 +260,8 @@ per row. The strip is drawn over the text and under any Kitty picture in front o
 again only when its pixels change.
 
 A Kitty picture is held as a run per line. Each run carries the source rectangle and the columns it
-covers, so a row of it is one draw; with `UseSkiaRenderer` the rows of one placement are gathered and
-the picture is drawn once, clipped to all of them. On a backend with no raster surface — Consolonia,
+covers; the picture layer gathers the rows of one placement and draws the picture once, clipped to
+them. On a backend with no raster surface — Consolonia,
 for instance — images are skipped and the text still renders.
 
 Pictures may overlap, and a row is drawn one run at a time from the back forwards, with the text
