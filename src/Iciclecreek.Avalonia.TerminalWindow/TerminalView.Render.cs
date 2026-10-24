@@ -1750,6 +1750,86 @@ namespace Iciclecreek.Terminal
                                 baselineOrigin: new Point(0, _baseline));
         }
 
+        /// <summary>
+        /// A glyph run drawing one cell's <paramref name="codePoint"/> from the font fallback would
+        /// pick, fitted to the cell; null when no font has it, which leaves it to FormattedText.
+        /// </summary>
+        /// <remarks>
+        /// <para>The same reasoning as <see cref="TryBuildGlyphRun"/>, applied to the one cell that
+        /// path declines: drawn through FormattedText, the cell got the fallback font's advance and
+        /// baseline instead of the grid's. Here it is positioned by the grid's baseline, its ink is
+        /// centred in the cell, and ink wider than the cell is drawn at a smaller size so it stays
+        /// inside it instead of running over the next one.</para>
+        /// <para>Fallback is the font chain first, in order, and then whatever the platform offers --
+        /// the order FormattedText searches in, so the glyph is the one it would have drawn.</para>
+        /// </remarks>
+        private GlyphRun? TryBuildFallbackGlyphRun(int codePoint, string text, FontStyle style, FontWeight weight)
+        {
+            // One glyph for one codepoint: a run that picked up anything more is the shaper's.
+            if (!GlyphRunFastPathEnabled || _charWidth <= 0 || text.Length != (codePoint > 0xFFFF ? 2 : 1))
+                return null;
+
+            var key = (codePoint, style, weight);
+            if (!_fallbackGlyphs.TryGetValue(key, out var fallback))
+                _fallbackGlyphs[key] = fallback = ResolveFallbackGlyph(codePoint, style, weight);
+            if (fallback is null)
+                return null;
+
+            // By the INK, not the advance. A symbol font's advance carries generous side bearings --
+            // U+23F5's is nearly two cells, its ink well under one -- and fitting the advance drew
+            // the glyph at half the size it needed to be.
+            var size = FontSize;
+            if (fallback.InkWidthEm * size > _charWidth)
+                size = _charWidth / fallback.InkWidthEm;
+
+            var offset = (_charWidth - fallback.InkWidthEm * size) / 2 - fallback.InkLeftEm * size;
+            var glyphs = new[] { new GlyphInfo(fallback.Glyph, 0, _charWidth, new Vector(offset, 0)) };
+            return new GlyphRun(fallback.Typeface, size, text.AsMemory(), glyphs,
+                                baselineOrigin: new Point(0, _baseline));
+        }
+
+        private FallbackGlyph? ResolveFallbackGlyph(int codePoint, FontStyle style, FontWeight weight)
+        {
+            try
+            {
+                foreach (var name in FontFamily.FamilyNames)
+                {
+                    if (FontManager.Current.TryGetGlyphTypeface(new Typeface(new FontFamily(name), style, weight), out var candidate)
+                        && Fallback(candidate) is { } found)
+                        return found;
+                }
+
+                if (FontManager.Current.TryMatchCharacter(codePoint, style, weight, FontStretch.Normal, FontFamily,
+                                                          CultureInfo.CurrentCulture, out var matched)
+                    && FontManager.Current.TryGetGlyphTypeface(matched, out var platform))
+                    return Fallback(platform);
+            }
+            catch
+            {
+                // As in GlyphTypefaceFor: a font the manager cannot open sends the cell to
+                // FormattedText, which is where it went before.
+            }
+            return null;
+
+            FallbackGlyph? Fallback(GlyphTypeface typeface)
+            {
+                if (!typeface.CharacterToGlyphMap.TryGetGlyph(codePoint, out var glyph) || glyph == 0)
+                    return null;
+
+                // The ink from the glyph's outline, measured once at a size of 1 em. GlyphMetrics
+                // is no help: its Width is the advance and its Height is 0.
+                var probe = new GlyphRun(typeface, 1, char.ConvertFromUtf32(codePoint).AsMemory(),
+                                         new[] { new GlyphInfo(glyph, 0, 0) }, baselineOrigin: new Point(0, 0));
+                if (probe.BuildGeometry() is { Bounds: { Width: > 0 } ink })
+                    return new FallbackGlyph(typeface, glyph, ink.X, ink.Width);
+
+                var em = (double)typeface.Metrics.DesignEmHeight;
+                return em > 0 && typeface.TryGetHorizontalGlyphAdvance(glyph, out var advance)
+                    ? new FallbackGlyph(typeface, glyph, 0, advance / em)
+                    : null;
+            }
+        }
+
         /// <summary>The glyph typeface for a style and weight, resolved once per font.</summary>
         private GlyphTypeface? GlyphTypefaceFor(FontStyle style, FontWeight weight)
         {

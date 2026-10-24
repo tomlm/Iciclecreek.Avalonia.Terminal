@@ -532,6 +532,48 @@ namespace Iciclecreek.Terminal
             => cell.ClusterId == 0 && BlockGlyphs.IsBlock(cell.CodePoint);
 
         /// <summary>
+        /// Whether a cell is one codepoint the primary font has no glyph for, so another font has to
+        /// draw it. Such a cell is a run of its own -- see <see cref="TryBuildFallbackGlyphRun"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Inside a longer run it cost the WHOLE run the fast path, and FormattedText then laid
+        /// the run out with each font's own advances: a fallback glyph wider than the cell pushed
+        /// every column after it to the right, and the fallback font's taller line moved the run's
+        /// baseline down. U+23F5 from Segoe UI Symbol is nearly two Consolas cells wide, and Claude
+        /// Code prints two of them in its status line.</para>
+        /// <para>A null map means there is no primary font to fall back FROM -- see
+        /// <see cref="PrimaryGlyphMap"/> -- so no run takes the fast path and nothing is gained by
+        /// splitting.</para>
+        /// </remarks>
+        private static bool NeedsFallback(BufferCell cell, global::Avalonia.Media.Fonts.Tables.Cmap.CharacterToGlyphMap? map)
+        {
+            if (cell.ClusterId != 0 || cell.CodePoint <= 0)
+                return false;
+            if (PrimaryGlyphProbe is { } probe)
+                return !probe(cell.CodePoint);
+            return map is not null && !(map.Value.TryGetGlyph(cell.CodePoint, out var glyph) && glyph != 0);
+        }
+
+        /// <summary>
+        /// The primary font's character map for a style and weight, or null when it cannot map the
+        /// "W" the cell grid is measured from.
+        /// </summary>
+        /// <remarks>
+        /// A font that has no W is not one the grid came from: the headless platform's stand-in maps
+        /// nothing at all, and taking it at its word put every cell in a run of its own.
+        /// </remarks>
+        private global::Avalonia.Media.Fonts.Tables.Cmap.CharacterToGlyphMap? PrimaryGlyphMap(FontStyle style, FontWeight weight)
+            => GlyphTypefaceFor(style, weight)?.CharacterToGlyphMap is { } map && map.TryGetGlyph('W', out var w) && w != 0
+                ? map
+                : null;
+
+        /// <summary>
+        /// Stands in for the primary font when deciding which cells fall back, for tests: the
+        /// headless platform's font maps nothing, so it can never exercise the split. Null in use.
+        /// </summary>
+        internal static Func<int, bool>? PrimaryGlyphProbe;
+
+        /// <summary>
         /// Whether runs may be drawn as pre-shaped glyphs rather than through FormattedText.
         /// </summary>
         /// <remarks>
@@ -562,6 +604,18 @@ namespace Iciclecreek.Terminal
 
         /// <summary>Glyph typefaces by style and weight, so the font manager is asked once each.</summary>
         private readonly Dictionary<(FontStyle Style, FontWeight Weight), GlyphTypeface?> _glyphTypefaces = new();
+
+        /// <summary>
+        /// The font and glyph that draw a codepoint the primary font lacks, by codepoint, style and
+        /// weight; null where no font has it. Cleared with <see cref="_glyphTypefaces"/>.
+        /// </summary>
+        private readonly Dictionary<(int CodePoint, FontStyle Style, FontWeight Weight), FallbackGlyph?> _fallbackGlyphs = new();
+
+        /// <summary>
+        /// A fallback glyph, with where its ink starts and how wide it is in em, so it can be sized
+        /// and centred against the cell.
+        /// </summary>
+        private sealed record FallbackGlyph(GlyphTypeface Typeface, ushort Glyph, double InkLeftEm, double InkWidthEm);
 
         /// <summary>
         /// The emulator's <c>DrawBoldTextInBrightColors</c>, snapshotted per frame beside the palette.
@@ -3659,6 +3713,7 @@ namespace Iciclecreek.Terminal
                 int cellCount = 0;
                 int runStartX = 0;
                 int[]? blocks = null;
+                bool fallbackRun = false;
                 var runHasBackdrop = CoveredByBackdrop(painted, x, x + Math.Max(1, cell.Width));
 
                 // Cells under a Sixel are drawn like any others, as xterm draws them: the picture goes
@@ -3704,6 +3759,12 @@ namespace Iciclecreek.Terminal
                     // Block characters get runs of their own, drawn as rectangles rather than shaped --
                     // see BlockGlyphs. A run is all one or all the other.
                     var blockRun = IsBlockCell(cell);
+
+                    // And a cell the primary font cannot draw gets a run of ONE -- see NeedsFallback.
+                    // Every cell of a run shares its attributes, so the run's first cell names the
+                    // typeface all of them would be drawn in.
+                    var primaryMap = blockRun ? null : PrimaryGlyphMap(cell.GetFontStyle(), cell.GetFontWeight());
+                    fallbackRun = !blockRun && NeedsFallback(cell, primaryMap);
                     var blockCodePoints = _runBlockCodePoints;
                     blockCodePoints.Clear();
                     while (x < line.Length && x < _terminal.Cols)
@@ -3727,7 +3788,8 @@ namespace Iciclecreek.Terminal
                             // negative-z picture behind them, not every same-style cell beside it.
                             || CoveredByBackdrop(painted, x, x + 1) != runHasBackdrop
                             || (hasSizedRuns && line.TryGetSizedRunAt(x, out _))
-                            || IsBlockCell(currentCell) != blockRun)
+                            || IsBlockCell(currentCell) != blockRun
+                            || (!blockRun && x > runStartX && (fallbackRun || NeedsFallback(currentCell, primaryMap))))
                             break;
 
                         if (blockRun)
@@ -3869,8 +3931,13 @@ namespace Iciclecreek.Terminal
                 {
                     // A run the ligature switch cares about must reach the shaper, which the
                     // fast path never does -- it maps characters to glyphs one for one.
-                    glyphs = td == null && !LigaturesWantShaping(text, style, weight)
-                        ? TryBuildGlyphRun(text, cellCount, style, weight) : null;
+                    if (td == null)
+                    {
+                        if (fallbackRun)
+                            glyphs = TryBuildFallbackGlyphRun(cell.CodePoint, text, style, weight);
+                        else if (!LigaturesWantShaping(text, style, weight))
+                            glyphs = TryBuildGlyphRun(text, cellCount, style, weight);
+                    }
                     if (glyphs is null)
                     {
                         var typeface = new Typeface(FontFamily, style, weight);
