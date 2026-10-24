@@ -1746,7 +1746,7 @@ namespace Iciclecreek.Terminal
                 glyphs[i] = new GlyphInfo(glyph, i, _charWidth, default);
             }
 
-            return new GlyphRun(glyphTypeface, FontSize, text.AsMemory(), glyphs,
+            return new GlyphRun(glyphTypeface, EffectiveFontSize, text.AsMemory(), glyphs,
                                 baselineOrigin: new Point(0, _baseline));
         }
 
@@ -1778,7 +1778,7 @@ namespace Iciclecreek.Terminal
             // By the INK, not the advance. A symbol font's advance carries generous side bearings --
             // U+23F5's is nearly two cells, its ink well under one -- and fitting the advance drew
             // the glyph at half the size it needed to be.
-            var size = FontSize;
+            var size = EffectiveFontSize;
             if (fallback.InkWidthEm * size > _charWidth)
                 size = _charWidth / fallback.InkWidthEm;
 
@@ -1976,7 +1976,7 @@ namespace Iciclecreek.Terminal
                     var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
                     var formatted = new FormattedText(
                         cell.Content, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-                        typeface, FontSize, foreground);
+                        typeface, EffectiveFontSize, foreground);
                     ApplyLigatureSetting(formatted);
 
                     // The glyph is drawn at base size under a scale transform, exactly as
@@ -2165,7 +2165,7 @@ namespace Iciclecreek.Terminal
                         foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
                         var typeface = new Typeface(FontFamily, cell.GetFontStyle(), cell.GetFontWeight());
-                        var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, FontSize, foreground);
+                        var formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, typeface, EffectiveFontSize, foreground);
                         ApplyLigatureSetting(formattedText);
                         var td = cell.GetTextDecorations();
                         if (td != null)
@@ -2397,7 +2397,7 @@ namespace Iciclecreek.Terminal
                                 CultureInfo.CurrentCulture,
                                 FlowDirection.LeftToRight,
                                 typeface,
-                                FontSize,
+                                EffectiveFontSize,
                                 invertedBrush);
                             context.DrawText(formattedText, new Point(posX, posY));
                         }
@@ -2480,7 +2480,7 @@ namespace Iciclecreek.Terminal
                 CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight,
                 typeface,
-                FontSize,
+                EffectiveFontSize,
                 foreground);
             ApplyLigatureSetting(formattedText);
 

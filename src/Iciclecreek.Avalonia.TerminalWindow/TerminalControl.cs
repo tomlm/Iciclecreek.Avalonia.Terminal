@@ -428,6 +428,41 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.MaxScrollback"/>
         public int MaxScrollback => _terminalView?.MaxScrollback ?? 0;
 
+        /// <inheritdoc cref="TerminalView.ScrollPageUp"/>
+        public void ScrollPageUp() => _terminalView?.ScrollPageUp();
+
+        /// <inheritdoc cref="TerminalView.ScrollPageDown"/>
+        public void ScrollPageDown() => _terminalView?.ScrollPageDown();
+
+        /// <inheritdoc cref="TerminalView.ScrollToTop"/>
+        public void ScrollToTop() => _terminalView?.ScrollToTop();
+
+        /// <inheritdoc cref="TerminalView.ScrollToBottom"/>
+        public void ScrollToBottom() => _terminalView?.ScrollToBottom();
+
+        /// <inheritdoc cref="TerminalView.Zoom"/>
+        /// <remarks>
+        /// Live view state, like <see cref="ViewportY"/>, so it forwards rather than being a styled property:
+        /// reads as 1.0 and ignores writes until the template has been applied.
+        /// </remarks>
+        public double Zoom
+        {
+            get => _terminalView?.Zoom ?? 1.0;
+            set { if (_terminalView != null) _terminalView.Zoom = value; }
+        }
+
+        /// <inheritdoc cref="TerminalView.ZoomIn"/>
+        public void ZoomIn() => _terminalView?.ZoomIn();
+
+        /// <inheritdoc cref="TerminalView.ZoomOut"/>
+        public void ZoomOut() => _terminalView?.ZoomOut();
+
+        /// <inheritdoc cref="TerminalView.ResetZoom"/>
+        public void ResetZoom() => _terminalView?.ResetZoom();
+
+        /// <inheritdoc cref="TerminalView.SelectInputAsync"/>
+        public Task<bool> SelectInputAsync() => _terminalView?.SelectInputAsync() ?? Task.FromResult(false);
+
         /// <summary>The number of lines visible in the viewport.</summary>
         public int ViewportLines => _terminalView?.ViewportLines ?? 0;
 

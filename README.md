@@ -113,6 +113,8 @@ public partial class MainWindow : Window
 | `ViewportY` | `int` | Live | Absolute line index of the top of the viewport. Settable, to drive your own scrollbar |
 | `MaxScrollback` | `int` | Read-only | Largest valid `ViewportY` — total buffer lines minus visible lines |
 | `ViewportLines` | `int` | Read-only | Number of lines visible |
+| `Zoom` | `double` | `1.0` | Multiplier on `FontSize`, 0.5–3.0. View state driven by the zoom shortcuts; `FontSize` itself is left alone so a host binding to it keeps working |
+| `ShortcutMode` | `ShortcutMode` | `Terminal` | Which convention the contested keys follow: `Terminal` (Ctrl+A/V/X belong to the program), `Desktop` (they select all, paste and cut) or `None` (no keyboard shortcuts at all). See [Keyboard shortcuts](#keyboard-shortcuts) |
 | `IsAlternateBuffer` | `bool` | Read-only | True while a full-screen application (vim, htop, less) is using the alternate screen buffer |
 | `IsLive` | `bool` | Read-only | True while a PTY is attached and its process has not exited |
 
@@ -126,6 +128,10 @@ public partial class MainWindow : Window
 | `SendInputAsync(string text, CancellationToken)` | Sends text to the running process as if typed. Sent verbatim, so append `\r` to submit a command: `SendInputAsync("ls -la\r")`. Does nothing when no process is running |
 | `CopyAsync()` | Copies the selection to the clipboard. Returns false when nothing was selected |
 | `PasteAsync()` | Pastes clipboard text into the terminal |
+| `SelectInputAsync()` | Selects the shell's editable input — what has been typed at the prompt. Returns false when there is none |
+| `ZoomIn()` / `ZoomOut()` / `ResetZoom()` | Step `Zoom` by a tenth, or put it back to 1.0 |
+| `ScrollPageUp()` / `ScrollPageDown()` | Move the viewport a screenful through the scrollback |
+| `ScrollToTop()` / `ScrollToBottom()` | Jump to the oldest line, or back to the live output |
 | `AttachConnection(IPtyConnection)` | Drives the terminal from a PTY the caller owns. Throws if the template has not been applied |
 | `DetachConnection()` | Stops following the current connection and hands it back, without stopping the process |
 | `WaitForExit(int ms)` | Waits for the terminal process to exit or for the specified timeout to elapse |
@@ -212,6 +218,38 @@ Window manipulation commands from the terminal (resize, move, minimize, maximize
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. If `CloseOnProcessExit` is `true`, the event is raised before the window closes. |
 
+
+### Keyboard shortcuts
+
+The view handles the standard terminal keyboard operations itself. The chords follow the platform's own
+terminals: the clipboard lives on Ctrl+Shift on Windows and Linux because plain Ctrl+C is SIGINT and plain
+Ctrl+V is readline's quoted-insert, and on Cmd on macOS, which no shell binds.
+
+| Action | Windows / Linux | macOS |
+|--------|-----------------|-------|
+| Copy | Ctrl+Shift+C, Ctrl+Insert (Ctrl+C too, when there is a selection) | Cmd+C, Ctrl+Shift+C |
+| Paste | Ctrl+Shift+V, Shift+Insert | Cmd+V, Ctrl+Shift+V |
+| Select the input | Ctrl+Shift+A | Cmd+A, Ctrl+Shift+A |
+| Zoom in / out / reset | Ctrl+Plus / Ctrl+Minus / Ctrl+0 | Cmd+Plus / Cmd+Minus / Cmd+0 |
+| Scroll a page | Shift+PgUp / Shift+PgDn | Cmd+PgUp / Cmd+PgDn |
+| Scroll to top / bottom | Ctrl+Shift+Home / Ctrl+Shift+End | Cmd+Home / Cmd+End |
+
+Shift+Home and Shift+End are not scroll keys here: with Shift+arrows they extend a keyboard selection
+from the cursor, as in a text field. Scrolling the scrollback is left to a full-screen application
+(vim, less) while it has the alternate screen, since there is nothing to scroll.
+
+`ShortcutMode.Desktop` adds the desktop map on Windows and Linux — Ctrl+A selects the input, Ctrl+V
+pastes and Ctrl+X cuts, with Ctrl+Shift carrying the control character each would otherwise have sent.
+`ShortcutMode.None` hands the whole keyboard to the program and turns every shortcut above off.
+
+The same table is published as Avalonia `KeyGesture`s on `TerminalKeyGestures`, so a host can show the
+chords in its menus and drive the same operations through `CopyAsync`, `PasteAsync`, `SelectInputAsync`,
+`ZoomIn`, `ScrollPageUp` and friends:
+
+```csharp
+var zoomIn = new MenuItem { Header = "Zoom _In", InputGesture = TerminalKeyGestures.ZoomIn[0] };
+zoomIn.Click += (_, _) => Terminal.ZoomIn();
+```
 
 ### Render frame rate
 

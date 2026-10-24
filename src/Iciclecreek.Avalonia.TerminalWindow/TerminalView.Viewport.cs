@@ -64,6 +64,82 @@ namespace Iciclecreek.Terminal
                 ViewportY = max;
         }
 
+        /// <summary>Scroll the scrollback up by one screenful. Clamped at the top.</summary>
+        /// <remarks>
+        /// What Shift+Page Up does (Cmd+Page Up on macOS); public so a host can put the same action on a
+        /// menu or a button. Nothing happens in the alternate buffer, which has no scrollback to show.
+        /// </remarks>
+        public void ScrollPageUp() => ScrollLines(-Math.Max(1, ViewportLines));
+
+        /// <summary>Scroll the scrollback down by one screenful. Clamped at the live output.</summary>
+        /// <remarks>What Shift+Page Down does (Cmd+Page Down on macOS).</remarks>
+        public void ScrollPageDown() => ScrollLines(Math.Max(1, ViewportLines));
+
+        /// <summary>Scroll to the oldest line in the scrollback.</summary>
+        /// <remarks>What Ctrl+Shift+Home does (Cmd+Home on macOS).</remarks>
+        public void ScrollToTop() => ScrollLines(int.MinValue);
+
+        /// <summary>
+        /// Scroll back to the live output. Unlike <see cref="FollowTail"/> this moves the view whether or not
+        /// <see cref="AutoScrollToBottom"/> is on: it is an explicit request, not a resumption.
+        /// </summary>
+        /// <remarks>What Ctrl+Shift+End does (Cmd+End on macOS).</remarks>
+        public void ScrollToBottom() => ScrollLines(int.MaxValue);
+
+        private void ScrollLines(int delta)
+        {
+            if (_terminal == null)
+                return;
+
+            // Saturating rather than overflowing, so the two edge-seekers can hand in the int extremes.
+            long target = (long)ViewportY + delta;
+            int clamped = (int)Math.Clamp(target, 0, Math.Max(0, MaxScrollback));
+            if (clamped != ViewportY)
+                ViewportY = clamped;
+        }
+
+        /// <summary>
+        /// A multiplier on <see cref="FontSize"/>: 1.0 draws at the configured size, 1.2 a fifth larger, and so
+        /// on. Clamped to 0.5–3.0. The grid re-measures and the process is told its new size, exactly as if
+        /// <see cref="FontSize"/> itself had changed.
+        /// </summary>
+        /// <remarks>
+        /// <para>Separate from <see cref="FontSize"/> on purpose. That property is configuration — usually
+        /// template-bound from a <see cref="TerminalControl"/> or a <see cref="TerminalWindow"/> — and a
+        /// keystroke that overwrote it would sever the binding, so the host's next change would never
+        /// arrive. Zoom is view state, like <see cref="ViewportY"/>: it sits on top of whatever the host
+        /// configured and goes back to 1.0 with <see cref="ResetZoom"/>.</para>
+        /// <para>What Ctrl+Plus, Ctrl+Minus and Ctrl+0 drive (Cmd on macOS); see
+        /// <see cref="TerminalKeyGestures"/>.</para>
+        /// </remarks>
+        public double Zoom
+        {
+            get => _zoom;
+            set
+            {
+                var clamped = double.IsNaN(value) ? 1.0 : Math.Clamp(value, MinZoom, MaxZoom);
+                SetAndRaise(ZoomProperty, ref _zoom, clamped);
+            }
+        }
+
+        private double _zoom = 1.0;
+
+        private const double MinZoom = 0.5;
+        private const double MaxZoom = 3.0;
+        private const double ZoomStep = 0.1;
+
+        /// <summary>The font size actually drawn and measured: <see cref="FontSize"/> × <see cref="Zoom"/>.</summary>
+        private double EffectiveFontSize => FontSize * _zoom;
+
+        /// <summary>Make the text a tenth of the configured size larger, up to three times it.</summary>
+        public void ZoomIn() => Zoom = Math.Round(Zoom + ZoomStep, 2);
+
+        /// <summary>Make the text a tenth of the configured size smaller, down to half of it.</summary>
+        public void ZoomOut() => Zoom = Math.Round(Zoom - ZoomStep, 2);
+
+        /// <summary>Back to the configured <see cref="FontSize"/>.</summary>
+        public void ResetZoom() => Zoom = 1.0;
+
         /// <summary>
         /// Searches the scrollback and highlights every match.
         /// </summary>
@@ -605,7 +681,7 @@ namespace Iciclecreek.Terminal
                 System.Globalization.CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight,
                 typeface,
-                FontSize,
+                EffectiveFontSize,
                 Brushes.Black);
 
             _charWidth = _measureText.Width;

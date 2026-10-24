@@ -530,6 +530,37 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.MaxScrollback"/>
         public int MaxScrollback => _terminalControl?.MaxScrollback ?? 0;
 
+        /// <inheritdoc cref="TerminalView.ScrollPageUp"/>
+        public void ScrollPageUp() => _terminalControl?.ScrollPageUp();
+
+        /// <inheritdoc cref="TerminalView.ScrollPageDown"/>
+        public void ScrollPageDown() => _terminalControl?.ScrollPageDown();
+
+        /// <inheritdoc cref="TerminalView.ScrollToTop"/>
+        public void ScrollToTop() => _terminalControl?.ScrollToTop();
+
+        /// <inheritdoc cref="TerminalView.ScrollToBottom"/>
+        public void ScrollToBottom() => _terminalControl?.ScrollToBottom();
+
+        /// <inheritdoc cref="TerminalControl.Zoom"/>
+        public double Zoom
+        {
+            get => _terminalControl?.Zoom ?? 1.0;
+            set { if (_terminalControl != null) _terminalControl.Zoom = value; }
+        }
+
+        /// <inheritdoc cref="TerminalView.ZoomIn"/>
+        public void ZoomIn() => _terminalControl?.ZoomIn();
+
+        /// <inheritdoc cref="TerminalView.ZoomOut"/>
+        public void ZoomOut() => _terminalControl?.ZoomOut();
+
+        /// <inheritdoc cref="TerminalView.ResetZoom"/>
+        public void ResetZoom() => _terminalControl?.ResetZoom();
+
+        /// <inheritdoc cref="TerminalView.SelectInputAsync"/>
+        public Task<bool> SelectInputAsync() => _terminalControl?.SelectInputAsync() ?? Task.FromResult(false);
+
         /// <inheritdoc cref="TerminalControl.ViewportLines"/>
         public int ViewportLines => _terminalControl?.ViewportLines ?? 0;
 

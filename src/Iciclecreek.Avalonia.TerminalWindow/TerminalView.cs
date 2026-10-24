@@ -649,6 +649,14 @@ namespace Iciclecreek.Terminal
                 o => o.ViewportY,
                 (o, v) => o.ViewportY = v);
 
+        /// <inheritdoc cref="Zoom"/>
+        public static readonly DirectProperty<TerminalView, double> ZoomProperty =
+            AvaloniaProperty.RegisterDirect<TerminalView, double>(
+                nameof(Zoom),
+                o => o.Zoom,
+                (o, v) => o.Zoom = v,
+                unsetValue: 1.0);
+
         public static readonly DirectProperty<TerminalView, int> MaxScrollbackProperty =
             AvaloniaProperty.RegisterDirect<TerminalView, int>(
                 nameof(MaxScrollback),
@@ -1327,6 +1335,7 @@ namespace Iciclecreek.Terminal
                 SelectionBrushProperty,
                 BufferSizeProperty,
                 ViewportYProperty,
+                ZoomProperty,
                 CursorColorProperty,
                 CursorStyleProperty,
                 CursorBlinkProperty,
@@ -1347,6 +1356,7 @@ namespace Iciclecreek.Terminal
                 GutterWidthProperty,
                 FontFamilyProperty,
                 FontSizeProperty,
+                ZoomProperty,
                 FontStyleProperty,
                 FontWeightProperty,
                 BufferSizeProperty);
@@ -2519,6 +2529,30 @@ namespace Iciclecreek.Terminal
         // Ctrl+Shift+C / Ctrl+Shift+V instead, because plain Ctrl+C is reserved for SIGINT.
         private static readonly bool IsMacOS = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
+        /// <summary>
+        /// The gestures that act on the view itself -- zoom and scrollback -- from
+        /// <see cref="TerminalKeyGestures"/>. True when one was taken. Synchronous, so the caller can
+        /// claim the event before anything awaits.
+        /// </summary>
+        private bool TryHandleViewGesture(KeyEventArgs e)
+        {
+            if (TerminalKeyGestures.ZoomIn.Matches(e)) { ZoomIn(); return true; }
+            if (TerminalKeyGestures.ZoomOut.Matches(e)) { ZoomOut(); return true; }
+            if (TerminalKeyGestures.ResetZoom.Matches(e)) { ResetZoom(); return true; }
+
+            // The alternate buffer has no scrollback, and a full-screen application may well bind these
+            // chords itself, so they are the program's there.
+            if (_terminal.IsAlternateBufferActive)
+                return false;
+
+            if (TerminalKeyGestures.ScrollPageUp.Matches(e)) { ScrollPageUp(); return true; }
+            if (TerminalKeyGestures.ScrollPageDown.Matches(e)) { ScrollPageDown(); return true; }
+            if (TerminalKeyGestures.ScrollToTop.Matches(e)) { ScrollToTop(); return true; }
+            if (TerminalKeyGestures.ScrollToBottom.Matches(e)) { ScrollToBottom(); return true; }
+
+            return false;
+        }
+
         protected override async void OnKeyDown(KeyEventArgs e)
         {
             // A TextInput belongs to the current stroke only. A previous non-text key may have
@@ -2551,11 +2585,17 @@ namespace Iciclecreek.Terminal
 
             if (_processExitHandled != 0)
             {
+                // Reading what a finished run printed is exactly when zoom and scrollback matter, so the
+                // view's own gestures outlive the process. Nothing here needs the PTY.
+                if (shortcuts && TryHandleViewGesture(e))
+                {
+                    e.Handled = true;
+                    return;
+                }
 
-                bool isCopy = shortcuts && e.Key == Key.C &&
-                              (e.KeyModifiers == KeyModifiers.Control ||
-                               e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift) ||
-                               (IsMacOS && e.KeyModifiers == KeyModifiers.Meta));
+                bool isCopy = shortcuts &&
+                              ((e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control) ||
+                               TerminalKeyGestures.Copy.Matches(e));
                 if (isCopy && _terminal.Selection.HasSelection)
                 {
                     e.Handled = true;
@@ -2574,6 +2614,26 @@ namespace Iciclecreek.Terminal
 
             try
             {
+                // Zoom and scrollback: the gestures that act on the VIEW rather than on the program's
+                // input. First, and before FollowTail below, which would otherwise undo a scroll-up on
+                // the same keystroke that asked for it. They leave the selection alone -- moving the
+                // view or resizing the text is not a reason to drop what the user picked out.
+                if (shortcuts && TryHandleViewGesture(e))
+                {
+                    e.Handled = true;
+                    return;
+                }
+
+                // Ctrl+Shift+A (and Cmd+A on macOS): the always-available select-all, uncontested the way
+                // Ctrl+Shift+C and Ctrl+Shift+V are. Plain Ctrl+A is readline's beginning-of-line and
+                // stays with the program unless the host chose ShortcutMode.Desktop below.
+                if (shortcuts && TerminalKeyGestures.SelectAll.Matches(e))
+                {
+                    e.Handled = true;
+                    await SelectInputAsync().ConfigureAwait(false);
+                    return;
+                }
+
                 // macOS clipboard shortcuts use the Command (Meta) key. These don't collide
                 // with terminal control codes (SIGINT is Ctrl+C, not Cmd+C), so we can handle
                 // them directly here. On Windows/Linux this block is skipped and the
@@ -2713,8 +2773,9 @@ namespace Iciclecreek.Terminal
                     // No selection - fall through to send Ctrl+C (SIGINT) to the process
                 }
 
-                // Handle Ctrl+Shift+C for copy (always copies, doesn't send SIGINT)
-                if (shortcuts && e.Key == Key.C && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                // Ctrl+Shift+C and Ctrl+Insert copy without ever being SIGINT. Without a selection they
+                // fall through, like every other key.
+                if (shortcuts && TerminalKeyGestures.Copy.Matches(e))
                 {
                     if (_terminal.Selection.HasSelection)
                     {
@@ -2788,10 +2849,10 @@ namespace Iciclecreek.Terminal
                     }
                 }
 
-                // Handle Ctrl+Shift+V for paste (standard terminal shortcut)
-                // Ctrl+V is NOT intercepted - it gets passed to the application
-                // (some apps use Ctrl+V for literal character input mode)
-                if (shortcuts && e.Key == Key.V && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                // Ctrl+Shift+V and Shift+Insert paste (the standard terminal chords). Ctrl+V is NOT
+                // intercepted here - it reaches the application, which may use it for literal character
+                // input - unless the host chose ShortcutMode.Desktop above.
+                if (shortcuts && TerminalKeyGestures.Paste.Matches(e))
                 {
                     e.Handled = true;
                     await PasteAsync();
@@ -3942,7 +4003,7 @@ namespace Iciclecreek.Terminal
                     {
                         var typeface = new Typeface(FontFamily, style, weight);
                         formattedText = new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-                                                          typeface, FontSize, foreground);
+                                                          typeface, EffectiveFontSize, foreground);
                         ApplyLigatureSetting(formattedText);
                         if (td != null)
                             formattedText.SetTextDecorations(td);

@@ -418,17 +418,20 @@ namespace Iciclecreek.Terminal
 
         /// <summary>
         /// Select the shell's editable input — what the user has typed — rather than the whole screen.
+        /// False when nothing has been typed, in which case any selection is cleared.
         /// </summary>
         /// <remarks>
         /// <para>Select-all at a prompt means the command being edited, not the scrollback and not the
         /// screenful of blanks around it. The emulator's own SelectAll takes the buffer, which is almost
         /// never what was wanted.</para>
+        /// <para>What Ctrl+Shift+A does (Cmd+A on macOS, and plain Ctrl+A in
+        /// <see cref="ShortcutMode.Desktop"/>); public so a host's Edit menu can offer the same thing.</para>
         /// <para>Recorded as a KEYBOARD selection so it can be replaced or cut like any other. That needs
         /// the anchor to be where the shell's cursor actually is, because the deletion is expressed as
         /// keystrokes from there — so the cursor is moved to the end of the input first, which is where a
         /// select-all leaves the caret in any editor anyway.</para>
         /// </remarks>
-        private async Task<bool> SelectInputAsync()
+        public async Task<bool> SelectInputAsync()
         {
             // Sample the prompt edge if it has not been sampled yet — pressing this before typing anything
             // is a perfectly ordinary thing to do, and the cursor is sitting on the answer.

@@ -43,7 +43,10 @@ namespace Iciclecreek.Terminal
 
         /// <summary>
         /// Handle nothing. Every one of these keys reaches the program untouched, including Ctrl+Shift+C
-        /// and Ctrl+Shift+V — so Ctrl+C is plain SIGINT and there is no keyboard copy or paste at all.
+        /// and Ctrl+Shift+V — so Ctrl+C is plain SIGINT and there is no keyboard copy or paste at all. The
+        /// zoom and scrollback gestures in <see cref="TerminalKeyGestures"/> are off too; the host can bind
+        /// its own keys to <see cref="TerminalView.ZoomIn"/>, <see cref="TerminalView.ScrollPageUp"/> and
+        /// friends.
         /// </summary>
         /// <remarks>
         /// For a host that wants to own the keyboard itself, or one embedding a program that binds these
