@@ -620,6 +620,7 @@ namespace Iciclecreek.Terminal
             // the font manager, and doing that per run per rebuild was measurable next to the draw
             // it precedes.
             _glyphTypefaces.Clear();
+            _fallbackGlyphs.Clear();
 
             PublishCellPixelSize();
         }
