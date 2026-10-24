@@ -341,7 +341,7 @@ public class StandardShortcutTests
 
     /// <summary>
     /// The alternate screen has no scrollback and a full-screen application may bind these chords itself, so
-    /// there they reach the program.
+    /// there the view does not claim them: they reach the program, or on macOS stay with the host.
     /// </summary>
     [AvaloniaTest]
     public async Task Scroll_gestures_belong_to_a_full_screen_application()
@@ -353,9 +353,20 @@ public class StandardShortcutTests
             Dispatcher.UIThread.RunJobs();
             Assert.That(view.IsAlternateBuffer, Is.True, "sanity");
 
-            Press(view, TerminalKeyGestures.ScrollPageUp[0]);
+            var e = Press(view, TerminalKeyGestures.ScrollPageUp[0]);
 
-            Assert.That(await PtyWaits.AwaitOutput(pty), Is.Not.Empty, "the chord went to the application");
+            // On macOS the chord is Cmd+Page Up, and a legacy Cmd chord is never encoded for the program:
+            // it is left unhandled for the host application, as Terminal.app leaves it. Not claiming it
+            // as a scroll is what standing aside means there.
+            if (OperatingSystem.IsMacOS())
+            {
+                Assert.That(e.Handled, Is.False, "the chord was left to the host, not claimed as a scroll");
+                Assert.That(pty.Written, Is.Empty);
+            }
+            else
+            {
+                Assert.That(await PtyWaits.AwaitOutput(pty), Is.Not.Empty, "the chord went to the application");
+            }
         }
         finally { window.Close(); }
     }
