@@ -191,7 +191,59 @@ public class BlockGlyphsTests
         Assert.That(dashes[2].X1, Is.EqualTo(24), "the dashes reach the cell edges so lines continue across cells");
     }
 
+    /// <summary>
+    /// The Powerline arrows are private-use, so a font without them fell back to an icon font with
+    /// something else at those codepoints: Consolas drew a small curl between oh-my-posh's segments.
+    /// </summary>
+    [Test]
+    public void Powerline_arrows_span_the_full_cell_height()
+    {
+        for (var cp = 0xE0B0; cp <= 0xE0B3; cp++)
+        {
+            Assert.That(BlockGlyphs.TryGet(cp, out var shapes), Is.True, $"U+{cp:X4}");
+            var points = shapes.Single().Points!;
+            var ys = points.Where((_, i) => i % 2 == 1).ToArray();
+            Assert.That(ys.Min(), Is.Zero, $"U+{cp:X4} reaches the top edge");
+            Assert.That(ys.Max(), Is.EqualTo(24), $"U+{cp:X4} reaches the bottom edge");
+        }
+
+        Assert.That(BlockGlyphs.TryGet(0xE0B0, out var right), Is.True);
+        Assert.That(right.Single().Points, Is.EqualTo(new byte[] { 0, 0, 24, 12, 0, 24 }),
+                    "flat against the left edge, pointing at the right edge's centre");
+        Assert.That(BlockGlyphs.TryGet(0xE0B2, out var left), Is.True);
+        Assert.That(left.Single().Points, Is.EqualTo(new byte[] { 24, 0, 0, 12, 24, 24 }));
+
+        Assert.That(BlockGlyphs.IsBlock(0xE0AF), Is.False);
+        Assert.That(BlockGlyphs.IsBlock(0xE0B4), Is.False, "the rounded separators are still drawn from the font");
+    }
+
     // ------------------------------------------------------------- the run split
+
+    /// <summary>The prompt from the issue: each arrow is its own run, drawn from the table.</summary>
+    [AvaloniaTest]
+    public void Powerline_arrows_in_a_prompt_are_drawn_from_the_table()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+        window.UpdateLayout();
+        try
+        {
+            var view = control.View();
+            view.Terminal.Write($"{Esc}[44m main {Esc}[34;42m{Esc}[30m dirty {Esc}[0;32m{Esc}[0m");
+
+            var group = new DrawingGroup();
+            using (var context = group.Open())
+                view.Render(context);
+
+            var runs = (List<TerminalView.CachedTextRun>)view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY]!.Cache!;
+            var arrows = runs.Where(r => r.IsBlockArt).ToList();
+
+            Assert.That(arrows.Select(r => r.StartX), Is.EqualTo(new[] { 6, 14 }));
+            Assert.That(arrows.All(r => r.Blocks!.SequenceEqual(new[] { 0xE0B0 })), Is.True);
+            Assert.That(arrows[0].Background, Is.Not.Null, "the first arrow sits on the green segment's fill");
+        }
+        finally { window.Close(); }
+    }
 
     [AvaloniaTest]
     public void Block_cells_get_a_run_of_their_own_drawn_from_the_table()

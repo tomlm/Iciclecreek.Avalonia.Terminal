@@ -4,7 +4,8 @@ using System.Collections.Generic;
 namespace Iciclecreek.Terminal
 {
     /// <summary>
-    /// The block characters drawn as rectangles and polygons rather than from the font.
+    /// The block characters, and the Powerline arrows, drawn as rectangles and polygons rather than
+    /// from the font.
     /// </summary>
     /// <remarks>
     /// <para>These characters exist to be tiled: half blocks, quadrants, sextants and the
@@ -42,10 +43,15 @@ namespace Iciclecreek.Terminal
         /// stay with the font. A line glyph from the font is drawn to the font's advance, not to the
         /// cell's whole device pixels, so it reaches a pixel past its cell: a picture that later
         /// replaces the cell is clipped to the cell and that pixel stays behind as a sliver.
+        /// <para>The four Powerline arrows (U+E0B0..E0B3) are in it too. They are private-use, so a
+        /// font without them falls back to whichever installed font puts something else at those
+        /// codepoints -- on Windows an icon font, which drew a small curl where the arrow should join
+        /// two coloured segments. Windows Terminal and xterm.js draw them themselves.</para>
         /// </remarks>
         public static bool IsBlock(int codePoint)
             => (codePoint >= 0x2580 && codePoint <= 0x259F) || (codePoint >= 0x1FB00 && codePoint <= 0x1FB8B)
-               || (codePoint >= 0x2500 && codePoint <= 0x257F && Shapes.ContainsKey(codePoint));
+               || (codePoint >= 0x2500 && codePoint <= 0x257F && Shapes.ContainsKey(codePoint))
+               || (codePoint >= 0xE0B0 && codePoint <= 0xE0B3);
 
         /// <summary>The rectangles that make up <paramref name="codePoint"/>, if it is a block character.</summary>
         public static bool TryGet(int codePoint, out Shape[] shapes)
@@ -186,7 +192,27 @@ namespace Iciclecreek.Terminal
                 map[0x1FB87 + i] = new[] { Columns(8 - upperEighths[i], 8) };
 
             BoxDrawing(map);
+            Powerline(map);
             return map;
+        }
+
+        /// <summary>
+        /// U+E0B0..E0B3, the Powerline arrows: a solid triangle pointing right and left, each spanning
+        /// the cell's full height so it meets the segments either side edge to edge, and the thin
+        /// chevrons of the same outline.
+        /// </summary>
+        /// <remarks>
+        /// A chevron is one concave polygon -- the triangle's two slanted sides with a copy of each
+        /// moved 2 units in from its open edge -- rather than two strokes, so the point where the arms
+        /// meet is filled once and not antialiased twice.
+        /// </remarks>
+        private static void Powerline(Dictionary<int, Shape[]> map)
+        {
+            static Shape[] Polygon(params byte[] points) => new[] { new Shape(0, 0, 0, 0, 1f, points) };
+            map[0xE0B0] = Polygon(0, 0, 24, 12, 0, 24);                       // right solid
+            map[0xE0B1] = Polygon(0, 0, 24, 12, 0, 24, 0, 22, 20, 12, 0, 2);  // right chevron
+            map[0xE0B2] = Polygon(24, 0, 0, 12, 24, 24);                      // left solid
+            map[0xE0B3] = Polygon(24, 0, 0, 12, 24, 24, 24, 22, 4, 12, 24, 2); // left chevron
         }
 
         // Arm weights of a box-drawing glyph.
