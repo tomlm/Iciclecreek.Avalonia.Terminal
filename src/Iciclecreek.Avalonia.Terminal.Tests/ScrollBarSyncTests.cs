@@ -162,4 +162,113 @@ public class ScrollBarSyncTests
             window.Close();
         }
     }
+
+    /// <summary>
+    /// Shrinking the rows with the cursor near the top scrolls nothing off the screen, so there is still no
+    /// scrollback and the bar must stay inert.
+    /// </summary>
+    /// <remarks>
+    /// XTerm.NET's resize keeps the buffer's lines and leaves the ones that no longer fit as blank lines
+    /// BELOW the screen. MaxScrollback used to be <c>Buffer.Length - Rows</c>, which counted those as
+    /// scrollback, so the bar showed a range of 12 the viewport could never move through (the emulator clamps
+    /// ViewportY to YBase): a solid thumb that ignored every drag.
+    /// </remarks>
+    [AvaloniaTest]
+    public void Shrinking_the_rows_with_nothing_scrolled_off_leaves_no_scrollback()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+
+        try
+        {
+            var view = control.View();
+            var cell = view.CharHeight;
+            Assume.That(cell, Is.GreaterThan(0), "needs measured cell metrics to size the grid");
+
+            control.Height = 24.5 * cell;
+            window.UpdateLayout();
+            Assume.That(view.Terminal.Rows, Is.EqualTo(24), "the grid should start at 24 rows");
+
+            control.Terminal.Write("prompt\r\n");
+            Assume.That(view.Terminal.Buffer.Y, Is.EqualTo(1), "the cursor should be on row 1");
+
+            control.Height = 12.5 * cell;
+            window.UpdateLayout();
+            Assume.That(view.Terminal.Rows, Is.EqualTo(12), "the grid should have shrunk to 12 rows");
+
+            var bar = ScrollBarOf(control);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(control.MaxScrollback, Is.EqualTo(0),
+                    $"nothing scrolled off the top. observed MaxScrollback={control.MaxScrollback} "
+                    + $"Buffer.Length={view.Terminal.Buffer.Length} YBase={view.Terminal.Buffer.YBase}");
+                Assert.That(bar.Maximum, Is.EqualTo(0), $"no range to offer. observed Maximum={bar.Maximum}");
+                Assert.That(bar.IsEnabled, Is.False, "and nothing to drag");
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// A re-grid moves YBase, so it has to tell a binding to MaxScrollback, not only the built-in scrollbar.
+    /// </summary>
+    /// <remarks>
+    /// The resize used to raise ViewportLines alone. The scrollbar re-reads MaxScrollback off that, so it
+    /// stayed right, but anything bound to MaxScrollback kept the old value until the next output arrived.
+    /// </remarks>
+    [AvaloniaTest]
+    public void Resizing_the_rows_raises_MaxScrollback_when_YBase_moves()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+
+        try
+        {
+            var view = control.View();
+            var cell = view.CharHeight;
+            Assume.That(cell, Is.GreaterThan(0), "needs measured cell metrics to size the grid");
+
+            control.Height = 24.5 * cell;
+            window.UpdateLayout();
+            Assume.That(view.Terminal.Rows, Is.EqualTo(24), "the grid should start at 24 rows");
+
+            // Cursor onto the bottom row, so a shrink has to push the rows above it into the scrollback.
+            for (var i = 0; i < 23; i++)
+                control.Terminal.Write($"line {i}\r\n");
+            Assume.That(view.MaxScrollback, Is.EqualTo(0), "nothing has scrolled off yet");
+
+            var raised = new List<int>();
+            view.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == TerminalView.MaxScrollbackProperty)
+                    raised.Add((int)e.NewValue!);
+            };
+
+            control.Height = 12.5 * cell;
+            window.UpdateLayout();
+            Assume.That(view.Terminal.Rows, Is.EqualTo(12), "the grid should have shrunk to 12 rows");
+            Assume.That(view.MaxScrollback, Is.GreaterThan(0), "the shrink should have moved rows into the scrollback");
+            var afterShrink = view.MaxScrollback;
+
+            Assert.That(raised, Is.EqualTo(new[] { afterShrink }),
+                $"a shrink that moved YBase to {afterShrink} should say so once, with the new value");
+
+            raised.Clear();
+            control.Height = 24.5 * cell;
+            window.UpdateLayout();
+            Assume.That(view.Terminal.Rows, Is.EqualTo(24), "the grid should have grown back to 24 rows");
+            Assume.That(view.MaxScrollback, Is.LessThan(afterShrink), "growing should pull scrollback back on screen");
+
+            Assert.That(raised, Is.EqualTo(new[] { view.MaxScrollback }),
+                $"a grow that moved YBase from {afterShrink} to {view.MaxScrollback} should say so too");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 }

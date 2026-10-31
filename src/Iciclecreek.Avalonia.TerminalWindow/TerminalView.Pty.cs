@@ -385,7 +385,9 @@ namespace Iciclecreek.Terminal
             {
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
+                    var oldMax = MaxScrollback;
                     _terminal.WriteLine($"Error launching process: {ex.Message}\n");
+                    RaiseMaxScrollbackChanged(oldMax, MaxScrollback);
                 });
             }
         }
@@ -441,9 +443,9 @@ namespace Iciclecreek.Terminal
 
         private bool ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
         {
-            // Snapshot before write so we can detect buffer growth (MaxScrollback
-            // increases when _terminal.Write adds lines; ScrollToBottom only moves
-            // ViewportY and does not affect buffer length).
+            // Snapshot before write so we can tell whether YBase moved (MaxScrollback is
+            // YBase: it grows as output scrolls lines off the top, and drops when the
+            // output erases the scrollback; ScrollToBottom only moves ViewportY).
             var oldMax = MaxScrollback;
             var oldY = _terminal.Buffer.ViewportY;
 

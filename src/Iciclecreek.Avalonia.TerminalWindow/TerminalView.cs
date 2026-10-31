@@ -1043,8 +1043,11 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void WriteOwnLine(string text)
         {
+            int oldMax, newMax;
+
             lock (_terminalLock)
             {
+                oldMax = MaxScrollback;
                 var oldY = _terminal.Buffer.ViewportY;
 
                 _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
@@ -1067,8 +1070,11 @@ namespace Iciclecreek.Terminal
                         _terminal.Buffer.ViewportY = Math.Min(oldY, MaxScrollback);
                     }
                 }
+
+                newMax = MaxScrollback;
             }
 
+            RaiseMaxScrollbackChanged(oldMax, newMax);
             RequestPaint();
         }
 
@@ -1685,19 +1691,35 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Maximum scroll position (total buffer lines - viewport lines).
+        /// Maximum scroll position: the number of lines above the screen (the buffer's <c>YBase</c>).
         /// This is the maximum value ViewportY can be.
         /// </summary>
-        public int MaxScrollback
+        /// <remarks>
+        /// Not <c>Buffer.Length - Rows</c>. The emulator clamps ViewportY to YBase, and a resize that shrinks
+        /// the row count can leave blank lines in the buffer BELOW the screen, which that subtraction counted
+        /// as scrollback. The scrollbar then offered a range it could never scroll through: a near-full thumb
+        /// pinned at the top of a terminal with nothing above the screen.
+        /// </remarks>
+        public int MaxScrollback => Math.Max(0, _terminal.Buffer.YBase);
+
+        /// <summary>
+        /// Raise <see cref="MaxScrollbackProperty"/> after a mutation outside the read loop moved YBase — a
+        /// re-grid, a cleared scrollback, one of the view's own lines. The read loop raises its own; these
+        /// paths used to raise nothing, so a binding to MaxScrollback went stale until the next output.
+        /// </summary>
+        /// <remarks>
+        /// Both values are read by the caller under <c>_terminalLock</c>. Posted when called off the UI
+        /// thread, because the view's own lines can be written from the pty reader's exit path.
+        /// </remarks>
+        private void RaiseMaxScrollbackChanged(int oldMax, int newMax)
         {
-            get
-            {
-                // Simple: total lines in buffer minus how many we can see
-                var totalLines = _terminal.Buffer.Length;
-                var viewportLines = _terminal.Rows;
-                var max = Math.Max(0, totalLines - viewportLines);
-                return max;
-            }
+            if (oldMax == newMax)
+                return;
+
+            if (Dispatcher.UIThread.CheckAccess())
+                RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax);
+            else
+                Dispatcher.UIThread.Post(() => RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax));
         }
 
         public int ViewportLines => _terminal.Rows;
@@ -1719,12 +1741,16 @@ namespace Iciclecreek.Terminal
         {
             if (_terminal == null) return;
 
+            int oldMax, newMax;
             lock (_terminalLock)
             {
+                oldMax = MaxScrollback;
                 Interlocked.Increment(ref _liveWriteGeneration);
                 _terminal.Write("\u001b[H\u001b[2J\u001b[3J");   // home · erase screen · erase scrollback
                 _terminal.Buffer.ScrollToBottom();
+                newMax = MaxScrollback;
             }
+            RaiseMaxScrollbackChanged(oldMax, newMax);
             RequestPaint();
         }
 
@@ -3698,8 +3724,13 @@ namespace Iciclecreek.Terminal
                     // moment -- one thread rewriting the lines another is appending to. Layout runs
                     // on the UI thread and output arrives on the reader thread, so the two meet
                     // whenever a window is resized while anything is printing.
+                    // A re-grid moves YBase: shrinking pushes rows above the cursor into the scrollback,
+                    // growing pulls scrollback back onto the screen.
+                    int oldMax, newMax;
                     lock (_terminalLock)
                     {
+                        oldMax = MaxScrollback;
+
                         // Marked as OURS for the duration. Terminal.Resize raises Resized
                         // synchronously, and OnTerminalResized answers a program's resize by asking
                         // the host for a new window size -- which is right for DECCOLM and wrong
@@ -3715,6 +3746,8 @@ namespace Iciclecreek.Terminal
                         {
                             _regridFromLayout = false;
                         }
+
+                        newMax = MaxScrollback;
                     }
 
                     // Outside it: this is a write to the pty, which has its own serialisation, and
@@ -3722,6 +3755,7 @@ namespace Iciclecreek.Terminal
                     // reader for no reason.
                     _ptyConnection?.Resize(newCols, newRows);
 
+                    RaiseMaxScrollbackChanged(oldMax, newMax);
                     RaisePropertyChanged(ViewportLinesProperty, default(int), ViewportLines);
                 }
             }
