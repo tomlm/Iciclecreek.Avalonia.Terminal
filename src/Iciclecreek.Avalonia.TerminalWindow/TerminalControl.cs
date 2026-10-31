@@ -96,6 +96,13 @@ namespace Iciclecreek.Terminal
                 nameof(Ligatures),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.FaintOpacityProperty"/>
+        public static readonly StyledProperty<double> FaintOpacityProperty =
+            AvaloniaProperty.Register<TerminalControl, double>(
+                nameof(FaintOpacity),
+                defaultValue: global::Iciclecreek.Avalonia.Terminal.BufferCellExtensions.DefaultFaintOpacity,
+                coerce: (_, value) => global::Iciclecreek.Avalonia.Terminal.BufferCellExtensions.CoerceFaintOpacity(value));
+
         /// <inheritdoc cref="TerminalView.ConvertEolProperty"/>
         public static readonly StyledProperty<bool> ConvertEolProperty =
             AvaloniaProperty.Register<TerminalControl, bool>(
@@ -373,6 +380,13 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(LigaturesProperty);
             set => SetValue(LigaturesProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.FaintOpacityProperty"/>
+        public double FaintOpacity
+        {
+            get => GetValue(FaintOpacityProperty);
+            set => SetValue(FaintOpacityProperty, value);
         }
 
         /// <inheritdoc cref="TerminalView.ConvertEolProperty"/>
