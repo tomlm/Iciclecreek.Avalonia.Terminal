@@ -88,6 +88,12 @@ namespace Iciclecreek.Terminal
                 nameof(UseAsyncIo),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.LaunchBeforeLoadedProperty"/>
+        public static readonly StyledProperty<bool> LaunchBeforeLoadedProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(LaunchBeforeLoaded),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
         public static readonly StyledProperty<IDictionary<string, string>?> EnvironmentVariablesProperty =
             AvaloniaProperty.Register<TerminalWindow, IDictionary<string, string>?>(
@@ -455,6 +461,13 @@ namespace Iciclecreek.Terminal
             set => SetValue(UseAsyncIoProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.LaunchBeforeLoadedProperty"/>
+        public bool LaunchBeforeLoaded
+        {
+            get => GetValue(LaunchBeforeLoadedProperty);
+            set => SetValue(LaunchBeforeLoadedProperty, value);
+        }
+
         /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
         public IDictionary<string, string>? EnvironmentVariables
         {
@@ -818,6 +831,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.AutoScrollToBottomProperty, this.GetObservable(AutoScrollToBottomProperty));
             _terminalControl.Bind(TerminalControl.VerbatimCommandLineProperty, this.GetObservable(VerbatimCommandLineProperty));
             _terminalControl.Bind(TerminalControl.UseAsyncIoProperty, this.GetObservable(UseAsyncIoProperty));
+            _terminalControl.Bind(TerminalControl.LaunchBeforeLoadedProperty, this.GetObservable(LaunchBeforeLoadedProperty));
             _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
