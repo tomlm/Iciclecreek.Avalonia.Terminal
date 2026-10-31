@@ -101,7 +101,11 @@ namespace Iciclecreek.Terminal
         // The pattern is deliberately permissive about trailing characters — `,` `;` `)` and friends are
         // legal inside a url but usually sentence punctuation at the end — so TrimUrlEnd() decides where
         // the url really stops.
-        private static readonly Regex UrlRegex = new(@"https?://[^\s<>""'`]+", RegexOptions.Compiled);
+        //
+        // Source-generated rather than RegexOptions.Compiled at runtime: the compiled form emits IL the
+        // first time the type is touched, and the first terminal of a run was paying for that.
+        [GeneratedRegex(@"https?://[^\s<>""'`]+", RegexOptions.Compiled)]
+        private static partial Regex UrlRegex { get; }
         private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
         private HoveredUrl? _hoveredLink;
         private Cursor? _savedCursor;
@@ -1168,6 +1172,43 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// <see langword="true"/> to spawn <see cref="Process"/> as soon as the view is initialised and has a
+        /// process to run, instead of waiting for <see cref="Control.Loaded"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Loaded comes after the first layout and render, so by default the shell is not even started
+        /// until the window has painted once -- and its whole startup is then added to the time to the first
+        /// prompt. Spawning early overlaps the two.</para>
+        /// <para>"Initialised" is Avalonia's: a view is initialised once it is attached to a logical root, and
+        /// a window's content or a control template's part is adopted during the first measure. The spawn
+        /// starts at the end of the <see cref="StyledElement.Initialized"/> event -- after the host's own
+        /// Initialized handlers, so properties they set do shape the launch -- which is still inside that
+        /// first layout pass, ahead of the view's own measure. That is the earliest point the emulator exists;
+        /// launching any earlier would mean building it outside initialisation. When <see cref="Process"/> is
+        /// set only after that, the launch is queued for the next dispatcher turn, which lands after the
+        /// layout pass under way.</para>
+        /// <para>The process starts at the emulator's current size, which before layout is the one it was
+        /// built with (<c>Options.Cols</c>/<c>Options.Rows</c>, 80x24 unless set). The first layout then
+        /// re-grids the emulator and resizes the pty, so the process gets SIGWINCH and the real size, exactly
+        /// as it would for a window resize.</para>
+        /// <para>Only before the first Loaded: from then on the ordinary launch-at-Loaded rule applies, and a
+        /// launch already in flight when Loaded arrives is not started a second time. A view that spawns this
+        /// way and is never shown still owns a live process, so it must be disposed.</para>
+        /// <para>Off by default, so a launch is exactly what it was.</para>
+        /// </remarks>
+        public static readonly StyledProperty<bool> LaunchBeforeLoadedProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(LaunchBeforeLoaded),
+                defaultValue: false);
+
+        /// <inheritdoc cref="LaunchBeforeLoadedProperty"/>
+        public bool LaunchBeforeLoaded
+        {
+            get => GetValue(LaunchBeforeLoadedProperty);
+            set => SetValue(LaunchBeforeLoadedProperty, value);
+        }
+
+        /// <summary>
         /// Extra environment variables for the launched process. Null (default) launches it with the host's
         /// environment unchanged.
         /// </summary>
@@ -1574,6 +1615,34 @@ namespace Iciclecreek.Terminal
 
             // Initialize IME client
             _inputMethodClient = new TerminalInputMethodClient(this);
+
+            // Usually where an opted-in launch starts -- but not from HERE. Avalonia raises Initialized
+            // straight after this method returns, and a host's Initialized handler is an ordinary place to
+            // set StartingDirectory, ProcessArgs or EnvironmentVariables; launching now would build the
+            // PtyOptions before it ran and silently start in the wrong directory with no arguments.
+            //
+            // A handler of our own, subscribed now, runs after every handler attached before initialisation
+            // -- XAML attaches its handlers between BeginInit and EndInit, code before the view is attached --
+            // and still in place rather than queued. That matters: a view that is a window's content, or a
+            // control template's part, is initialised from inside the FIRST MEASURE (that is when its
+            // presenter adopts it), and a posted launch was measured landing only after that layout pass had
+            // arranged the view -- waiting out the very pass this exists to overlap.
+            _launchAwaitsInitialized = true;
+            Initialized += LaunchAfterInitialized;
+        }
+
+        /// <summary>
+        /// True between OnInitialized and the end of the Initialized event, while
+        /// <see cref="LaunchAfterInitialized"/> is still to run. A launch-shaping property set by an
+        /// Initialized handler then leaves the launch to it rather than queueing one of its own.
+        /// </summary>
+        private bool _launchAwaitsInitialized;
+
+        private void LaunchAfterInitialized(object? sender, EventArgs e)
+        {
+            Initialized -= LaunchAfterInitialized;
+            _launchAwaitsInitialized = false;
+            QueueLaunchBeforeLoaded(immediately: true);
         }
 
         /// <summary>
@@ -2242,6 +2311,9 @@ namespace Iciclecreek.Terminal
             if (_terminal == null || _cursorBlinkTimer == null)
                 return;
 
+            if (change.Property == ProcessProperty || change.Property == LaunchBeforeLoadedProperty)
+                QueueLaunchBeforeLoaded();
+
             if (change.Property == ForegroundProperty || change.Property == BackgroundProperty)
             {
                 // Re-themed after the emulator was built, so the palette that answers OSC 10/11 has to move
@@ -2312,9 +2384,100 @@ namespace Iciclecreek.Terminal
             }
         }
 
+        /// <summary>Whether Loaded has ever fired; <see cref="LaunchBeforeLoaded"/> only applies before it.</summary>
+        private bool _hasLoaded;
+
+        /// <summary>
+        /// Set from the moment an early launch is queued until its LaunchProcess has returned. Covers the
+        /// window in which a spawn is running but no connection is installed yet, which is exactly when
+        /// OnLoaded would otherwise start a second process. UI thread only, like the properties feeding it.
+        /// </summary>
+        private bool _launchBeforeLoadedInFlight;
+
+        /// <summary>
+        /// Set once the in-flight early launch has actually called LaunchProcess, as opposed to sitting in
+        /// the dispatcher queue. See <see cref="EarlyLaunchIsCurrent"/>.
+        /// </summary>
+        private bool _launchBeforeLoadedStarted;
+
+        /// <summary>
+        /// Whether an early launch is in flight AND still the one that will give this view its process --
+        /// which is what OnLoaded has to know before it may stand aside.
+        /// </summary>
+        /// <remarks>
+        /// In flight is not enough. Detaching the view mid-spawn runs CleanupProcess, which clears
+        /// _processCts; the spawn then comes back, finds itself superseded and kills what it spawned. A
+        /// Loaded from re-attaching that deferred to it on the strength of the flag alone left a loaded
+        /// view with a Process and no connection. A started launch is current while _processCts is set: it
+        /// set it, and anything that replaced it since -- an attach, another launch -- is current in its
+        /// place and needs nothing from OnLoaded either. One still queued has not set it yet, and is current
+        /// by definition: when it runs it launches, whether Loaded has fired or not.
+        /// </remarks>
+        private bool EarlyLaunchIsCurrent =>
+            _launchBeforeLoadedInFlight && (!_launchBeforeLoadedStarted || _processCts != null);
+
+        /// <summary>
+        /// Queue the <see cref="LaunchBeforeLoaded"/> spawn if everything it needs is in place.
+        /// </summary>
+        /// <remarks>
+        /// From a property change it is posted rather than run in place: the properties that shape the
+        /// launch -- StartingDirectory, ProcessArgs, EnvironmentVariables, UseAsyncIo -- may be the very next
+        /// lines of the same initialiser or template, and a queued launch reads them once they have landed.
+        /// The end of the Initialized event has no such lines left to wait for, and says so with
+        /// <paramref name="immediately"/>; a property set before then is left to it.
+        /// </remarks>
+        private void QueueLaunchBeforeLoaded(bool immediately = false)
+        {
+            if (!LaunchBeforeLoaded || _hasLoaded || _launchBeforeLoadedInFlight || _disposed)
+                return;
+
+            if (!immediately && _launchAwaitsInitialized)
+                return;
+
+            if (_ptyConnection != null || string.IsNullOrEmpty(Process))
+                return;
+
+            _launchBeforeLoadedInFlight = true;
+            if (immediately)
+                _ = LaunchBeforeLoadedAsync();
+            else
+                Dispatcher.UIThread.Post(() => _ = LaunchBeforeLoadedAsync());
+        }
+
+        private async Task LaunchBeforeLoadedAsync()
+        {
+            try
+            {
+                // Re-asked, since anything can have happened while this sat in the queue: a connection
+                // attached, the view disposed, the process cleared. NOT whether Loaded has fired meanwhile
+                // -- if it has, it saw this launch in flight and left the spawn to it.
+                if (_disposed || _ptyConnection != null || string.IsNullOrEmpty(Process))
+                    return;
+
+                _launchBeforeLoadedStarted = true;
+                await LaunchProcess();
+            }
+            catch (Exception ex)
+            {
+                // LaunchProcess reports its own failures into the terminal; this is the backstop for an
+                // async void-shaped call that must never take the dispatcher down with it.
+                Debug.WriteLine($"[{_instanceId}] Early launch failed: {ex.Message}");
+            }
+            finally
+            {
+                _launchBeforeLoadedInFlight = false;
+                _launchBeforeLoadedStarted = false;
+            }
+        }
+
         private async void OnLoaded(object? sender, RoutedEventArgs e)
         {
-            if (_ptyConnection == null && !string.IsNullOrEmpty(Process))
+            _hasLoaded = true;
+
+            // An early launch still waiting on its spawn has no connection to show for it yet, so the null
+            // check alone would start a second process beside it -- but only one that is still current; see
+            // EarlyLaunchIsCurrent for the one that is not.
+            if (_ptyConnection == null && !EarlyLaunchIsCurrent && !string.IsNullOrEmpty(Process))
             {
                 await LaunchProcess();
             }

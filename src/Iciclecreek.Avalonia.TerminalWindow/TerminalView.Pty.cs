@@ -284,9 +284,13 @@ namespace Iciclecreek.Terminal
             CleanupProcess();
             _externalConnection = false;   // this view owns what it spawns
 
+            // This launch's own source, so the code after the spawn can tell whether it is still the
+            // current launch or has been superseded while it was awaited.
+            var launchCts = new CancellationTokenSource();
+
             try
             {
-                _processCts = new CancellationTokenSource();
+                _processCts = launchCts;
                 // NOT reset here: the interlock is armed by InstallConnection, together with the connection
                 // itself. Arming it early opens a window in which the OUTGOING connection is still the live one
                 // AND the flag is clear, which is the same defect with the operands swapped.
@@ -352,8 +356,39 @@ namespace Iciclecreek.Terminal
                     options.CommandLine = ProcessArgs.ToArray();
                 }
 
-                var spawned = await PtyProvider.SpawnAsync(options, _processCts.Token);
+                var spawned = await (SpawnOverride ?? PtyProvider.SpawnAsync)(options, launchCts.Token);
+
+                // Superseded while the spawn was awaited -- disposed, detached from the tree, relaunched, or
+                // handed a connection to attach. Each of those ran CleanupProcess, which had no connection
+                // to kill yet because this one did not exist, so installing it now would orphan whatever
+                // replaced it, or leave a process running behind a view that is gone. An early launch
+                // (LaunchBeforeLoaded) makes the window wide enough to land in: a view can be disposed
+                // without ever having been shown.
+                if (_disposed || !ReferenceEquals(_processCts, launchCts))
+                {
+                    try
+                    {
+                        spawned.Kill();
+                        spawned.Dispose();
+                    }
+                    catch
+                    {
+                        // Ignore cleanup errors, as CleanupProcess does
+                    }
+                    return;
+                }
+
                 var spawnedSessionId = InstallConnection(spawned);
+
+                // The emulator can be re-gridded while the spawn is awaited -- for an early launch the first
+                // layout usually lands there -- and ArrangeOverride had no connection then to pass the size
+                // on to. Without this the process keeps the size it was spawned at while the screen shows
+                // another. Both run on the UI thread, so from here on ArrangeOverride sees the connection.
+                if (_terminal.Cols != options.Cols || _terminal.Rows != options.Rows)
+                {
+                    try { spawned.Resize(_terminal.Cols, _terminal.Rows); }
+                    catch (Exception ex) { Debug.WriteLine($"[{_instanceId}] Error resizing PTY: {ex.Message}"); }
+                }
 
                 // Subscribe to process exit event for reliable exit detection
                 spawned.ProcessExited += OnPtyProcessExited;
@@ -383,6 +418,11 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
+                // A launch that was superseded mid-spawn has nothing to report to: its cancellation is
+                // the supersession, and a disposed view's emulator is gone.
+                if (_disposed || !ReferenceEquals(_processCts, launchCts))
+                    return;
+
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     var oldMax = MaxScrollback;
@@ -391,6 +431,12 @@ namespace Iciclecreek.Terminal
                 });
             }
         }
+
+        /// <summary>
+        /// Test seam: replaces <see cref="PtyProvider.SpawnAsync"/> for this view's launches, so a test can
+        /// hold a spawn in flight and decide when, and with what, it completes.
+        /// </summary>
+        internal Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? SpawnOverride { get; set; }
 
         /// <summary>
         /// Launch the terminal process with the specified parameters, updating the Process, ProcessArgs, and StartingDirectory properties. 
