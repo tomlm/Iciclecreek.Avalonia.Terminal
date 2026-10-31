@@ -111,6 +111,13 @@ namespace Iciclecreek.Terminal
                 nameof(Ligatures),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.FaintOpacityProperty"/>
+        public static readonly StyledProperty<double> FaintOpacityProperty =
+            AvaloniaProperty.Register<TerminalWindow, double>(
+                nameof(FaintOpacity),
+                defaultValue: global::Iciclecreek.Avalonia.Terminal.BufferCellExtensions.DefaultFaintOpacity,
+                coerce: (_, value) => global::Iciclecreek.Avalonia.Terminal.BufferCellExtensions.CoerceFaintOpacity(value));
+
         /// <inheritdoc cref="TerminalView.ConvertEolProperty"/>
         public static readonly StyledProperty<bool> ConvertEolProperty =
             AvaloniaProperty.Register<TerminalWindow, bool>(
@@ -504,6 +511,13 @@ namespace Iciclecreek.Terminal
             set => SetValue(LigaturesProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.FaintOpacityProperty"/>
+        public double FaintOpacity
+        {
+            get => GetValue(FaintOpacityProperty);
+            set => SetValue(FaintOpacityProperty, value);
+        }
+
         /// <inheritdoc cref="TerminalView.ConvertEolProperty"/>
         public bool ConvertEol
         {
@@ -809,6 +823,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
             _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
+            _terminalControl.Bind(TerminalControl.FaintOpacityProperty, this.GetObservable(FaintOpacityProperty));
             _terminalControl.Bind(TerminalControl.ConvertEolProperty, this.GetObservable(ConvertEolProperty));
             _terminalControl.Bind(TerminalControl.AllowWindowOpsProperty, this.GetObservable(AllowWindowOpsProperty));
             _terminalControl.Bind(TerminalControl.CursorStyleProperty, this.GetObservable(CursorStyleProperty));
