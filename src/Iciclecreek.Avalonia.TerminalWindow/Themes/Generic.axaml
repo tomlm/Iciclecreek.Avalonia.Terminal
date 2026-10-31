@@ -57,6 +57,7 @@
                                        CursorColor="{TemplateBinding CursorColor}"
                                        BoldColor="{TemplateBinding BoldColor}"
                                        Ligatures="{TemplateBinding Ligatures}"
+                                       FaintOpacity="{TemplateBinding FaintOpacity}"
                                        ConvertEol="{TemplateBinding ConvertEol}"
                                        AllowWindowOps="{TemplateBinding AllowWindowOps}"
                                        CursorStyle="{TemplateBinding CursorStyle}"
