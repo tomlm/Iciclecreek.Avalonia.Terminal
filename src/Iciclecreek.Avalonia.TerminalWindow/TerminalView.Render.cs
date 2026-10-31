@@ -318,6 +318,7 @@ namespace Iciclecreek.Terminal
             // ordinary settable option, so a program or a host can move it between frames, and half a
             // screen drawn under each rule would be worse than either.
             _boldIsBright = _terminal.Options.DrawBoldTextInBrightColors;
+            _faintOpacity = FaintOpacity;
 
             // Same discipline for the contrast floor: one ratio for the whole frame. The snapshot
             // also owns the (fg, bg) -> adjusted cache, cleared when the ratio moves.
@@ -1929,7 +1930,7 @@ namespace Iciclecreek.Terminal
                         Math.Max(0, boxRight - boxX), draw.RowHeight * run.Rows);
 
                     var background = cell.GetBackgroundBrush(_palette, this.Background);
-                    var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
+                    var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright, faintOpacity: 1.0);
                     // The same swap ladder the normal run path applies: inverse, DECSCNM, blink.
                     bool swapped = false;
                     if (cell.Attributes.IsInverse())
@@ -1955,6 +1956,8 @@ namespace Iciclecreek.Terminal
 
                     // And here, the third place a cell's text is drawn. OSC 66 blocks shape their
                     // own runs too.
+                    // Faint after the swaps too: it dims the glyph, never the fill. See ApplyFaint.
+                    foreground = cell.ApplyFaint(foreground, _faintOpacity);
                     foreground = cell.ApplyConceal(foreground);
                     foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
@@ -2132,7 +2135,7 @@ namespace Iciclecreek.Terminal
                         var endX = Snap((runStartX + cellCount) * _charWidth, scale);
                         var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                         var background = cell.GetBackgroundBrush(_palette, this.Background);
-                        var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
+                        var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright, faintOpacity: 1.0);
                         // Apply cell-level inverse attribute
                         bool swapped = false;
                         if (cell.Attributes.IsInverse())
@@ -2161,6 +2164,8 @@ namespace Iciclecreek.Terminal
                         // text rather than going through the run path, so conceal has to be applied
                         // here too -- otherwise a concealed password shows in full on any line a
                         // program happened to double.
+                        // Faint after the swaps too: it dims the glyph, never the fill. See ApplyFaint.
+                        foreground = cell.ApplyFaint(foreground, _faintOpacity);
                         foreground = cell.ApplyConceal(foreground);
                         foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
