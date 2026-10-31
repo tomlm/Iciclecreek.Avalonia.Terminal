@@ -627,6 +627,10 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private bool _boldIsBright = true;
 
+        // FaintOpacity, snapshotted per frame beside _boldIsBright so every dim run in a frame is drawn
+        // at one strength, and so the per-run path reads a field rather than a styled property.
+        private double _faintOpacity = BufferCellExtensions.DefaultFaintOpacity;
+
         // The MinimumContrastRatio enforcer, with its (fg, bg) -> adjusted cache. The option is
         // snapshotted into it once per frame beside _boldIsBright; at the default ratio of 1 the
         // per-run call below short-circuits and rendering is byte-identical to before it existed.
@@ -781,6 +785,30 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(LigaturesProperty);
             set => SetValue(LigaturesProperty, value);
+        }
+
+        /// <summary>
+        /// How much of a faint (SGR 2) cell's foreground survives, from 0 (invisible) to 1 (not dimmed).
+        /// Defaults to 0.4, which is what this control has always drawn.
+        /// </summary>
+        /// <remarks>
+        /// <para>Applied as the foreground brush's opacity, so faint text composites over whatever is
+        /// behind it rather than being mixed toward a guessed background colour.</para>
+        /// <para>Coerced to [0, 1], the range Ghostty clamps its <c>faint-opacity</c> to; NaN falls back
+        /// to the default. Live: a change repaints and drops the cached runs that baked in the old
+        /// strength.</para>
+        /// </remarks>
+        public static readonly StyledProperty<double> FaintOpacityProperty =
+            AvaloniaProperty.Register<TerminalView, double>(
+                nameof(FaintOpacity),
+                defaultValue: BufferCellExtensions.DefaultFaintOpacity,
+                coerce: (_, value) => BufferCellExtensions.CoerceFaintOpacity(value));
+
+        /// <inheritdoc cref="FaintOpacityProperty"/>
+        public double FaintOpacity
+        {
+            get => GetValue(FaintOpacityProperty);
+            set => SetValue(FaintOpacityProperty, value);
         }
 
         /// <summary>
@@ -1371,6 +1399,7 @@ namespace Iciclecreek.Terminal
                 CursorStyleProperty,
                 CursorBlinkProperty,
                 SuppressCursorProperty,   // toggling it must repaint immediately
+                FaintOpacityProperty,
                 // The gutter: a brush change must repaint the marks, and a width change moves the
                 // whole grid sideways -- it affects measure below as well, since columns come out
                 // of the width.
@@ -2236,7 +2265,7 @@ namespace Iciclecreek.Terminal
                 // it takes effect on the next one rather than needing a rebuild.
                 _terminal.Options.ConvertEol = (bool)change.NewValue!;
             }
-            else if (change.Property == LigaturesProperty)
+            else if (change.Property == LigaturesProperty || change.Property == FaintOpacityProperty)
             {
                 // Every line's cached runs were built with the old setting, and the cache is
                 // replayed rather than rebuilt — without the purge the switch would only reach
@@ -3987,7 +4016,7 @@ namespace Iciclecreek.Terminal
                     text = GraphemeRuns.AbsorbJoinedCells(line, _terminal.Cols, cell, text, ref x, ref cellCount);
 
                 var background = cell.GetBackgroundBrush(_palette, this.Background);
-                var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright);
+                var foreground = cell.GetForegroundBrush(_palette, this.Foreground, _boldIsBright, faintOpacity: 1.0);
                 // Apply cell-level inverse attribute
                 // Whether this run ends up drawn with the colours swapped. Once they are, the fill is no
                 // longer optional: the "background" being painted is the text colour.
@@ -4028,6 +4057,8 @@ namespace Iciclecreek.Terminal
                 //
                 // Applied AFTER the swaps above -- see ApplyConceal, where the ordering is the
                 // substance of it rather than a detail.
+                // Faint after the swaps too: it dims the glyph, never the fill. See ApplyFaint.
+                foreground = cell.ApplyFaint(foreground, _faintOpacity);
                 foreground = cell.ApplyConceal(foreground);
                 foreground = cell.ApplyBlinkPhase(foreground, this._cursorBlinkOn);
 
