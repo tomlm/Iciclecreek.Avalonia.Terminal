@@ -64,6 +64,7 @@
                                        CursorBlinkRate="{TemplateBinding CursorBlinkRate}"
                                        VerbatimCommandLine="{TemplateBinding VerbatimCommandLine}"
                                        UseAsyncIo="{TemplateBinding UseAsyncIo}"
+                                       LaunchBeforeLoaded="{TemplateBinding LaunchBeforeLoaded}"
                                        EnvironmentVariables="{TemplateBinding EnvironmentVariables}"
                                        Options="{TemplateBinding Options}"
                                        GutterWidth="{TemplateBinding GutterWidth}"
