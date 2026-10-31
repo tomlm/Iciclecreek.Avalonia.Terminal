@@ -84,6 +84,12 @@ namespace Iciclecreek.Terminal
                 nameof(UseAsyncIo),
                 defaultValue: false);
 
+        /// <inheritdoc cref="TerminalView.LaunchBeforeLoadedProperty"/>
+        public static readonly StyledProperty<bool> LaunchBeforeLoadedProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(LaunchBeforeLoaded),
+                defaultValue: false);
+
         /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
         public static readonly StyledProperty<IDictionary<string, string>?> EnvironmentVariablesProperty =
             AvaloniaProperty.Register<TerminalControl, IDictionary<string, string>?>(
@@ -765,6 +771,13 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(UseAsyncIoProperty);
             set => SetValue(UseAsyncIoProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.LaunchBeforeLoadedProperty"/>
+        public bool LaunchBeforeLoaded
+        {
+            get => GetValue(LaunchBeforeLoadedProperty);
+            set => SetValue(LaunchBeforeLoadedProperty, value);
         }
 
         /// <inheritdoc cref="TerminalView.EnvironmentVariablesProperty"/>
