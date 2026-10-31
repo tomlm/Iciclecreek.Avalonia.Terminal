@@ -70,7 +70,7 @@ namespace Iciclecreek.Avalonia.Terminal
         /// that set a gradient. The palette is RGB, so such a brush cannot round-trip through it.
         /// </param>
         /// <remarks>
-        /// <para>The mirror of <see cref="GetForegroundBrush"/>, which it was not. The foreground
+        /// <para>The mirror of <see cref="GetForegroundBrush(BufferCell, ColorSnapshot, IBrush, bool, double)"/>, which it was not. The foreground
         /// resolved a default to the emulator's palette and this resolved it to the CONTROL's brush,
         /// so OSC 10 reached the screen and OSC 11 did not.</para>
         /// <para>It shows up on inverse text, which is where a background becomes something that gets
@@ -124,7 +124,7 @@ namespace Iciclecreek.Avalonia.Terminal
         /// brightness. A default foreground is not a palette index and is left alone, which is also
         /// what xterm.js does.</para>
         /// <para>Dim is no longer applied here at all. It was applied twice — 0.6 on each channel
-        /// here and again as opacity in <see cref="GetForegroundBrush"/> — and never at all to text
+        /// here and again as opacity in <see cref="GetForegroundBrush(BufferCell, ColorSnapshot, IBrush, bool, double)"/> — and never at all to text
         /// using the default foreground, which returns before reaching this. Opacity is the one that
         /// survives, because it is the one that composites correctly over whatever is behind the
         /// text.</para>
@@ -153,14 +153,30 @@ namespace Iciclecreek.Avalonia.Terminal
         /// Used only when the terminal's default foreground cannot be expressed as one colour — a host that
         /// set a gradient. The palette is RGB, so such a brush cannot round-trip through it.
         /// </param>
+        /// <remarks>
+        /// Behaves as it always has: a dim cell comes back at <see cref="DefaultFaintOpacity"/>. That is
+        /// right only for text that is never swapped. A renderer that honours inverse or DECSCNM should
+        /// resolve opaque (<c>faintOpacity: 1</c> on the other overload), swap, and then apply
+        /// <see cref="ApplyFaint"/> to whatever ends up as the foreground.
+        /// </remarks>
         public static IBrush GetForegroundBrush(this BufferCell cell, ColorSnapshot palette, IBrush defaultBrush,
                                                bool boldIsBright = true)
+            => cell.GetForegroundBrush(palette, defaultBrush, boldIsBright, DefaultFaintOpacity);
+
+        /// <inheritdoc cref="GetForegroundBrush(BufferCell, ColorSnapshot, IBrush, bool)"/>
+        /// <param name="faintOpacity">
+        /// How much of a dim (SGR 2) cell's foreground survives, clamped to [0, 1]. Pass 1 to resolve the
+        /// brush opaque and leave faint to <see cref="ApplyFaint"/> after any swap, which is what the
+        /// view's renderer does. Required, so this overload never competes with the one above.
+        /// </param>
+        public static IBrush GetForegroundBrush(this BufferCell cell, ColorSnapshot palette, IBrush defaultBrush,
+                                               bool boldIsBright, double faintOpacity)
         {
-            // The one place dim is applied. It used to be applied here AND as a 0.6 multiply on each
-            // channel while the colour was resolved, so dim coloured text was dimmed twice over --
-            // while dim text using the DEFAULT foreground fell straight past both, because the
-            // resolver returns before it reaches the multiply, and was not dimmed at all.
-            var dim = cell.Attributes.IsDim() ? DimOpacity : 1.0;
+            // Dim used to be applied here AND as a 0.6 multiply on each channel while the colour was
+            // resolved, so dim coloured text was dimmed twice over -- while dim text using the DEFAULT
+            // foreground fell straight past both, because the resolver returns before it reaches the
+            // multiply, and was not dimmed at all.
+            var dim = cell.Attributes.IsDim() ? CoerceFaintOpacity(faintOpacity) : 1.0;
 
             var fgColor = cell.GetForegroundColor(palette, boldIsBright);
             if (fgColor.HasValue)
@@ -182,14 +198,45 @@ namespace Iciclecreek.Avalonia.Terminal
         }
 
         /// <summary>
-        /// How much of a dim cell's foreground survives.
+        /// How much of a dim cell's foreground survives, unless the host says otherwise through
+        /// <c>TerminalView.FaintOpacity</c>.
         /// </summary>
         /// <remarks>
-        /// Kept at the value this host has always used rather than moved to xterm.js's 0.5. The bug
-        /// was that dim was applied twice to one kind of text and not at all to another; the strength
-        /// of a single application is a separate question and not one this change answers.
+        /// Kept at the value this host has always used rather than moved to xterm.js's (or Ghostty's)
+        /// 0.5. The bug was that dim was applied twice to one kind of text and not at all to another;
+        /// the strength of a single application is the host's call, which is what the property is for.
         /// </remarks>
-        private const double DimOpacity = 0.4;
+        public const double DefaultFaintOpacity = 0.4;
+
+        /// <summary>
+        /// Clamps a faint opacity to [0, 1]. NaN is not a strength anyone asked for, so it falls back to
+        /// <see cref="DefaultFaintOpacity"/> rather than reaching a brush.
+        /// </summary>
+        internal static double CoerceFaintOpacity(double value)
+            => double.IsNaN(value) ? DefaultFaintOpacity : Math.Clamp(value, 0.0, 1.0);
+
+        /// <summary>
+        /// SGR 2 applied to a foreground that has already been through any inverse swap, in the same
+        /// slot as <see cref="ApplyConceal"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Faint dims the GLYPH, which is what Ghostty's <c>faint-opacity</c> and xterm.js both
+        /// do. Baked into the foreground before the swap, it went with the brush to the other side: an
+        /// inverse faint cell got a dimmed fill under full-strength text, and at opacity 0 the cell
+        /// drew nothing at all.</para>
+        /// <para>Multiplies rather than replaces, so a foreground that was already translucent -- a
+        /// swapped host background carrying alpha -- keeps what it had. A non-solid brush is returned
+        /// unchanged, for the reason <see cref="GetForegroundBrush(BufferCell, ColorSnapshot, IBrush, bool, double)"/>
+        /// gives.</para>
+        /// </remarks>
+        public static IBrush ApplyFaint(this BufferCell cell, IBrush swappedForeground, double faintOpacity)
+        {
+            if (!cell.Attributes.IsDim() || swappedForeground is not ISolidColorBrush solid)
+                return swappedForeground;
+
+            var opacity = CoerceFaintOpacity(faintOpacity);
+            return opacity >= 1.0 ? swappedForeground : Solid(solid.Color, solid.Opacity * opacity);
+        }
 
         /// <summary>
         /// SGR 8 applied to a foreground that has already been through any inverse swap.
