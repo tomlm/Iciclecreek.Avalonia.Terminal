@@ -104,6 +104,46 @@ public class ColorResolutionTests
         finally { window.Close(); }
     }
 
+    // ------------------------------------------- 24-bit colours that collide with "default"
+    //
+    // The colour value and its mode share one packed int, so #000100 is the value 256 and #000101
+    // the value 257 -- the numbers that mean the default foreground and background under palette
+    // mode. In RGB mode they are colours like any other.
+
+    [AvaloniaTest]
+    public void A_24_bit_foreground_of_000100_is_not_the_default()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var (plain, palette) = FirstCell(view, $"{Esc}[38;2;0;1;0mX");
+            var (bold, _) = FirstCell(view, $"\r\n{Esc}[1;38;2;0;1;0mX");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(plain.GetForegroundColor(palette), Is.EqualTo(Color.FromRgb(0, 1, 0)));
+                Assert.That(bold.GetForegroundColor(palette), Is.EqualTo(Color.FromRgb(0, 1, 0)),
+                    "bold, with no bold colour set");
+                Assert.That(Of(plain.GetForegroundBrush(palette, Brushes.White)), Is.EqualTo(Color.FromRgb(0, 1, 0)));
+            });
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_24_bit_background_of_000101_is_painted()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var (cell, palette) = FirstCell(view, $"{Esc}[48;2;0;1;1mX");
+
+            Assert.That(cell.GetBackgroundColor(palette), Is.EqualTo(Color.FromRgb(0, 1, 1)),
+                "null would leave the cell unpainted, as if it used the default background");
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaTest]
     public void Bold_stays_in_the_dim_half_when_the_option_is_off()
     {
