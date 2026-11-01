@@ -851,6 +851,10 @@ namespace Iciclecreek.Terminal
                 var rect = new Rect(startX, startYPos, Math.Max(0, endX - startX), rowHeight);
                 var position = new Point(startX, startYPos);
 
+                // Glyphs go at the exact column, not the snapped one: snapping each run's origin moved every
+                // letter after a colour change, so text jittered when an application re-coloured part of a line.
+                var textPosition = new Point(run.StartX * _charWidth, startYPos);
+
                 // The background goes down first either way: a Sixel drawn with background select 1 leaves
                 // its unset pixels transparent, and the cell's own background is meant to show through them.
                 if (run.Background is not null)
@@ -863,9 +867,9 @@ namespace Iciclecreek.Terminal
                 else if (run.IsBlockArt)
                     DrawBlocks(context, run, startYPos, rowHeight, scale);
                 else if (run.Glyphs is not null)
-                    DrawGlyphs(context, run, position);
+                    DrawGlyphs(context, run, textPosition);
                 else if (run.Text is not null)
-                    context.DrawText(run.Text, position);
+                    context.DrawText(run.Text, textPosition);
 
                 if (run.UnderlineStyle != XT.Common.UnderlineStyle.None)
                     DrawUnderline(context, run, position, rect.Width, rowHeight);
