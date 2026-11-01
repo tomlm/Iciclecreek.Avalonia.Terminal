@@ -1,92 +1,99 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Porta.Pty;
 
 namespace Iciclecreek.Terminal
 {
     /// <summary>
-    /// Bytes a detached view's reader stole off a connection before its new owner attached.
+    /// What a connection's readers share across a handover: the right to read it, and the bytes a
+    /// reader took that it could no longer deliver.
     /// </summary>
     /// <remarks>
     /// <para>A blocking-mode reader cannot be stopped without closing the stream (issue #123), so a
-    /// detached view's read stays parked until the process next speaks — and that read takes the
-    /// chunk. If the connection's new owner has not attached yet, the chunk can be handed over
-    /// losslessly: it is by construction the earliest unread output, so the new owner consuming it
-    /// FIRST preserves stream order exactly.</para>
+    /// detached view's read stays parked until the process next speaks -- and that read takes the
+    /// chunk. The next owner's reader used to park its own read on the same descriptor beside it, and
+    /// whichever woke first took the chunk. When the stale one did after the new owner attached, the
+    /// chunk could not be handed over without risking reordering, and was dropped.</para>
     ///
-    /// <para>Once a new owner IS attached, its own reader races the stale one on the same
-    /// descriptor, and a stolen chunk delivered late would interleave out of order — splicing bytes
-    /// into the middle of whatever the new reader already consumed, which can land inside an escape
-    /// sequence. Reordered output corrupts; lost output merely gaps. So a chunk stolen after attach
-    /// is dropped, and this table narrows the loss window rather than pretending to close it.
-    /// Closing it fully is what <see cref="IPtyConnection.SupportsCancellableRead"/> is for.</para>
+    /// <para>The <see cref="Handover.Gate"/> takes the race away. A reader holds it across its read AND
+    /// across delivering or parking what it read, so only one read is ever outstanding on a connection
+    /// and the order readers pass through the gate IS stream order. A new owner's reader waits its turn
+    /// behind a stale one instead of racing it, and on getting the gate replays whatever was parked
+    /// before reading on. Parked bytes are therefore always the earliest undelivered output, whenever
+    /// the new owner attached, and delivering them first is exactly in order.</para>
     ///
     /// <para>Keyed weakly: a connection nobody re-attached dies with its parked bytes, which is the
-    /// right outcome — there is no one to deliver them to.</para>
+    /// right outcome -- there is no one to deliver them to. The same goes for a host that detaches and
+    /// then reads the connection itself rather than through a view: a stale blocking reader still takes
+    /// one chunk, which waits here for a view that never comes. A cancellable connection
+    /// (<see cref="IPtyConnection.SupportsCancellableRead"/>) never leaves a reader parked, but it can
+    /// still leave a chunk here: one already read when the detach landed, refused by the session check
+    /// on its way to the emulator.</para>
+    ///
+    /// <para>Deliberately not exposed to hosts. Taking the bytes is only safe once no reader can park
+    /// more behind them -- for a blocking connection that is not until the process next speaks -- so a
+    /// "take what is pending" call would hand a host an answer that can already be incomplete.</para>
     /// </remarks>
     internal static class PendingHandoverBytes
     {
-        private sealed class Box
+        internal sealed class Handover
         {
-            public byte[]? Bytes;
-            public bool OwnerAttached = true;   // the spawning view is the first owner
-        }
+            /// <summary>Held by whichever reader is reading this connection, from before its read until
+            /// what it read has been delivered or parked.</summary>
+            public readonly SemaphoreSlim Gate = new(1, 1);
 
-        private static readonly ConditionalWeakTable<IPtyConnection, Box> Boxes = new();
+            private byte[]? _bytes;
 
-        /// <summary>Marks the connection as ownerless; parked bytes become acceptable.</summary>
-        public static void NoteDetached(IPtyConnection connection)
-        {
-            var box = Boxes.GetOrCreateValue(connection);
-            lock (box)
+            /// <summary>Appends a chunk its reader could not deliver. Call holding <see cref="Gate"/>.</summary>
+            public void Park(ReadOnlySpan<byte> chunk)
             {
-                box.OwnerAttached = false;
-            }
-        }
-
-        /// <summary>
-        /// Parks a stolen chunk, but only while no new owner is attached.
-        /// </summary>
-        /// <returns>False when an owner already attached — the caller must drop the chunk, because
-        /// delivering it late risks reordering, which is worse than the gap.</returns>
-        public static bool TryPark(IPtyConnection connection, ReadOnlySpan<byte> chunk)
-        {
-            var box = Boxes.GetOrCreateValue(connection);
-            lock (box)
-            {
-                if (box.OwnerAttached)
-                    return false;
-
-                if (box.Bytes is null)
+                lock (this)
                 {
-                    box.Bytes = chunk.ToArray();
+                    _bytes = Join(_bytes, chunk);
                 }
-                else
-                {
-                    var joined = new byte[box.Bytes.Length + chunk.Length];
-                    box.Bytes.CopyTo(joined, 0);
-                    chunk.CopyTo(joined.AsSpan(box.Bytes.Length));
-                    box.Bytes = joined;
-                }
-
-                return true;
             }
-        }
 
-        /// <summary>
-        /// Claims parked bytes and marks the connection owned. The caller must consume what it gets
-        /// BEFORE starting its own reader, or the order guarantee that makes parking safe is gone.
-        /// </summary>
-        public static byte[]? ClaimOnAttach(IPtyConnection connection)
-        {
-            var box = Boxes.GetOrCreateValue(connection);
-            lock (box)
+            /// <summary>Puts back bytes a <see cref="Claim"/> took but could not deliver, ahead of
+            /// anything parked since -- they were read first.</summary>
+            public void Unclaim(byte[] bytes)
             {
-                box.OwnerAttached = true;
-                var bytes = box.Bytes;
-                box.Bytes = null;
-                return bytes;
+                lock (this)
+                {
+                    _bytes = _bytes is null ? bytes : Join(bytes, _bytes);
+                }
+            }
+
+            /// <summary>Takes everything parked. The caller must deliver it before reading on.</summary>
+            public byte[]? Claim()
+            {
+                // The common case -- nothing parked -- is a field read, not a lock, because the read
+                // loop asks before every read.
+                if (Volatile.Read(ref _bytes) is null)
+                    return null;
+
+                lock (this)
+                {
+                    var bytes = _bytes;
+                    _bytes = null;
+                    return bytes;
+                }
+            }
+
+            private static byte[] Join(byte[]? first, ReadOnlySpan<byte> second)
+            {
+                if (first is null)
+                    return second.ToArray();
+
+                var joined = new byte[first.Length + second.Length];
+                first.CopyTo(joined, 0);
+                second.CopyTo(joined.AsSpan(first.Length));
+                return joined;
             }
         }
+
+        private static readonly ConditionalWeakTable<IPtyConnection, Handover> Handovers = new();
+
+        public static Handover For(IPtyConnection connection) => Handovers.GetOrCreateValue(connection);
     }
 }
