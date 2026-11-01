@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
@@ -6,6 +7,8 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input.Platform;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -44,6 +47,36 @@ internal static class Program
 
         Console.WriteLine(failures == 0 ? "RESULT all passed" : $"RESULT {failures} failed");
         return failures == 0 ? 0 : 1;
+    }
+
+    private static string BufferText(TerminalControl control)
+    {
+        var text = new StringBuilder();
+        var buffer = control.Terminal.Buffer;
+        for (var i = 0; i < buffer.Length; i++)
+            text.AppendLine(buffer.Lines[i]?.TranslateToString(true));
+        return text.ToString();
+    }
+
+    // Red rather than merely "not black": the scrollbar and the cursor are in the frame whatever the text does.
+    private static int CountRedPixels(WriteableBitmap frame)
+    {
+        using var pixels = frame.Lock();
+        var (redOffset, blueOffset) = pixels.Format == PixelFormats.Rgba8888 ? (0, 2) : (2, 0);
+        var count = 0;
+        for (var y = 0; y < pixels.Size.Height; y++)
+        {
+            for (var x = 0; x < pixels.Size.Width; x++)
+            {
+                var at = (y * pixels.RowBytes) + (x * 4);
+                int r = Marshal.ReadByte(pixels.Address, at + redOffset);
+                int g = Marshal.ReadByte(pixels.Address, at + 1);
+                int b = Marshal.ReadByte(pixels.Address, at + blueOffset);
+                if (r >= 128 && r > g + 60 && r > b + 60)
+                    count++;
+            }
+        }
+        return count;
     }
 
     static async Task<int> RunAsync(bool hostInclude, bool desktop, int hold)
@@ -96,27 +129,44 @@ internal static class Program
                 throw new Exception("the process never reported exiting");
 
             await Task.Delay(100);
-            var text = new StringBuilder();
-            var buffer = control!.Terminal.Buffer;
-            for (var i = 0; i < buffer.Length; i++)
-                text.AppendLine(buffer.Lines[i]?.TranslateToString(true));
-            if (!text.ToString().Contains(marker))
-                throw new Exception("marker is not in the buffer: " + text.ToString().Trim());
+            var text = BufferText(control!);
+            if (!text.Contains(marker))
+                throw new Exception("marker is not in the buffer: " + text.Trim());
             return "marker found";
         });
 
         await Step("VT parsing and rendering", async () =>
         {
-            control!.Terminal.Write("\x1b[31mred\x1b[0m \x1b]0;title\x07 \x1b[?1049h alt \x1b[?1049l wide:\U0001F600 é\r\n");
+            // No emoji yet: a colour glyph has red in it, and this frame has to show that the SGR worked.
+            control!.Terminal.Write("\x1b[31mred\x1b[0m \x1b]0;title\x07 \x1b[?1049h alt \x1b[?1049l\r\n");
             await Task.Delay(100);
-            if (desktop)
-                return "written; rendering is judged by looking at the window";
 
-            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-            using var frame = window!.CaptureRenderedFrame();
-            if (frame is null)
-                throw new Exception("no frame");
-            return $"frame {frame.PixelSize}";
+            var text = BufferText(control);
+            if (!text.Contains("red"))
+                throw new Exception("written text is not in the buffer: " + text.Trim());
+            if (text.Contains("[31m") || text.Contains("[?1049") || text.Contains("title"))
+                throw new Exception("control sequences were printed instead of parsed: " + text.Trim());
+            if (text.Contains(" alt "))
+                throw new Exception("the alternate screen's text reached the normal buffer: " + text.Trim());
+
+            var red = -1;
+            if (!desktop)
+            {
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                using var frame = window!.CaptureRenderedFrame();
+                if (frame is null)
+                    throw new Exception("no frame");
+                red = CountRedPixels(frame);
+                if (red == 0)
+                    throw new Exception($"the {frame.PixelSize} frame has no red text in it");
+            }
+
+            control.Terminal.Write("wide:\U0001F600 e\u0301\r\n");
+            await Task.Delay(100);
+            if (!BufferText(control).Contains("wide:"))
+                throw new Exception("text after the wide characters' line is not in the buffer");
+
+            return desktop ? "parsed; rendering is judged by looking at the window" : $"{red} red pixels";
         });
 
         await Step("TerminalWindow can be created", () =>
@@ -154,12 +204,9 @@ internal static class Program
                 await shell.SendInputAsync($"echo typed-{marker}\r");
                 await Task.Delay(1000);
 
-                var text = new StringBuilder();
-                var buffer = shell.Terminal.Buffer;
-                for (var i = 0; i < buffer.Length; i++)
-                    text.AppendLine(buffer.Lines[i]?.TranslateToString(true));
-                if (!text.ToString().Contains($"typed-{marker}"))
-                    throw new Exception("input did not come back: " + text.ToString().Trim());
+                var text = BufferText(shell);
+                if (!text.Contains($"typed-{marker}"))
+                    throw new Exception("input did not come back: " + text.Trim());
                 return "echoed";
             });
 
