@@ -195,11 +195,11 @@ namespace Iciclecreek.Terminal
         {
             CancelSearchInFlight();
 
-            // Under the lock like FindInBuffer's, so the search ties itself to the buffer as it stands
-            // rather than mid-write.
-            XT.Search.BufferSearch search;
-            lock (_terminalLock)
-                search = _search ??= new XT.Search.BufferSearch(_terminal);
+            // NOT under the lock: taking it here would make the UI thread wait out whatever chunk the
+            // reader is writing. Nothing here needs it. The scan binds to the buffer in its first Next,
+            // which does hold the lock; the constructor only seeds a buffer and trim mark that Apply
+            // and Find each record afresh; and _search is only ever written on the UI thread.
+            var search = _search ??= new XT.Search.BufferSearch(_terminal);
 
             var inFlight = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _searchInFlight = inFlight;

@@ -174,6 +174,53 @@ public class FindInBufferAsyncTests
     }
 
     /// <summary>
+    /// The call does not take the terminal lock on the UI thread. If it did, a find box searching per
+    /// keystroke would wait out every chunk the reader is writing.
+    /// </summary>
+    /// <remarks>
+    /// The lock is held on another thread until a gate that only the UI thread opens, and only once
+    /// the call has returned. A call that waited for the lock could never open it, and the holder
+    /// would give up after its patience and say so.
+    /// </remarks>
+    [AvaloniaTest]
+    public async Task The_call_does_not_wait_for_the_terminal_lock()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write("needle one\r\nfine\r\nneedle two\r\n");
+
+            var terminalLock = typeof(TerminalView)
+                .GetField("_terminalLock", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(view)!;
+
+            var held = new ManualResetEventSlim(false);
+            var gate = new ManualResetEventSlim(false);
+            var holderGaveUp = false;
+            var holder = new Thread(() =>
+{
+                lock (terminalLock)
+                {
+                    held.Set();
+                    holderGaveUp = !gate.Wait(Patience);
+                }
+            }) { IsBackground = true };
+            holder.Start();
+            Assert.That(held.Wait(Patience), Is.True, "the holder never took the lock");
+
+            var search = view.FindInBufferAsync("needle");
+            var finishedWhileHeld = search.IsCompleted;
+            gate.Set();
+            holder.Join();
+
+            Assert.That(holderGaveUp, Is.False, "the call waited on the UI thread for the terminal lock");
+            Assert.That(finishedWhileHeld, Is.False, "the scan needs the lock, so it cannot have run yet");
+            Assert.That(await search, Is.EqualTo(2));
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
     /// The lock is let go between slices: the real read loop writes a chunk while the scan is parked
     /// there, and the UI thread takes the lock too. And the call itself returned before the scan was
     /// done, so the UI thread never waited for it.
