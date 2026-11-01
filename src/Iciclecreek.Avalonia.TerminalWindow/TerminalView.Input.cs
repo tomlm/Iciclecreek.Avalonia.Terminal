@@ -537,12 +537,13 @@ namespace Iciclecreek.Terminal
                 return;
             }
 
-            // A locked keyboard sends no releases either -- Win32 records are encoded here, not by the
-            // emulator. The key is no longer held whether or not its release was reported, or its
-            // next press after the lock lifts would be reported to Kitty as a repeat.
-            if (IsKeyboardLocked)
+            // A locked keyboard drops a release whose press it also dropped. A release whose press
+            // went out BEFORE the lock is let through: it finishes a keystroke the application already
+            // saw, not new input. That is KAM's ordinary use -- read a key, lock while acting on it --
+            // and dropping the release leaves the application believing the key is still held.
+            var key = (e.PhysicalKey, e.Key);
+            if (IsKeyboardLocked && !_keysHeld.Contains(key) && !_win32KeysDown.Contains(key))
             {
-                _keysHeld.Remove((e.PhysicalKey, e.Key));
                 _win32RecordSentForThisStroke = false;
                 return;
             }
@@ -567,6 +568,7 @@ namespace Iciclecreek.Terminal
 
                 if (useWin32Format)
                 {
+                    _win32KeysDown.Remove(key);
                     var sequence = GenerateWin32InputSequence(e, isKeyDown: false);
                     if (!string.IsNullOrEmpty(sequence))
                     {
@@ -638,6 +640,7 @@ namespace Iciclecreek.Terminal
             // A key held while focus moves away never sends its release here, and would otherwise
             // stay in the set for ever -- so the next real press of it would report as a repeat.
             _keysHeld.Clear();
+            _win32KeysDown.Clear();
 
             Debug.WriteLine($"[TerminalView] OnLostFocus");
 
@@ -872,7 +875,14 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            var sequence = _terminal.GenerateKittyKeyInput(ev, eventType);
+            // A release reaching here under a locked keyboard finishes a press that went out before the
+            // lock (OnKeyUp drops the rest). The emulator's generator answers null for everything while
+            // locked, so the release is encoded by the protocol table directly -- which is all that
+            // generator does for a release: it never falls back to legacy for one.
+            var sequence = eventType == XT.Input.KittyKeyboardEventType.Release && IsKeyboardLocked
+                ? XT.Input.KittyKeyboard.Evaluate(ev, _terminal.KittyKeyboardState.Flags, eventType,
+                                                  _terminal.Options.MacOptionIsMeta)
+                : _terminal.GenerateKittyKeyInput(ev, eventType);
 
             e.Handled = true;
 

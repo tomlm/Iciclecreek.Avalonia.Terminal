@@ -190,6 +190,177 @@ public class KeyboardLockTests
         finally { window.Close(); }
     }
 
+    // ------------------------------------- releases of keys pressed before the lock
+
+    [AvaloniaTest]
+    public async Task A_Kitty_release_finishes_a_press_sent_before_the_lock()
+    {
+        // KAM's ordinary use: the application reads a key, then locks while it acts on it. The release
+        // finishes a keystroke it already saw; dropping it leaves Enter held down as far as it knows.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[>15u");    // event types included, so releases are reported
+            Press(view, Key.Enter, p: PhysicalKey.Enter);
+            var pressed = (await PtyWaits.AwaitOutput(pty)).Length;
+            Lock(view);
+
+            Release(view, Key.Enter, p: PhysicalKey.Enter);
+
+            var release = (await PtyWaits.AwaitOutput(pty, pressed))[pressed..];
+            Assert.That(release, Is.EqualTo($"{Esc}[13;1:3u"), "got: " + Readable(release));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public async Task A_Win32_key_up_finishes_a_press_sent_before_the_lock()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?9001h");
+            Press(view, Key.A, symbol: "a", p: PhysicalKey.A);
+            var pressed = (await PtyWaits.AwaitOutput(pty)).Length;
+            Lock(view);
+
+            Release(view, Key.A, symbol: "a", p: PhysicalKey.A);
+
+            // VK_A is 65; the fourth field is bKeyDown, 0 for the release.
+            var release = (await PtyWaits.AwaitOutput(pty, pressed))[pressed..];
+            Assert.That(release, Does.Match($@"^\x1b\[65;\d+;\d+;0;\d+;\d+_$"), "got: " + Readable(release));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public async Task A_key_pressed_during_the_lock_sends_no_release_after_it()
+    {
+        // The other half: a press that was itself dropped has no release to finish, even once the lock
+        // has lifted by the time the key comes up -- and the next press is a press, not a repeat.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[>15u");
+            Lock(view);
+            Press(view, Key.A, symbol: "a", p: PhysicalKey.A);
+            Release(view, Key.A, symbol: "a", p: PhysicalKey.A);
+            Assert.That(await Quiet(pty), Is.Empty, "sanity: locked");
+
+            view.Terminal.Write($"{Esc}[2l");
+            Press(view, Key.B, symbol: "b", p: PhysicalKey.B);
+            var sent = await PtyWaits.AwaitOutput(pty);
+            Assert.That(sent, Does.Not.Contain(":2u"), "a fresh press, not a repeat: " + Readable(sent));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public async Task A_finished_Win32_keystroke_does_not_unlock_a_later_release()
+    {
+        // A key pressed and released before the lock is no longer down, so pressing it again during the
+        // lock is a new keystroke with nothing to finish.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write($"{Esc}[?9001h");
+            Press(view, Key.A, symbol: "a", p: PhysicalKey.A);
+            Release(view, Key.A, symbol: "a", p: PhysicalKey.A);
+            var before = await PtyWaits.AwaitOutput(pty);
+            Lock(view);
+
+            Press(view, Key.A, symbol: "a", p: PhysicalKey.A);
+            Release(view, Key.A, symbol: "a", p: PhysicalKey.A);
+
+            var after = await Quiet(pty);
+            Assert.That(after[before.Length..], Is.Empty, "got: " + Readable(after[before.Length..]));
+        }
+        finally { window.Close(); }
+    }
+
+    // ------------------------------------------------- state across the lock
+
+    [AvaloniaTest]
+    public async Task A_deletion_pending_when_the_lock_lands_is_not_sent_after_it()
+    {
+        // The lock flips on the reader thread, so it can land after a key-down took a selection's
+        // deletion and before the TextInput that would have sent it. Through raised events the key-down
+        // always sends its own deletion, so the in-between state is set directly: the question is only
+        // what the locked TextInput does with it.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            var pending = typeof(TerminalView).GetField("_pendingReplaceKeys",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.That(pending, Is.Not.Null, "_pendingReplaceKeys has been renamed; this test needs updating");
+            pending!.SetValue(view, "\x7f\x7f");
+            Lock(view);
+
+            TypeText(view, "x");
+            view.Terminal.Write($"{Esc}[2l");
+            TypeText(view, "は");    // an IME commit, which has no key-down to reassign the field
+
+            var sent = await PtyWaits.AwaitOutput(pty);
+            Assert.That(sent, Is.EqualTo("は"), "a stale deletion rode out with the commit: " + Readable(sent));
+        }
+        finally { window.Close(); }
+    }
+
+    // ------------------------------------------------------- keyboard selection
+
+    [AvaloniaTest]
+    public async Task Keyboard_selection_still_extends_while_locked()
+    {
+        // Shift+arrow only moves the selection on the view, so it is not the keyboard the lock is for.
+        var (view, pty, window) = LiveView();
+        try
+        {
+            view.Terminal.Write("echo hello world");
+            Lock(view);
+
+            KeyEventArgs last = null!;
+            for (var i = 0; i < 3; i++)
+                last = Press(view, Key.Left, KeyModifiers.Shift);
+
+            Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("rld"));
+            Assert.That(last.Handled, Is.True);
+            Assert.That(await Quiet(pty), Is.Empty);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public async Task A_locked_Cmd_X_is_left_to_the_host()
+    {
+        // CanCut is asked before the chord is claimed, so it has to agree with CutAsync, which refuses
+        // under the lock. Claimed and then not cut, Cmd+X is a swallowed chord. Under Win32 input mode,
+        // where the deletion is records this view encodes: the legacy Backspace comes from the emulator's
+        // gated generator, so CanCut would already be false there with or without its own check.
+        if (!OperatingSystem.IsMacOS())
+            Assert.Ignore("Cmd+X is the macOS cut chord; elsewhere the cut chords are Ctrl-based and the lock consumes them");
+
+        var (view, pty, window) = LiveView();
+        try
+        {
+            var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+            await clipboard.SetTextAsync("previous");
+            view.Terminal.Write("echo hello world");
+            view.Terminal.Write($"{Esc}[?9001h");
+            for (var i = 0; i < 5; i++)
+                Press(view, Key.Left, KeyModifiers.Shift);
+            Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("world"), "sanity");
+            Lock(view);
+
+            var cmdX = Press(view, Key.X, KeyModifiers.Meta, "x");
+
+            Assert.That(cmdX.Handled, Is.False, "nothing was cut, so the chord is not the terminal's to claim");
+            Assert.That(await Quiet(pty), Is.Empty);
+            Assert.That(await clipboard.TryGetTextAsync(), Is.EqualTo("previous"));
+            Assert.That(view.Terminal.Selection.GetSelectionText(), Is.EqualTo("world"));
+        }
+        finally { window.Close(); }
+    }
+
     // ----------------------------------------------------------------- paste
 
     [AvaloniaTest]
@@ -206,12 +377,17 @@ public class KeyboardLockTests
                 view.Terminal.Write($"{Esc}[?2004h");
             Lock(view);
 
+            // PasteAsync's own check: called directly, nothing in OnKeyDown stands in front of it.
             await view.PasteAsync();
-            Press(view, Key.V, KeyModifiers.Control | KeyModifiers.Shift, "V");   // the paste chord
+            var direct = await Quiet(pty);
+            Assert.That(direct, Is.Empty, "PasteAsync sent: " + Readable(direct));
+
+            // The standard chords are below the key handler's lock, which is what stops them.
+            Press(view, Key.V, KeyModifiers.Control | KeyModifiers.Shift, "V");
             Press(view, Key.Insert, KeyModifiers.Shift);
 
             var sent = await Quiet(pty);
-            Assert.That(sent, Is.Empty,"got: " + Readable(sent));
+            Assert.That(sent, Is.Empty, "the paste chords sent: " + Readable(sent));
         }
         finally { window.Close(); }
     }
