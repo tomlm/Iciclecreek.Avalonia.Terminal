@@ -141,6 +141,12 @@ namespace Iciclecreek.Terminal
                 nameof(CursorColor),
                 defaultValue: Colors.White);
 
+        /// <inheritdoc cref="TerminalView.BoldColorProperty"/>
+        public static readonly StyledProperty<Color?> BoldColorProperty =
+            AvaloniaProperty.Register<TerminalWindow, Color?>(
+                nameof(BoldColor),
+                defaultValue: null);
+
         public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalWindow, XTerm.Common.CursorStyle>(
                 nameof(CursorStyle),
@@ -508,6 +514,13 @@ namespace Iciclecreek.Terminal
             set => SetValue(CursorColorProperty, value);
         }
 
+        /// <inheritdoc cref="TerminalView.BoldColorProperty"/>
+        public Color? BoldColor
+        {
+            get => GetValue(BoldColorProperty);
+            set => SetValue(BoldColorProperty, value);
+        }
+
         /// <inheritdoc cref="TerminalView.CursorStyleProperty"/>
         /// <inheritdoc cref="TerminalView.LigaturesProperty"/>
         public bool Ligatures
@@ -827,6 +840,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.EnvironmentVariablesProperty, this.GetObservable(EnvironmentVariablesProperty));
             _terminalControl.Bind(TerminalControl.TextDecorationsProperty, this.GetObservable(TextDecorationsProperty));
             _terminalControl.Bind(TerminalControl.CursorColorProperty, this.GetObservable(CursorColorProperty));
+            _terminalControl.Bind(TerminalControl.BoldColorProperty, this.GetObservable(BoldColorProperty));
             _terminalControl.Bind(TerminalControl.LigaturesProperty, this.GetObservable(LigaturesProperty));
             _terminalControl.Bind(TerminalControl.FaintOpacityProperty, this.GetObservable(FaintOpacityProperty));
             _terminalControl.Bind(TerminalControl.ConvertEolProperty, this.GetObservable(ConvertEolProperty));

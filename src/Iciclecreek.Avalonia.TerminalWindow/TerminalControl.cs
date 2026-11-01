@@ -135,6 +135,12 @@ namespace Iciclecreek.Terminal
                 nameof(CursorColor),
                 defaultValue: Colors.White);
 
+        /// <inheritdoc cref="TerminalView.BoldColorProperty"/>
+        public static readonly StyledProperty<Color?> BoldColorProperty =
+            AvaloniaProperty.Register<TerminalControl, Color?>(
+                nameof(BoldColor),
+                defaultValue: null);
+
         public static readonly StyledProperty<XTerm.Common.CursorStyle> CursorStyleProperty =
             AvaloniaProperty.Register<TerminalControl, XTerm.Common.CursorStyle>(
                 nameof(CursorStyle),
@@ -378,6 +384,13 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(CursorColorProperty);
             set => SetValue(CursorColorProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.BoldColorProperty"/>
+        public Color? BoldColor
+        {
+            get => GetValue(BoldColorProperty);
+            set => SetValue(BoldColorProperty, value);
         }
 
         /// <inheritdoc cref="TerminalView.CursorStyleProperty"/>
