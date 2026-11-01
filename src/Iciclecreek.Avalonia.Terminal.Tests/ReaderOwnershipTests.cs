@@ -221,6 +221,75 @@ public class ReaderOwnershipTests
     }
 
     [AvaloniaTest]
+    public void A_detach_between_the_read_and_the_write_does_not_paint_into_the_detaching_view()
+    {
+        // The check after the read and the write it guards were two steps, and a detach could land
+        // between them: the loop had already decided the chunk was its own, so it painted it into the
+        // view that had just given the connection away -- and the new owner never saw it.
+        //
+        // Staged by holding the terminal lock, which the write needs. The reader takes the chunk, gets
+        // as far as the lock and waits there; the detach lands while it waits; then the lock is let go.
+        var (view1, pty, w1) = LiveTurnView();
+        var view2 = new TerminalView { Process = "" };
+        var w2 = new Window { Width = 800, Height = 600, Content = view2 };
+        w2.Show();
+        w2.UpdateLayout();
+        try
+        {
+            Await(() => pty.WaitingReads == 1);
+            Assert.That(pty.WaitingReads, Is.EqualTo(1), "sanity: the loop is parked in its read");
+
+            var terminalLock = typeof(TerminalView)
+                .GetField("_terminalLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(view1)!;
+
+            Monitor.Enter(terminalLock);
+            try
+            {
+                var turn = pty.Emit("RACED\r\n");
+
+                // Read has returned, and the reader is blocked -- on the lock, since nothing else
+                // between the read and the write waits. Held for a while before believing it, so a
+                // momentary wait elsewhere is not mistaken for it. Not pumped: the UI thread holds the
+                // lock, and running its jobs here would let them in under it.
+                var settled = System.Diagnostics.Stopwatch.StartNew();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (clock.Elapsed < Patience && settled.ElapsedMilliseconds < 100)
+                {
+                    if (!turn.Returned || (turn.Reader.ThreadState & ThreadState.WaitSleepJoin) == 0)
+                        settled.Restart();
+                    Thread.Sleep(5);
+                }
+                Assert.That(settled.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(100),
+                    "sanity: the reader took the chunk and is waiting for the lock");
+
+                view1.DetachConnection();
+            }
+            finally { Monitor.Exit(terminalLock); }
+
+            view2.AttachConnection(pty);
+            Await(() => Screen(view2).Contains("RACED"));
+
+            Assert.That(Screen(view1), Does.Not.Contain("RACED"),
+                "a chunk whose write had not started when the detach landed belongs to the new owner");
+            Assert.That(Screen(view2), Does.Contain("RACED"), "and reaches it");
+        }
+        finally { w1.Close(); w2.Close(); pty.Dispose(); }
+    }
+
+    private static (TerminalView view, TurnConnection pty, Window window) LiveTurnView()
+    {
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+
+        var pty = new TurnConnection();
+        view.AttachConnection(pty);
+        return (view, pty, window);
+    }
+
+    [AvaloniaTest]
     public void Input_queued_across_a_detach_is_not_typed_into_someone_elses_process()
     {
         // SendToPtyAsync captures the connection and then awaits a semaphore. A keystroke waiting

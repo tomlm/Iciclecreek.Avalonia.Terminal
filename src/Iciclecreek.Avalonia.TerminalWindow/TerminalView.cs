@@ -215,7 +215,7 @@ namespace Iciclecreek.Terminal
         private long _sessionCounter;
 
         /// <summary>Ceiling on waiting for an already-exited child to be reaped so its real exit
-        /// code is readable. See the EOF branch of <see cref="ReadPtyOutputAsync"/>.</summary>
+        /// code is readable. See <see cref="OnReadLoopEndOfStreamAsync"/>.</summary>
         private const int ExitReapGraceMs = 1000;
 
         /// <summary>How long the BACKGROUND wait keeps trying after the read loop's grace period expires.
@@ -1166,11 +1166,17 @@ namespace Iciclecreek.Terminal
         /// cancelled. Read at launch; a running process keeps the mode it was started in.
         /// </summary>
         /// <remarks>
-        /// <para>What this buys is a lossless <see cref="DetachConnection"/>. A blocking read cannot be
-        /// stopped without closing the stream being handed over, so the detached view's reader stays parked
-        /// in it, and when the process next speaks it takes that chunk. Before the new owner attaches the
-        /// chunk is parked and replayed; after, it is dropped -- see the KNOWN LIMITATION there. A cancellable
-        /// read is unparked by the detach itself, having consumed nothing.</para>
+        /// <para>What this buys is a <see cref="DetachConnection"/> that stops the reader. A blocking read
+        /// cannot be stopped without closing the stream being handed over, so the detached view's reader
+        /// stays parked in it -- a thread and a read buffer, though not the view -- and when the process
+        /// next speaks it takes that chunk, which is passed to the next view that attaches, ahead of
+        /// anything later. A cancellable read is unparked by the detach itself, having consumed nothing.
+        /// Either way nothing is lost or reordered between views.</para>
+        /// <para>It does not make a detach lossless for a host that goes on to read the connection itself
+        /// rather than through a view. A chunk the reader had already read when the detach landed is held
+        /// for the next view that attaches, not handed to the host -- see <see cref="DetachConnection"/>.
+        /// This narrows that window to a chunk mid-delivery at the moment of the detach; it does not close
+        /// it.</para>
         /// <para>Off by default, so a launch is exactly what it was. On Linux it needs kernel 5.3 or newer
         /// (pidfd_open); where the PTY layer cannot provide it, the launch fails and says so.</para>
         /// </remarks>
