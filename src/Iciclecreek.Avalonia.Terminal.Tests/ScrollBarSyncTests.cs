@@ -102,6 +102,133 @@ public class ScrollBarSyncTests
         }
     }
 
+    private static TerminalView ViewOf(TerminalControl control)
+        => control.GetVisualDescendants().OfType<TerminalView>().Single();
+
+    /// <summary>Every ViewportY change the view announces, as (old, new).</summary>
+    private static List<(int Old, int New)> RecordViewportY(TerminalView view)
+    {
+        var raised = new List<(int, int)>();
+        view.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == TerminalView.ViewportYProperty)
+                raised.Add(((int)e.OldValue!, (int)e.NewValue!));
+        };
+        return raised;
+    }
+
+    /// <summary>
+    /// ClearScreen moves the viewport itself. A host bound to ViewportY has to hear it, not wait for output.
+    /// </summary>
+    [AvaloniaTest]
+    public void Clearing_the_screen_announces_the_viewport_it_moved()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+
+        try
+        {
+            FillScrollback(control);
+            var view = ViewOf(control);
+            var bar = ScrollBarOf(control);
+            control.ViewportY = 7;
+            Assume.That(bar.Value, Is.EqualTo(7));
+            var raised = RecordViewportY(view);
+
+            view.ClearScreen();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(view.ViewportY, Is.EqualTo(0), "sanity: the scrollback is gone");
+                Assert.That(raised, Is.EqualTo(new[] { (7, 0) }));
+                Assert.That(bar.Value, Is.EqualTo(view.ViewportY));
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// The case where the thumb itself went stale: at the scrollback cap a line moves no YBase, so nothing
+    /// else tells the bar. The view is parked, so the trim moves its position instead. This line is written
+    /// off the UI thread, on the reader's exit path, so the notification has to get back onto it too.
+    /// </summary>
+    [AvaloniaTest]
+    public async Task The_exit_line_trimming_a_parked_view_moves_the_thumb()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+
+        try
+        {
+            var view = ViewOf(control);
+            view.Options!.Scrollback = 50;
+            FillScrollback(control);
+            var bar = ScrollBarOf(control);
+            control.ViewportY = 20;
+            var max = view.MaxScrollback;
+            Assume.That(max, Is.EqualTo(50), "needs a scrollback already at its cap");
+            var raised = RecordViewportY(view);
+
+            var connection = new PushConnection();
+            view.AttachConnection(connection);
+            connection.Done();
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (raised.Count == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(10);
+                global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(view.MaxScrollback, Is.EqualTo(max), "sanity: YBase did not move, so only ViewportY can tell the bar");
+                Assert.That(view.ViewportY, Is.LessThan(20), "sanity: the trim moved the parked view");
+                Assert.That(raised.Select(r => r.New), Does.Contain(view.ViewportY));
+                Assert.That(bar.Value, Is.EqualTo(view.ViewportY), $"observed Value={bar.Value}");
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>The launch error is one more of the view's own lines, and at the tail it carries the viewport along.</summary>
+    [AvaloniaTest]
+    public async Task A_launch_error_announces_the_viewport_it_moved()
+    {
+        var control = new TerminalControl { Process = "" };
+        var window = TerminalHost.Show(control);
+
+        try
+        {
+            FillScrollback(control);
+            var view = ViewOf(control);
+            var bar = ScrollBarOf(control);
+            control.ViewportY = control.MaxScrollback;
+            var before = view.ViewportY;
+            var raised = RecordViewportY(view);
+
+            view.SpawnOverride = (_, _) => throw new IOException("no such process");
+            await view.LaunchProcess();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(view.ViewportY, Is.GreaterThan(before), "sanity: the line scrolled the view");
+                Assert.That(raised, Is.EqualTo(new[] { (before, view.ViewportY) }));
+                Assert.That(bar.Value, Is.EqualTo(view.ViewportY));
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     /// <summary>As the buffer grows the range has to grow with it, or the thumb maps to the wrong lines.</summary>
     [AvaloniaTest]
     public void The_scrollbar_range_grows_with_the_buffer()

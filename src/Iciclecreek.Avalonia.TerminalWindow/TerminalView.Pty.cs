@@ -431,8 +431,10 @@ namespace Iciclecreek.Terminal
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     var oldMax = MaxScrollback;
+                    var oldY = _terminal.Buffer.ViewportY;
                     _terminal.WriteLine($"Error launching process: {ex.Message}\n");
                     RaiseMaxScrollbackChanged(oldMax, MaxScrollback);
+                    RaiseViewportYChanged(oldY, _terminal.Buffer.ViewportY);
                 });
             }
         }

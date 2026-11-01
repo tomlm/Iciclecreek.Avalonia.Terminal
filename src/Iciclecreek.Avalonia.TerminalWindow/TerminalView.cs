@@ -1092,12 +1092,12 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void WriteOwnLine(string text)
         {
-            int oldMax, newMax;
+            int oldMax, newMax, oldY, newY;
 
             lock (_terminalLock)
             {
                 oldMax = MaxScrollback;
-                var oldY = _terminal.Buffer.ViewportY;
+                oldY = _terminal.Buffer.ViewportY;
 
                 _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
 
@@ -1121,9 +1121,11 @@ namespace Iciclecreek.Terminal
                 }
 
                 newMax = MaxScrollback;
+                newY = _terminal.Buffer.ViewportY;
             }
 
             RaiseMaxScrollbackChanged(oldMax, newMax);
+            RaiseViewportYChanged(oldY, newY);
             RequestPaint();
         }
 
@@ -1835,14 +1837,26 @@ namespace Iciclecreek.Terminal
         /// thread, because the view's own lines can be written from the pty reader's exit path.
         /// </remarks>
         private void RaiseMaxScrollbackChanged(int oldMax, int newMax)
+            => RaiseScrollPositionChanged(MaxScrollbackProperty, oldMax, newMax);
+
+        /// <summary>
+        /// Raise <see cref="ViewportYProperty"/> after the same mutations, which can move the viewport
+        /// without moving YBase: a line written to a full scrollback trims a parked view's position instead.
+        /// The scrollbar's thumb follows this notification, so it stayed stale until the next output.
+        /// </summary>
+        /// <remarks>Read and posted as <see cref="RaiseMaxScrollbackChanged"/> is, and raised after it, the order the read loop uses.</remarks>
+        private void RaiseViewportYChanged(int oldY, int newY)
+            => RaiseScrollPositionChanged(ViewportYProperty, oldY, newY);
+
+        private void RaiseScrollPositionChanged(DirectProperty<TerminalView, int> property, int oldValue, int newValue)
         {
-            if (oldMax == newMax)
+            if (oldValue == newValue)
                 return;
 
             if (Dispatcher.UIThread.CheckAccess())
-                RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax);
+                RaisePropertyChanged(property, oldValue, newValue);
             else
-                Dispatcher.UIThread.Post(() => RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax));
+                Dispatcher.UIThread.Post(() => RaisePropertyChanged(property, oldValue, newValue));
         }
 
         public int ViewportLines => _terminal.Rows;
@@ -1864,16 +1878,19 @@ namespace Iciclecreek.Terminal
         {
             if (_terminal == null) return;
 
-            int oldMax, newMax;
+            int oldMax, newMax, oldY, newY;
             lock (_terminalLock)
             {
                 oldMax = MaxScrollback;
+                oldY = _terminal.Buffer.ViewportY;
                 Interlocked.Increment(ref _liveWriteGeneration);
                 _terminal.Write("\u001b[H\u001b[2J\u001b[3J");   // home · erase screen · erase scrollback
                 _terminal.Buffer.ScrollToBottom();
                 newMax = MaxScrollback;
+                newY = _terminal.Buffer.ViewportY;
             }
             RaiseMaxScrollbackChanged(oldMax, newMax);
+            RaiseViewportYChanged(oldY, newY);
             RequestPaint();
         }
 
