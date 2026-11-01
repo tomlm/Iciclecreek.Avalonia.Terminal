@@ -1170,9 +1170,13 @@ namespace Iciclecreek.Terminal
         /// cannot be stopped without closing the stream being handed over, so the detached view's reader
         /// stays parked in it -- a thread and a read buffer, though not the view -- and when the process
         /// next speaks it takes that chunk, which is passed to the next view that attaches, ahead of
-        /// anything later. A cancellable read is unparked by the detach itself, having consumed nothing, so
-        /// a host that goes on to read the connection itself rather than through a view sees every byte.
+        /// anything later. A cancellable read is unparked by the detach itself, having consumed nothing.
         /// Either way nothing is lost or reordered between views.</para>
+        /// <para>It does not make a detach lossless for a host that goes on to read the connection itself
+        /// rather than through a view. A chunk the reader had already read when the detach landed is held
+        /// for the next view that attaches, not handed to the host -- see <see cref="DetachConnection"/>.
+        /// This narrows that window to a chunk mid-delivery at the moment of the detach; it does not close
+        /// it.</para>
         /// <para>Off by default, so a launch is exactly what it was. On Linux it needs kernel 5.3 or newer
         /// (pidfd_open); where the PTY layer cannot provide it, the launch fails and says so.</para>
         /// </remarks>

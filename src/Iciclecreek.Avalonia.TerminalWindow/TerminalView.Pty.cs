@@ -202,9 +202,14 @@ namespace Iciclecreek.Terminal
         /// <see cref="UseAsyncIo"/> (or any connection whose <see cref="IPtyConnection.SupportsCancellableRead"/>
         /// is true) adds is that the reader stops HERE: in blocking mode it stays parked in its read until
         /// the process next speaks, costing a thread and a read buffer -- though no longer this view -- and
-        /// the chunk that wakes it is passed to the next view that attaches. A host that detaches and then
-        /// reads the connection itself, rather than through a view, never sees that chunk; use a
-        /// cancellable connection for that.</para>
+        /// the chunk that wakes it is passed to the next view that attaches.</para>
+        /// <para>"The next owner" means the next VIEW. Output already taken off the stream when the detach
+        /// lands -- read but not yet written here -- is held for the next view that attaches this
+        /// connection, and there is no way for a host to claim it instead. So a host that detaches and then
+        /// reads <see cref="IPtyConnection.ReaderStream"/> itself can miss that one chunk in either mode. A
+        /// cancellable connection only narrows the window to a chunk that is mid-delivery at the moment of
+        /// the detach (or one whose delivery outlasts this method's two-second wait for the reader); a
+        /// blocking one adds the chunk that wakes its parked reader, whenever the process next speaks.</para>
         /// </remarks>
         public IPtyConnection? DetachConnection()
         {
@@ -455,23 +460,6 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Runs one chunk of process output through everything a chunk gets: the sniffer event, the
-        /// emulator, scroll-follow, readiness, IME and the repaint.
-        /// </summary>
-        /// <remarks>
-        /// Extracted from the read loop so an ATTACH can replay bytes a detached reader parked
-        /// (<see cref="PendingHandoverBytes"/>) through the identical pipeline — a second,
-        /// almost-the-same delivery path would drift. <paramref name="shellReadyPosted"/> is the
-        /// loop's once-per-process latch; a replay passes true, because parked bytes are mid-session
-        /// output and must not re-announce readiness. <paramref name="cancellationToken"/> is the
-        /// loop's token, which the posted ShellReady callback compares against the CURRENT process's to
-        /// refuse stale delivery — a replay passes the current one.
-        /// <para>Returns false, having delivered nothing anywhere, when <paramref name="sessionId"/> is no
-        /// longer this view's session; the caller parks the chunk for the next owner. That is asked inside
-        /// <c>_terminalLock</c>, which cleanup holds while it clears the session, so a detach cannot land
-        /// between the answer and the write.</para>
-        /// </remarks>
-        /// <summary>
         /// Running totals for the read loop, for diagnostics: what came off the pty, how long waiting
         /// for the terminal lock took, and how long <c>Terminal.Write</c> spent parsing it. Times are
         /// in <see cref="System.Diagnostics.Stopwatch"/> ticks. Updated on the read task; read them
@@ -487,6 +475,30 @@ namespace Iciclecreek.Terminal
 
         internal OutputCounters Counters { get; } = new();
 
+        /// <summary>Test seam: runs on the delivering thread as a chunk enters
+        /// <see cref="ConsumeOutputChunk"/>, before it decides whether anyone is listening.</summary>
+        internal Action? BeforeChunkConsumed;
+
+        /// <summary>
+        /// Runs one chunk of process output through everything a chunk gets: the sniffer event, the
+        /// emulator, scroll-follow, readiness, IME and the repaint.
+        /// </summary>
+        /// <param name="chunk">The bytes as read. May alias the read loop's buffer, which the next read
+        /// overwrites: anything that outlives this call -- the OutputReceived report -- gets a copy, made
+        /// here.</param>
+        /// <remarks>
+        /// Extracted from the read loop so an ATTACH can replay bytes a detached reader parked
+        /// (<see cref="PendingHandoverBytes"/>) through the identical pipeline — a second,
+        /// almost-the-same delivery path would drift. <paramref name="shellReadyPosted"/> is the
+        /// loop's once-per-process latch; a replay passes true, because parked bytes are mid-session
+        /// output and must not re-announce readiness. <paramref name="cancellationToken"/> is the
+        /// loop's token, which the posted ShellReady callback compares against the CURRENT process's to
+        /// refuse stale delivery — a replay passes the current one.
+        /// </remarks>
+        /// <returns>False, having delivered nothing anywhere, when <paramref name="sessionId"/> is no
+        /// longer this view's session; the caller parks the chunk for the next owner. That is asked inside
+        /// <c>_terminalLock</c>, which cleanup holds while it clears the session, so a detach cannot land
+        /// between the answer and the write.</returns>
         private bool ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
         {
             // Snapshot before write so we can tell whether YBase moved (MaxScrollback is
@@ -508,8 +520,18 @@ namespace Iciclecreek.Terminal
             // terminal pays nothing: without it every chunk allocates a closure and queues a
             // dispatcher callback for no subscriber. The ?.Invoke inside each path still covers the
             // race where the last handler unsubscribes before delivery.
+            //
+            // And the copy is made HERE, by the same decision. It used to be made by the read loop on
+            // its own look at OutputReceived, so a handler subscribing between the two looks -- a
+            // logger attached to a terminal that is already streaming -- was handed a slice of the
+            // loop's buffer, which the next read overwrote before the dispatcher ran the report: the
+            // next chunk's bytes under this chunk's SessionId. The read-task path copies too, though
+            // it reports synchronously, because OutputReceivedEventArgs promises bytes that do not
+            // alias a reused buffer and decodes Output lazily, whenever a handler first asks.
+            BeforeChunkConsumed?.Invoke();
             var sniffed = OutputReceived != null;
             var sniffOnReadTask = _outputOnReadTask;
+            var reported = sniffed ? new ReadOnlyMemory<byte>(chunk.ToArray()) : default;
 
             long lockRequested = System.Diagnostics.Stopwatch.GetTimestamp();
             lock (_terminalLock)
@@ -534,7 +556,7 @@ namespace Iciclecreek.Terminal
                 {
                     Dispatcher.UIThread.Post(() =>
                     {
-                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk) { SessionId = sessionId }); }
+                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(reported) { SessionId = sessionId }); }
                         catch { /* a sniffer must never take the app down */ }
                     });
                 }
@@ -607,7 +629,7 @@ namespace Iciclecreek.Terminal
             // live process with a frozen view and nothing reported.
             if (sniffed && sniffOnReadTask)
             {
-                try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk) { SessionId = sessionId }); }
+                try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(reported) { SessionId = sessionId }); }
                 catch { /* a sniffer must never kill the read loop */ }
             }
 
@@ -993,12 +1015,9 @@ namespace Iciclecreek.Terminal
             if (lease.View is not { } view)
                 return false;
 
-            // Nothing is decoded here any more: the terminal takes bytes, and OutputReceived
-            // carries bytes. The copy is only made when someone is listening -- the loop's buffer is
-            // reused on the next iteration, and the dispatcher delivery outlives this one --
-            // so an unsubscribed view allocates nothing per read at all.
-            var chunk = view.OutputReceived != null ? new ReadOnlyMemory<byte>(bytes.ToArray()) : bytes;
-            return view.ConsumeOutputChunk(chunk, ref shellReadyPosted, cancellationToken, sessionId);
+            // Passed as read, uncopied: ConsumeOutputChunk copies when, and only when, it reports the
+            // chunk, so an unsubscribed view allocates nothing per read at all.
+            return view.ConsumeOutputChunk(bytes, ref shellReadyPosted, cancellationToken, sessionId);
         }
 
         /// <summary>The read loop reached EOF on a connection this view still owns.</summary>

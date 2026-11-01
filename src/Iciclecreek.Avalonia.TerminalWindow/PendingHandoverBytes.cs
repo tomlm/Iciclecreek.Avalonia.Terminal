@@ -27,7 +27,13 @@ namespace Iciclecreek.Terminal
     /// right outcome -- there is no one to deliver them to. The same goes for a host that detaches and
     /// then reads the connection itself rather than through a view: a stale blocking reader still takes
     /// one chunk, which waits here for a view that never comes. A cancellable connection
-    /// (<see cref="IPtyConnection.SupportsCancellableRead"/>) never leaves a stale reader behind.</para>
+    /// (<see cref="IPtyConnection.SupportsCancellableRead"/>) never leaves a reader parked, but it can
+    /// still leave a chunk here: one already read when the detach landed, refused by the session check
+    /// on its way to the emulator.</para>
+    ///
+    /// <para>Deliberately not exposed to hosts. Taking the bytes is only safe once no reader can park
+    /// more behind them -- for a blocking connection that is not until the process next speaks -- so a
+    /// "take what is pending" call would hand a host an answer that can already be incomplete.</para>
     /// </remarks>
     internal static class PendingHandoverBytes
     {
