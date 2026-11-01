@@ -1131,7 +1131,7 @@ namespace Iciclecreek.Terminal
                 {
                     // The host's bug should not cost the user the line, nor stop the exit from being
                     // reported -- the callers go on to raise ProcessExited after this returns.
-                    Debug.WriteLine($"TerminalView: a WritingMessage handler threw; writing the default line. {ex}");
+                    Debug.WriteLine($"TerminalView: a WritingMessage handler threw; writing the default line. {DescribeWithoutMessages(ex)}");
                     message.Handled = false;
                     message.Text = message.DefaultText;
                 }
