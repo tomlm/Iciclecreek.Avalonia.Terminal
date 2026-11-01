@@ -55,11 +55,9 @@ public class StylesAndLifecycleTests
 
     private static int IndexOfTerminalTheme(IList<IStyle> styles)
     {
-        var uri = new Uri("avares://Iciclecreek.Avalonia.Terminal/Themes/Generic.axaml");
         for (var i = 0; i < styles.Count; i++)
         {
-            if (styles[i] is global::Avalonia.Markup.Xaml.Styling.StyleInclude include
-                && include.Source == uri)
+            if (styles[i] is TerminalTheme)
                 return i;
         }
 
@@ -78,13 +76,11 @@ public class StylesAndLifecycleTests
         _ = new TerminalControl { Process = "" };
 
         var styles = Application.Current!.Styles;
-        var uri = new Uri("avares://Iciclecreek.Avalonia.Terminal/Themes/Generic.axaml");
 
         var removed = new List<IStyle>();
         for (var i = styles.Count - 1; i >= 0; i--)
         {
-            if (styles[i] is global::Avalonia.Markup.Xaml.Styling.StyleInclude include
-                && include.Source == uri)
+            if (styles[i] is TerminalTheme)
             {
                 removed.Add(styles[i]);
                 styles.RemoveAt(i);
@@ -107,8 +103,55 @@ public class StylesAndLifecycleTests
             // Put the fixture back the way it was: this assembly shares one Application.
             for (var i = styles.Count - 1; i >= 0; i--)
             {
-                if (styles[i] is global::Avalonia.Markup.Xaml.Styling.StyleInclude include
-                    && include.Source == uri)
+                if (styles[i] is TerminalTheme)
+                    styles.RemoveAt(i);
+            }
+
+            foreach (var style in removed)
+                styles.Insert(0, style);
+
+            ResetStylesLoadedFlag();
+        }
+    }
+
+    [AvaloniaTest]
+    public void A_theme_the_host_already_included_is_not_loaded_again()
+    {
+        // A StyleInclude in a host's compiled XAML is replaced by its contents at build time, so the
+        // control has no StyleInclude to recognise -- it sees a plain Styles among the application's.
+        // A Styles wrapping the include is the same shape here, and it is also what proves the theme's
+        // address still resolves, which is what a host's XAML compiles against.
+        _ = new TerminalControl { Process = "" };
+
+        var styles = Application.Current!.Styles;
+        var removed = new List<IStyle>();
+        for (var i = styles.Count - 1; i >= 0; i--)
+        {
+            if (styles[i] is TerminalTheme)
+            {
+                removed.Add(styles[i]);
+                styles.RemoveAt(i);
+            }
+        }
+
+        var uri = new Uri("avares://Iciclecreek.Avalonia.Terminal/Themes/Generic.axaml");
+        var hosts = new Styles { new global::Avalonia.Markup.Xaml.Styling.StyleInclude(uri) { Source = uri } };
+        styles.Add(hosts);
+
+        try
+        {
+            ResetStylesLoadedFlag();
+            _ = new TerminalControl { Process = "" };
+
+            Assert.That(IndexOfTerminalTheme(styles), Is.LessThan(0),
+                "the host has already supplied the theme; the control must not add another copy");
+        }
+        finally
+        {
+            styles.Remove(hosts);
+            for (var i = styles.Count - 1; i >= 0; i--)
+            {
+                if (styles[i] is TerminalTheme)
                     styles.RemoveAt(i);
             }
 

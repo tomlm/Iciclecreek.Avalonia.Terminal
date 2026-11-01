@@ -68,3 +68,29 @@ jobs:
 
     - name: Test
       run: dotnet test --no-build --verbosity normal src/Iciclecreek.Avalonia.TerminalWindow.slnx
+
+  # A Native AOT build, published and actually run. The jobs above cannot see these failures: a JIT build
+  # trims nothing, so a type that only a trimmed build loses is still there for them. Trim warnings fail
+  # the publish (see the project), so this also catches a new reflection dependency before it crashes.
+  #
+  # Windows for the same reason macOS has its own job above: the pty is ConPTY and the linker is MSVC.
+  aot-smoke:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Iciclecreek.Avalonia.TerminalWindow.slnx
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Publish
+      run: dotnet publish src/Terminal.AotSmoke/Terminal.AotSmoke.csproj -c Release -r win-x64 -o aot-smoke
+
+    - name: Run
+      run: aot-smoke/Terminal.AotSmoke.exe
+
+    - name: Run with the theme already included by the host
+      run: aot-smoke/Terminal.AotSmoke.exe --host-include
