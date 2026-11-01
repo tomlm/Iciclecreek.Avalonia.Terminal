@@ -184,9 +184,13 @@ internal sealed class ReadFailureConnection : IPtyConnection
     private readonly ManualResetEventSlim _exited = new(false);
     private readonly ManualResetEventSlim _waitedOn = new(false);
     private volatile int _exitCode;
+    private int _waitCalls;
 
     public Stream ReaderStream => _stream;
     public Stream WriterStream { get; } = new MemoryStream();
+
+    /// <summary>How many times anything has asked whether the child is gone: is it still being watched?</summary>
+    public int WaitCalls => Volatile.Read(ref _waitCalls);
 
     public void Fail(Exception failure) => _stream.Fail(failure);
 
@@ -216,6 +220,7 @@ internal sealed class ReadFailureConnection : IPtyConnection
 
     public bool WaitForExit(int milliseconds)
     {
+        Interlocked.Increment(ref _waitCalls);
         _waitedOn.Set();
         return _exited.Wait(milliseconds);
     }

@@ -1017,7 +1017,7 @@ namespace Iciclecreek.Terminal
             catch (Exception ex)
             {
                 if (lease.View is { } view)
-                    await view.OnReadLoopFailedAsync(connection, ex, sessionId);
+                    await view.OnReadLoopFailedAsync(lease, connection, ex, sessionId);
             }
         }
 
@@ -1082,7 +1082,7 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>The read loop failed reading a connection this view still owned when it asked.</summary>
-        private async Task OnReadLoopFailedAsync(IPtyConnection connection, Exception ex, long sessionId)
+        private async Task OnReadLoopFailedAsync(ReaderLease lease, IPtyConnection connection, Exception ex, long sessionId)
         {
             // Only speak for the connection this loop was reading, and only while it is still the
             // one the view owns.
@@ -1129,12 +1129,54 @@ namespace Iciclecreek.Terminal
             if (!ReferenceEquals(_ptyConnection, connection) || _processExitHandled != 0)
                 return;
 
-            // The child is still there, so this really is an I/O failure. The exit is handed off rather
-            // than abandoned with it: this loop is ending, and a child that dies later must still be
-            // announced, for the same reason the EOF path hands off a slow reap.
+            // The child is still there, so this really is an I/O failure. This loop is ending, and a child
+            // that dies later must still be announced. Not through ReapInBackground, whose ceiling is for a
+            // child EOF says is dead: here it would report a running process as ended, and the interlock
+            // that claimed would then lock out its real exit and code.
             await WriteMessageAsync(TerminalMessageEventArgs.ReadError(ex, sessionId));
-            ReapInBackground(connection);
+            _ = WatchForExitAfterReadErrorAsync(lease, connection);
         }
+
+        /// <summary>
+        /// Watch a child that a read error left running, and report its exit when it really happens.
+        /// </summary>
+        /// <remarks>
+        /// <para>No ceiling, so nothing else ends this for a child that lives on: it runs for as long as the
+        /// session does. The lease is what ends it. <see cref="InstallConnection"/> revokes it on a relaunch
+        /// or a detach, including a detach that hands the connection back alive, where neither the interlock
+        /// nor a throwing WaitForExit would ever say stop.</para>
+        /// <para>Static and reaching the view only through the lease, like the read loop, so a detached view
+        /// is not kept alive by this. <see cref="ReportExitIfStillOwnedAsync"/> is what keeps the view out of
+        /// this state machine. The wait is a timer rather than a blocking WaitForExit, so this costs no pool
+        /// thread however long the child lives: asked with 0, WaitForExit only looks.</para>
+        /// <para>The interlock is not asked here. If the pty layer's event reported first, the child is gone,
+        /// so the next look ends this and the claim below refuses.</para>
+        /// </remarks>
+        private static async Task WatchForExitAfterReadErrorAsync(ReaderLease lease, IPtyConnection connection)
+        {
+            while (true)
+            {
+                await Task.Delay(ReadErrorExitPollMs).ConfigureAwait(false);
+
+                if (lease.Revoked)
+                    return;
+
+                bool exited;
+                try { exited = connection.WaitForExit(0); }
+                catch { return; }   // disposed / gone -- nothing left to report about
+
+                if (exited)
+                {
+                    await ReportExitIfStillOwnedAsync(lease, connection).ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
+
+        private static Task ReportExitIfStillOwnedAsync(ReaderLease lease, IPtyConnection connection)
+            => lease.View is { } view && view.TryClaimExit(connection, out var exitSessionId)
+                ? view.ReportClaimedExitAsync(connection, exitSessionId, reaped: true)
+                : Task.CompletedTask;
 
         /// <summary>
         /// Report an exit whose interlock the caller has claimed: the notice first, then the event.

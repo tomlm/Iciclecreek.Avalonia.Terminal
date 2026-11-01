@@ -219,11 +219,16 @@ namespace Iciclecreek.Terminal
         private const int ExitReapGraceMs = 1000;
 
         /// <summary>How long the BACKGROUND wait keeps trying after the read loop's grace period expires.
-        /// The child is dead by definition, so this is a ceiling on patience, not an expected cost.</summary>
-        private const int ExitReapCeilingMs = 30_000;
+        /// The child is dead by definition, so this is a ceiling on patience, not an expected cost.
+        /// Settable only so a test need not wait it out.</summary>
+        internal int ExitReapCeilingMs { get; set; } = 30_000;
 
         /// <summary>Poll slice for that wait. Short enough to report promptly, long enough not to spin.</summary>
         private const int ExitReapPollMs = 100;
+
+        /// <summary>How often to look at a child a read error left running, which can be for hours. See
+        /// <see cref="WatchForExitAfterReadErrorAsync"/>.</summary>
+        private const int ReadErrorExitPollMs = 250;
         private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
