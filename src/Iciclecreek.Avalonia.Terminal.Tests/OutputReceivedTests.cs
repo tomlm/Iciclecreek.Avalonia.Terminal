@@ -318,5 +318,75 @@ public class OutputReceivedTests
         window.Close();
     });
 
+    /// <summary>
+    /// A handler that subscribes while a chunk is on its way through hears that chunk's own bytes, not
+    /// whatever the next read put in the buffer they came from.
+    /// </summary>
+    /// <remarks>
+    /// <para>Whether to copy a chunk off the read loop's buffer and whether to report it were two looks
+    /// at OutputReceived, made at different moments. A subscription landing between them -- a logger
+    /// attached to a terminal that is already streaming -- got an uncopied slice of that buffer posted
+    /// to the dispatcher, and the next read overwrote it before the report ran.</para>
+    /// <para>Staged rather than raced for: the subscription is made from the seam at the top of
+    /// ConsumeOutputChunk, which is exactly between the two looks, and the UI thread is not pumped until
+    /// the reader has read the next chunk into the same buffer. The chunks are the same length so the
+    /// overwrite is total, not a mix.</para>
+    /// </remarks>
+    [AvaloniaTest]
+    public void A_handler_subscribing_mid_chunk_hears_that_chunks_own_bytes()
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+        var pty = new TurnConnection();
+        try
+        {
+            var heard = new List<string>();
+            EventHandler<OutputReceivedEventArgs> logger = (_, e) => { lock (heard) heard.Add(e.Output); };
+            view.BeforeChunkConsumed = () =>
+            {
+                view.BeforeChunkConsumed = null;
+                view.OutputReceived += logger;
+            };
+
+            view.AttachConnection(pty);
+            pty.Emit("<first-chunk>");
+            SpinUntil(() => Screen(view).Contains("<first-chunk>"));
+            pty.Emit("<OVERWRITTEN>");
+            SpinUntil(() => Screen(view).Contains("<OVERWRITTEN>"));
+            Assert.That(Screen(view), Does.Contain("<OVERWRITTEN>"),
+                "sanity: the reader has read the next chunk into its buffer before any report has run");
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (clock.Elapsed < TimeSpan.FromSeconds(5) && HeardCount() < 2)
+            {
+                Dispatcher.UIThread.RunJobs();
+                Thread.Sleep(10);
+            }
+
+            lock (heard)
+                Assert.That(heard, Is.EqualTo(new[] { "<first-chunk>", "<OVERWRITTEN>" }),
+                    "each report carries the bytes of the chunk it reports");
+
+            int HeardCount() { lock (heard) return heard.Count; }
+        }
+        finally { window.Close(); pty.Dispose(); }
+    }
+
+    /// <summary>Waits off the UI thread's queue: nothing posted runs while this spins.</summary>
+    private static void SpinUntil(Func<bool> condition)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (clock.Elapsed < TimeSpan.FromSeconds(5) && !condition())
+            Thread.Sleep(5);
+    }
+
+    private static string Screen(TerminalView view)
+    {
+        var sb = new StringBuilder();
+        for (var y = 0; y < view.Terminal.Rows; y++)
+            sb.AppendLine(view.Terminal.Buffer.GetLine(view.Terminal.Buffer.YBase + y)?.TranslateToString(true) ?? "");
+        return sb.ToString();
+    }
+
     private static Task Run(Func<Task> body) => body();
 }

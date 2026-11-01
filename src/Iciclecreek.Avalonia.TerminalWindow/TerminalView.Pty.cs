@@ -151,14 +151,17 @@ namespace Iciclecreek.Terminal
             var sessionId = InstallConnection(connection);
             connection.ProcessExited += OnPtyProcessExited;
 
-            // Bytes a detached reader stole before this attach are the EARLIEST unread output, so
-            // replaying them before our own reader starts preserves stream order exactly -- consume
-            // them through the same pipeline a read would. After the loop below starts, that
-            // guarantee is gone, which is why the claim happens here and not lazily.
-            if (PendingHandoverBytes.ClaimOnAttach(connection) is { Length: > 0 } parked)
+            // Bytes a detached reader parked are the EARLIEST undelivered output (see
+            // PendingHandoverBytes), so they are replayed now, through the same pipeline a read would
+            // use, rather than waiting for our reader to get the gate. Anything a stale reader parks
+            // after this is still earlier than what our reader reads next, and it replays that before
+            // its first read.
+            var handover = PendingHandoverBytes.For(connection);
+            if (handover.Claim() is { Length: > 0 } parked)
             {
                 var replayLatch = true;   // mid-session bytes; readiness must not re-announce
-                ConsumeOutputChunk(parked, ref replayLatch, _processCts.Token, sessionId);
+                if (!ConsumeOutputChunk(parked, ref replayLatch, _processCts.Token, sessionId))
+                    handover.Unclaim(parked);
             }
 
             // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
@@ -176,11 +179,8 @@ namespace Iciclecreek.Terminal
             // output.
             var readerToken = _processCts.Token;
 
-            _readLoopTask = Task.Factory.StartNew(
-                () => ReadPtyOutputAsync(connection, sessionId, readerToken),
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
-                TaskScheduler.Default).Unwrap();
+            // Called directly: ReadPtyOutputAsync starts the reader's thread itself.
+            _readLoopTask = ReadPtyOutputAsync(connection, sessionId, readerToken);
         }
 
         /// <summary>
@@ -196,6 +196,20 @@ namespace Iciclecreek.Terminal
         /// spawned itself — detaching one of those hands over a process the view would otherwise have killed,
         /// so the caller must dispose it when done. The view is left with nothing attached and
         /// <see cref="IsLive"/> false.</para>
+        /// <para>Nothing the process says is lost or reordered by moving it to another view, and nothing
+        /// it says after this returns is painted here: output whose write had not started when the detach
+        /// landed goes to the next owner instead. That holds in both I/O modes. What
+        /// <see cref="UseAsyncIo"/> (or any connection whose <see cref="IPtyConnection.SupportsCancellableRead"/>
+        /// is true) adds is that the reader stops HERE: in blocking mode it stays parked in its read until
+        /// the process next speaks, costing a thread and a read buffer -- though no longer this view -- and
+        /// the chunk that wakes it is passed to the next view that attaches.</para>
+        /// <para>"The next owner" means the next VIEW. Output already taken off the stream when the detach
+        /// lands -- read but not yet written here -- is held for the next view that attaches this
+        /// connection, and there is no way for a host to claim it instead. So a host that detaches and then
+        /// reads <see cref="IPtyConnection.ReaderStream"/> itself can miss that one chunk in either mode. A
+        /// cancellable connection only narrows the window to a chunk that is mid-delivery at the moment of
+        /// the detach (or one whose delivery outlasts this method's two-second wait for the reader); a
+        /// blocking one adds the chunk that wakes its parked reader, whenever the process next speaks.</para>
         /// </remarks>
         public IPtyConnection? DetachConnection()
         {
@@ -216,14 +230,10 @@ namespace Iciclecreek.Terminal
             var readLoop = _readLoopTask;
             _readLoopTask = null;
 
-            // Marked ownerless BEFORE cleanup, and the ordering is load-bearing. The read loop
-            // parks a stolen chunk only when the connection is marked detached; it decides to
-            // steal the moment cleanup swaps _ptyConnection out. Marking afterwards left a
-            // window -- cleanup done, mark not yet set -- where a chunk arriving right then was
-            // dropped as if an owner had attached, when none had. Before cleanup there is no
-            // such window: while the view still owns the connection the loop delivers normally
-            // and never consults the mark.
-            PendingHandoverBytes.NoteDetached(connection);
+            // Cleanup clears the session under _terminalLock, the lock the read loop writes under, and
+            // the loop asks whether its session is still current inside that same lock. So a chunk is
+            // either written before this detach or not here at all: one the loop was holding when the
+            // detach landed is parked for the next owner, in order, instead of painted into this view.
             CleanupProcess();
 
             if (connection.SupportsCancellableRead)
@@ -234,40 +244,25 @@ namespace Iciclecreek.Terminal
                 // and the next owner's first read sees the next byte the process writes. The timeout
                 // is a ceiling for a loop mid-chunk, not an expected cost; a loop that outlives it
                 // parks its final chunk like a blocking one would, so nothing is lost either way.
+                //
+                // Outside _terminalLock, deliberately: a loop mid-chunk needs that lock to finish.
                 try { readLoop?.Wait(TimeSpan.FromSeconds(2)); }
                 catch (AggregateException) { /* the loop's own exit paths already spoke for it */ }
             }
             else
             {
-                // A blocking reader cannot be stopped without closing the stream, so it stays parked
-                // until the process next speaks -- see the KNOWN LIMITATION below. What CHANGED: the
-                // chunk that finally unparks it is no longer simply lost. It is parked in
-                // PendingHandoverBytes, and an owner attaching afterwards replays it first, in
-                // order. Only a chunk stolen AFTER the new owner attached is dropped, because late
-                // delivery could reorder -- and reordered output corrupts where a gap merely gaps.
+                // A blocking reader cannot be stopped without closing the stream, which is the thing
+                // being handed over, and cancelling _processCts does not touch a blocking read. So the
+                // loop stays parked until the process next speaks, and takes that chunk.
+                //
+                // It no longer races the next owner for it. The two share the connection's read gate
+                // (PendingHandoverBytes), so the next owner's reader waits behind this one instead of
+                // parking a second read on the same descriptor; this one parks the chunk it took, and
+                // the next owner replays it before reading on -- in order, whether it attached before
+                // the chunk arrived or after. And the parked thread no longer holds this view: the
+                // loop reaches its view only through a lease that cleanup has just revoked.
             }
 
-            // KNOWN LIMITATION -- for BLOCKING-mode connections only, as of issue #123's fix.
-            // A connection whose SupportsCancellableRead is true has no such window: its loop was
-            // cancelled and awaited above, consuming nothing. A view's own spawn gets one by setting
-            // UseAsyncIo.
-            //
-            // For the rest: this does not stop the reader. That thread is parked inside a SYNCHRONOUS Read on the
-            // connection's stream, and the only way to make such a read return is to close the stream
-            // underneath it — which is exactly what must not happen here, since the stream is what is
-            // being handed over. Cancelling _processCts does not touch a blocking read.
-            //
-            // So for a quiet process the thread stays parked indefinitely, holding this view, its
-            // emulator and its scrollback alive through the loop's closure. And when the process does
-            // write, that thread takes the chunk: the loop now notices it is no longer the owner and
-            // stops without painting it anywhere, which is better than delivering another owner's
-            // output into this view, but the bytes are still gone rather than delivered to the new
-            // owner.
-            //
-            // Fixing it properly means deciding what a handover IS at the API level -- the detached
-            // connection would have to carry its reader, or carry the bytes already taken off the
-            // stream, so the new owner resumes rather than races. That is a public contract change,
-            // and it is not being made quietly in a bug fix.
             return connection;
         }
 
@@ -465,19 +460,6 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Runs one chunk of process output through everything a chunk gets: the sniffer event, the
-        /// emulator, scroll-follow, readiness, IME and the repaint.
-        /// </summary>
-        /// <remarks>
-        /// Extracted from the read loop so an ATTACH can replay bytes a detached reader parked
-        /// (<see cref="PendingHandoverBytes"/>) through the identical pipeline — a second,
-        /// almost-the-same delivery path would drift. <paramref name="shellReadyPosted"/> is the
-        /// loop's once-per-process latch; a replay passes true, because parked bytes are mid-session
-        /// output and must not re-announce readiness. <paramref name="cancellationToken"/> is the
-        /// loop's token, which two of the posted callbacks compare against the CURRENT process's to
-        /// refuse stale delivery — a replay passes the current one.
-        /// </remarks>
-        /// <summary>
         /// Running totals for the read loop, for diagnostics: what came off the pty, how long waiting
         /// for the terminal lock took, and how long <c>Terminal.Write</c> spent parsing it. Times are
         /// in <see cref="System.Diagnostics.Stopwatch"/> ticks. Updated on the read task; read them
@@ -493,46 +475,32 @@ namespace Iciclecreek.Terminal
 
         internal OutputCounters Counters { get; } = new();
 
-        private void ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
+        /// <summary>Test seam: runs on the delivering thread as a chunk enters
+        /// <see cref="ConsumeOutputChunk"/>, before it decides whether anyone is listening.</summary>
+        internal Action? BeforeChunkConsumed;
+
+        /// <summary>
+        /// Runs one chunk of process output through everything a chunk gets: the sniffer event, the
+        /// emulator, scroll-follow, readiness, IME and the repaint.
+        /// </summary>
+        /// <param name="chunk">The bytes as read. May alias the read loop's buffer, which the next read
+        /// overwrites: anything that outlives this call -- the OutputReceived report -- gets a copy, made
+        /// here.</param>
+        /// <remarks>
+        /// Extracted from the read loop so an ATTACH can replay bytes a detached reader parked
+        /// (<see cref="PendingHandoverBytes"/>) through the identical pipeline — a second,
+        /// almost-the-same delivery path would drift. <paramref name="shellReadyPosted"/> is the
+        /// loop's once-per-process latch; a replay passes true, because parked bytes are mid-session
+        /// output and must not re-announce readiness. <paramref name="cancellationToken"/> is the
+        /// loop's token, which the posted ShellReady callback compares against the CURRENT process's to
+        /// refuse stale delivery — a replay passes the current one.
+        /// </remarks>
+        /// <returns>False, having delivered nothing anywhere, when <paramref name="sessionId"/> is no
+        /// longer this view's session; the caller parks the chunk for the next owner. That is asked inside
+        /// <c>_terminalLock</c>, which cleanup holds while it clears the session, so a detach cannot land
+        /// between the answer and the write.</returns>
+        private bool ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
         {
-
-            // Guarded so an unsubscribed terminal pays nothing: without it every chunk allocates a
-            // closure and queues a dispatcher callback for no subscriber. The ?.Invoke inside still
-            // covers the race where the last handler unsubscribes between here and delivery.
-            if (OutputReceived != null)
-            {
-                if (_outputOnReadTask)
-                {
-                    // Straight through, on this thread. No staleness guard is needed here that the
-                    // loop does not already provide -- and what provides it is the check after the
-                    // READ, not the one in the while condition this comment used to cite. That one
-                    // is asked before a read that blocks for the whole idle life of the process, so
-                    // it says nothing about who owns the bytes it eventually returns. A sniffer was
-                    // being handed another connection's output on the strength of it.
-                    //
-                    // The catch matters MORE on this path than on the dispatcher one, and for a
-                    // different reason: an escaping exception here propagates into ReadPtyOutputAsync
-                    // and ends the read loop, leaving a live process with a frozen view and nothing
-                    // reported.
-                    try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk) { SessionId = sessionId }); }
-                    catch { /* a sniffer must never kill the read loop */ }
-                }
-                else
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        // Same guard ShellReady uses: the callback can still be queued when a relaunch
-                        // swaps the process out underneath it, and without this a consumer sees the old
-                        // process's bytes attributed to the new one.
-                        if (_processCts?.Token != cancellationToken)
-                            return;
-
-                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(chunk) { SessionId = sessionId }); }
-                        catch { /* a sniffer must never take the app down */ }
-                    });
-                }
-            }
-
             // Snapshot before write so we can tell whether YBase moved (MaxScrollback is
             // YBase: it grows as output scrolls lines off the top, and drops when the
             // output erases the scrollback; ScrollToBottom only moves ViewportY).
@@ -547,9 +515,52 @@ namespace Iciclecreek.Terminal
             // skipped for them regardless, so they count as following.
             _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
 
+            // Read once: the two halves below must agree on which path reports this chunk, or a
+            // flip in between would report it twice or not at all. Guarded so an unsubscribed
+            // terminal pays nothing: without it every chunk allocates a closure and queues a
+            // dispatcher callback for no subscriber. The ?.Invoke inside each path still covers the
+            // race where the last handler unsubscribes before delivery.
+            //
+            // And the copy is made HERE, by the same decision. It used to be made by the read loop on
+            // its own look at OutputReceived, so a handler subscribing between the two looks -- a
+            // logger attached to a terminal that is already streaming -- was handed a slice of the
+            // loop's buffer, which the next read overwrote before the dispatcher ran the report: the
+            // next chunk's bytes under this chunk's SessionId. The read-task path copies too, though
+            // it reports synchronously, because OutputReceivedEventArgs promises bytes that do not
+            // alias a reused buffer and decodes Output lazily, whenever a handler first asks.
+            BeforeChunkConsumed?.Invoke();
+            var sniffed = OutputReceived != null;
+            var sniffOnReadTask = _outputOnReadTask;
+            var reported = sniffed ? new ReadOnlyMemory<byte>(chunk.ToArray()) : default;
+
             long lockRequested = System.Diagnostics.Stopwatch.GetTimestamp();
             lock (_terminalLock)
             {
+                // Asked HERE, under the lock, and not only by the loop after its read. Cleanup clears
+                // the session holding this lock, so the answer cannot go stale before the write below:
+                // asked outside it, a detach landing in between still painted the chunk into the view
+                // that had just handed the connection away, and the next owner never saw it.
+                if (Interlocked.Read(ref _sessionId) != sessionId)
+                    return false;
+
+                // Posted once the chunk is certain to be written here, and BEFORE it is: parsing
+                // posts its own UI-thread events -- a title, a bell -- and the dispatcher runs posts
+                // in order, so this one is heard first, as it always was. Posted after the write it
+                // queued behind them, and a title handler that moved the session to another view
+                // made the guard this callback used to carry discard a chunk this view had painted.
+                //
+                // No such guard now. Only accepted chunks get here, so there is nothing stale to
+                // filter: the callback reports a chunk this view DID paint, whatever happens to the
+                // session before it runs, and SessionId says which process it came from.
+                if (sniffed && !sniffOnReadTask)
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(reported) { SessionId = sessionId }); }
+                        catch { /* a sniffer must never take the app down */ }
+                    });
+                }
+
                 long lockTaken = System.Diagnostics.Stopwatch.GetTimestamp();
 
                 // Any capture taken before this write describes a buffer that no longer exists
@@ -604,6 +615,22 @@ namespace Iciclecreek.Terminal
                 // chunk boundary is worth at most a paint interval of freshness.
                 if (!_atomicUpdate)
                     _frameCapture.PublishThrottled(_terminal, Interlocked.Read(ref _liveWriteGeneration));
+            }
+
+            // On the read task the handler runs here, straight through, AFTER the write and outside
+            // the lock -- unconditionally, since the session check above already accepted the chunk.
+            // Not before the write: that would put host code inside _terminalLock, and a handler that
+            // marshals to the UI thread while the UI thread waits for the lock is the deadlock
+            // ReaderThreadDeadlockTests exist for. Not before the lock either: a chunk the check then
+            // refused would have been reported here AND by the view it went to.
+            //
+            // The catch matters MORE on this path than on the dispatcher one, and for a different
+            // reason: an escaping exception here propagates into the read loop and ends it, leaving a
+            // live process with a frozen view and nothing reported.
+            if (sniffed && sniffOnReadTask)
+            {
+                try { OutputReceived?.Invoke(this, new OutputReceivedEventArgs(reported) { SessionId = sessionId }); }
+                catch { /* a sniffer must never kill the read loop */ }
             }
 
             // Signal on the first chunk only. Posting per chunk would keep queueing UI-thread
@@ -683,6 +710,7 @@ namespace Iciclecreek.Terminal
             }
 
             RequestPaint();
+            return true;
         }
 
         /// <summary>
@@ -753,6 +781,36 @@ namespace Iciclecreek.Terminal
             });
         }
 
+        /// <summary>
+        /// The view a read loop delivers to, held only while that view's session is the loop's.
+        /// </summary>
+        /// <remarks>
+        /// A blocking read cannot be unparked, so after a detach the loop stays in it until the process
+        /// next speaks -- at an idle prompt, indefinitely. While the loop was an instance method it held
+        /// the view, its emulator and its scrollback alive for all of that time. The loop is static now
+        /// and reaches its view only through this, which <see cref="InstallConnection"/> revokes
+        /// whenever the session changes.
+        /// </remarks>
+        private sealed class ReaderLease
+        {
+            private volatile TerminalView? _view;
+
+            public ReaderLease(TerminalView view) => _view = view;
+
+            /// <summary>The owning view, or null once the loop's session has ended.</summary>
+            public TerminalView? View => _view;
+
+            /// <summary>Whether the loop's session has ended -- asked without the loop's own frame ever
+            /// holding the view, which an unoptimised build keeps alive for as long as the frame runs.</summary>
+            public bool Revoked => _view is null;
+
+            public void Revoke() => _view = null;
+        }
+
+        /// <summary>The lease of the loop reading the current session. Guarded by <see cref="_exitGate"/>.</summary>
+        private ReaderLease? _readerLease;
+
+        /// <summary>Starts the read loop for <paramref name="connection"/>, on a thread of its own.</summary>
         /// <param name="connection">
         /// The connection this loop reads, passed in rather than re-read from the field on every
         /// iteration. A read is an await, and a relaunch during one swaps the field — so a loop that
@@ -765,8 +823,44 @@ namespace Iciclecreek.Terminal
         /// the same reason the connection is: by the time a chunk reaches a subscriber the view may have moved
         /// on, and the subscriber needs to know which process it is hearing rather than only that one is live.
         /// </param>
-        private async Task ReadPtyOutputAsync(
+        /// <remarks>
+        /// The thread is started here, from a static method, even when the caller is already on a
+        /// thread it started for the purpose. A closure that captured the view, sitting under the
+        /// loop's frames for as long as it runs, is exactly the reference <see cref="ReaderLease"/>
+        /// exists to drop; the caller's thread finishes as soon as this returns.
+        /// </remarks>
+        private Task ReadPtyOutputAsync(
             IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up = null)
+        {
+            var lease = new ReaderLease(this);
+            lock (_exitGate)
+            {
+                // A loop started for a session that has already ended -- a relaunch or a close landed
+                // before its thread was scheduled -- is born revoked, and stops before reading.
+                if (_sessionId == sessionId)
+                {
+                    _readerLease?.Revoke();
+                    _readerLease = lease;
+                }
+                else
+                {
+                    lease.Revoke();
+                }
+            }
+
+            return StartReadLoop(lease, connection, sessionId, cancellationToken, up);
+        }
+
+        private static Task StartReadLoop(
+            ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up)
+            => Task.Factory.StartNew(
+                () => ReadLoopAsync(lease, connection, sessionId, cancellationToken, up),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default).Unwrap();
+
+        private static async Task ReadLoopAsync(
+            ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up)
         {
             // Raised BEFORE the first read, and deliberately not after one. Signalling after a read would
             // make readiness depend on the process PRODUCING output, so a shell that prints nothing on
@@ -777,6 +871,14 @@ namespace Iciclecreek.Terminal
             // to ProcessExited before starting the loop, so an exit landing in it is still seen.
             up?.TrySetResult();
 
+            // One reader at a time per connection, across views -- see PendingHandoverBytes. Held from
+            // before the read until what it returned has been delivered or parked, so the order readers
+            // pass through it is stream order. A new owner's loop waits here behind a detached view's
+            // parked read instead of parking a second read beside it on the same descriptor.
+            var handover = PendingHandoverBytes.For(connection);
+            var cancellable = connection.SupportsCancellableRead;
+            var endOfStream = false;
+
             try
             {
                 var buffer = new byte[0x40000];
@@ -786,150 +888,112 @@ namespace Iciclecreek.Terminal
                 // cannot consume the current one's signal.
                 var shellReadyPosted = false;
 
-                while (!cancellationToken.IsCancellationRequested && ReferenceEquals(_ptyConnection, connection))
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    // SYNCHRONOUS, on the thread StartNew handed this loop. `await ReadAsync` undid the
-                    // LongRunning hint entirely: LongRunning owns a dedicated thread only up to the first
-                    // await that YIELDS, and every continuation after that is scheduled on the THREAD POOL.
-                    // Worse, the stream underneath is a FileStream opened isAsync: false on Windows, whose
-                    // ReadAsync performs no overlapped I/O — it parks a POOL thread in a blocking read for
-                    // the whole life of the process, because ConPTY does not signal EOF while the
-                    // pseudoconsole is open.
-                    //
-                    // Measured downstream over the same layer, 24 concurrent short-lived processes on a
-                    // 4-vCPU box: time-to-first-output was 137 ms with a dedicated thread and 7546 ms
-                    // pooled, and under load the pooled form lost output entirely rather than merely
-                    // delaying it. A blocking read on a thread we own cannot be starved, and costs one
-                    // thread per terminal — which the pooled form was already costing, minus the scheduling.
-                    //
-                    // Cancellation is by teardown rather than by token: disposing the connection closes the
-                    // stream and the blocking read throws, which the catch below handles.
-                    int bytesRead;
-                    if (connection.SupportsCancellableRead)
+                    // Waited for the way the read below is: a blocking loop waits on its own thread,
+                    // because an await that yields here would move it onto the pool for good.
+                    if (cancellable)
+                        await handover.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    else
+                        handover.Gate.Wait(cancellationToken);
+
+                    try
                     {
-                        // A connection that PROMISES cancellable reads gets the awaited form: parked
-                        // on the pty layer's poller rather than on this thread, and the token lands
-                        // while waiting for data -- before read(2) runs -- so a detach unparks the
-                        // loop without consuming a byte and without touching the stream it is
-                        // handing over. The measured case against `await ReadAsync` (137 ms vs
-                        // 7,546 ms, output lost under load) damned SYNC-OVER-ASYNC -- fake async
-                        // over a blocking descriptor parking pool threads -- and says nothing about
-                        // an event-driven wait, which is what the capability certifies.
-                        try
+                        // Asked under the gate and before reading: a loop whose session ended while it
+                        // waited must not take a chunk off a stream that is no longer its own.
+                        if (lease.Revoked)
+                            break;
+
+                        // Whatever a detached view's reader parked was read before anything this loop is
+                        // about to read, so it goes first.
+                        if (handover.Claim() is { } parked)
                         {
-                            bytesRead = await connection.ReaderStream
-                                .ReadAsync(buffer, 0, buffer.Length, cancellationToken)
-                                .ConfigureAwait(false);
+                            var replayLatch = true;   // mid-session bytes; readiness must not re-announce
+                            if (!Deliver(lease, parked, ref replayLatch, cancellationToken, sessionId))
+                            {
+                                handover.Unclaim(parked);
+                                break;
+                            }
                         }
-                        catch (OperationCanceledException)
+
+                        // SYNCHRONOUS, on the thread StartNew handed this loop. `await ReadAsync` undid the
+                        // LongRunning hint entirely: LongRunning owns a dedicated thread only up to the first
+                        // await that YIELDS, and every continuation after that is scheduled on the THREAD POOL.
+                        // Worse, the stream underneath is a FileStream opened isAsync: false on Windows, whose
+                        // ReadAsync performs no overlapped I/O — it parks a POOL thread in a blocking read for
+                        // the whole life of the process, because ConPTY does not signal EOF while the
+                        // pseudoconsole is open.
+                        //
+                        // Measured downstream over the same layer, 24 concurrent short-lived processes on a
+                        // 4-vCPU box: time-to-first-output was 137 ms with a dedicated thread and 7546 ms
+                        // pooled, and under load the pooled form lost output entirely rather than merely
+                        // delaying it. A blocking read on a thread we own cannot be starved, and costs one
+                        // thread per terminal — which the pooled form was already costing, minus the scheduling.
+                        //
+                        // Cancellation is by teardown rather than by token: disposing the connection closes the
+                        // stream and the blocking read throws, which the catch below handles.
+                        int bytesRead;
+                        if (cancellable)
                         {
-                            // A detach or teardown. Nothing was consumed -- that is the guarantee
-                            // the capability advertises, and Porta.Pty tests it.
+                            // A connection that PROMISES cancellable reads gets the awaited form: parked
+                            // on the pty layer's poller rather than on this thread, and the token lands
+                            // while waiting for data -- before read(2) runs -- so a detach unparks the
+                            // loop without consuming a byte and without touching the stream it is
+                            // handing over. The measured case against `await ReadAsync` (137 ms vs
+                            // 7,546 ms, output lost under load) damned SYNC-OVER-ASYNC -- fake async
+                            // over a blocking descriptor parking pool threads -- and says nothing about
+                            // an event-driven wait, which is what the capability certifies.
+                            try
+                            {
+                                bytesRead = await connection.ReaderStream
+                                    .ReadAsync(buffer, 0, buffer.Length, cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // A detach or teardown. Nothing was consumed -- that is the guarantee
+                                // the capability advertises, and Porta.Pty tests it.
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            bytesRead = connection.ReaderStream.Read(buffer, 0, buffer.Length);
+                        }
+
+                        if (bytesRead == 0)
+                        {
+                            endOfStream = true;
+                            break;
+                        }
+
+                        // Ownership is asked AGAIN on the other side of the read, because the read blocks
+                        // for as long as the process stays quiet -- at an idle prompt, indefinitely -- and a
+                        // detach or a relaunch lands in that window routinely. It is asked inside the lock
+                        // the write happens under (ConsumeOutputChunk), so a detach cannot slip in between
+                        // the answer and the write either.
+                        //
+                        // A chunk that is no longer this view's is not dropped and not painted here: it is
+                        // parked, and the connection's next owner replays it before its own first read.
+                        // Under the gate that is always in order, whether that owner attached before this
+                        // chunk arrived or after. Then the loop stops, rather than read a second chunk out
+                        // of a stream that is not its own.
+                        if (!Deliver(lease, buffer.AsMemory(0, bytesRead), ref shellReadyPosted, cancellationToken, sessionId))
+                        {
+                            handover.Park(buffer.AsSpan(0, bytesRead));
                             break;
                         }
                     }
-                    else
+                    finally
                     {
-                        bytesRead = connection.ReaderStream.Read(buffer, 0, buffer.Length);
+                        handover.Gate.Release();
                     }
-
-                    // Asked AGAIN, on the other side of the read.
-                    //
-                    // The condition on the while loop is the same question, and asking it there is
-                    // not enough on its own: this read blocks for as long as the process stays quiet,
-                    // which at an idle prompt is indefinitely. A detach or a relaunch lands in that
-                    // window routinely -- it is the window a detach is most likely to land in, being
-                    // nearly all of the loop's life -- and the chunk that ends the read then belongs
-                    // to a connection this view no longer owns.
-                    //
-                    // Everything below assumed otherwise. The bytes went into _terminal, so output
-                    // meant for whoever now owns the process was painted into this view and lost to
-                    // them; OutputReceived fired for it, under a comment asserting the check above
-                    // had already made that impossible; and ShellReady could be raised for a process
-                    // that is not this view's.
-                    //
-                    // Breaking rather than continuing: the while condition would stop the loop on the
-                    // next pass anyway, and this makes it stop without first reading a SECOND chunk
-                    // out of a stream that is not ours to read.
-                    //
-                    // The chunk in hand is not simply dropped any more. If the connection's next
-                    // owner has not attached yet, these are by construction the earliest unread
-                    // bytes, and parking them lets that owner replay them FIRST -- lossless, in
-                    // order. Once an owner is attached its own reader races this one on the same
-                    // descriptor, and late delivery could interleave into the middle of what it
-                    // already consumed -- inside an escape sequence, even. Reordered output
-                    // corrupts; a gap merely gaps. So then, and only then, the chunk is dropped.
-                    if (!ReferenceEquals(_ptyConnection, connection))
-                    {
-                        if (bytesRead > 0)
-                            PendingHandoverBytes.TryPark(connection, buffer.AsSpan(0, bytesRead));
-                        break;
-                    }
-
-                    if (bytesRead == 0)
-                    {
-                        // Process has exited — fallback in case OnPtyProcessExited didn't fire first.
-                        //
-                        // EOF on the master side means the child closed its end, which can beat the
-                        // child actually being REAPED — and until it is, ExitCode is still its
-                        // default 0. Reading it straight away reports a clean exit for a process
-                        // that failed, whenever this path wins the race against OnPtyProcessExited.
-                        //
-                        // Reaping happens BEFORE the interlock is claimed, which does two things:
-                        // it makes the exit code readable, and it gives OnPtyProcessExited — which
-                        // carries the code authoritatively — its chance to win the race instead of
-                        // being locked out by a claim staked before we knew anything. The child is
-                        // gone by definition, so this returns almost immediately; the timeout is a
-                        // ceiling for a pathological reap, not an expected cost.
-                        var reaped = false;
-                        try { reaped = connection.WaitForExit(ExitReapGraceMs); }
-                        catch { /* never let reaping be the reason output stops */ }
-
-                        // A child that will not reap inside the grace period leaves no trustworthy
-                        // code, and the one we would otherwise read is 0 — the single wrong answer
-                        // that reads as SUCCESS. So it is still not reported here.
-                        //
-                        // It is NOT abandoned either. Leaving the interlock unclaimed means no
-                        // ProcessExited is raised AT ALL if the pty layer's own event never fires
-                        // — and a host that is never told the process ended cannot leave the state
-                        // it entered when the process started. Trading "no wrong exit code" for
-                        // "no notification" loses more than it saves; the notification is the part
-                        // a host cannot reconstruct.
-                        //
-                        // The child is dead by definition, so the reap WILL land — the grace period
-                        // is only a ceiling on how long this READ LOOP waits for it. Hand the wait
-                        // off, so the loop ends now and the host still hears about it.
-                        if (!reaped)
-                        {
-                            ReapInBackground(connection);
-                        }
-
-                        // TryClaimExit rather than a bare interlock: this loop may have been waiting on a read
-                        // while a relaunch replaced the connection, in which case the exit it is holding belongs
-                        // to a process this view has already moved on from.
-                        if (reaped && TryClaimExit(connection, out var exitSessionId))
-                        {
-                            var exitCode = connection.ExitCode;
-
-                            await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(exitCode, exitSessionId));
-
-                            await Dispatcher.UIThread.InvokeAsync(() =>
-                            {
-                                ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode) { SessionId = exitSessionId });
-                            });
-                        }
-                        break;
-                    }
-
-                    // Nothing is decoded here any more: the terminal takes bytes, and OutputReceived
-                    // carries bytes. The copy is only made when someone is listening -- `buffer` is
-                    // reused on the next iteration, and the dispatcher delivery outlives this one --
-                    // so an unsubscribed view allocates nothing per read at all.
-                    var chunk = OutputReceived != null
-                        ? new ReadOnlyMemory<byte>(buffer.AsSpan(0, bytesRead).ToArray())
-                        : buffer.AsMemory(0, bytesRead);
-                    ConsumeOutputChunk(chunk, ref shellReadyPosted, cancellationToken, sessionId);
                 }
+
+                // Outside the gate: there is nothing left to read, and the reap and the report wait on
+                // things another reader has no business queueing behind.
+                if (endOfStream && lease.View is { } owner)
+                    await owner.OnReadLoopEndOfStreamAsync(connection);
             }
             catch (OperationCanceledException)
             {
@@ -937,28 +1001,104 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                // Only speak for the connection this loop was reading, and only while it is still the
-                // one the view owns.
-                //
-                // The interlock alone could not answer that. InstallConnection RESETS it as it
-                // publishes a new connection, so a stale loop -- one whose stream was closed out from
-                // under it by exactly that replacement, which is how it got here -- read the flag as
-                // 0 and took it for permission to speak. It then wrote "Error reading from process"
-                // into the terminal belonging to its SUCCESSOR: a relaunch that worked, reporting a
-                // failure, describing a process that is already gone.
-                //
-                // ReferenceEquals is asked first because it is the question that was missing. The
-                // interlock stays behind it for its original job: a stream closing after the process
-                // has already exited is expected, and not worth a line of red.
-                if (!ReferenceEquals(_ptyConnection, connection))
-                    return;
-
-                // If the process has already exited the stream closing is expected — swallow silently.
-                if (_processExitHandled != 0)
-                    return;
-
-                await WriteMessageAsync(TerminalMessageEventArgs.ReadError(ex, sessionId));
+                if (lease.View is { } view)
+                    await view.OnReadLoopFailedAsync(connection, ex, sessionId);
             }
+        }
+
+        /// <summary>Hands one chunk to the lease's view. False when it is no longer that view's to paint.</summary>
+        /// <remarks>Its own method so the view is a local of THIS frame, gone when it returns, rather than
+        /// one the loop's state machine would hold across its next read.</remarks>
+        private static bool Deliver(
+            ReaderLease lease, ReadOnlyMemory<byte> bytes, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
+        {
+            if (lease.View is not { } view)
+                return false;
+
+            // Passed as read, uncopied: ConsumeOutputChunk copies when, and only when, it reports the
+            // chunk, so an unsubscribed view allocates nothing per read at all.
+            return view.ConsumeOutputChunk(bytes, ref shellReadyPosted, cancellationToken, sessionId);
+        }
+
+        /// <summary>The read loop reached EOF on a connection this view still owns.</summary>
+        private async Task OnReadLoopEndOfStreamAsync(IPtyConnection connection)
+        {
+            // Process has exited — fallback in case OnPtyProcessExited didn't fire first.
+            //
+            // EOF on the master side means the child closed its end, which can beat the
+            // child actually being REAPED — and until it is, ExitCode is still its
+            // default 0. Reading it straight away reports a clean exit for a process
+            // that failed, whenever this path wins the race against OnPtyProcessExited.
+            //
+            // Reaping happens BEFORE the interlock is claimed, which does two things:
+            // it makes the exit code readable, and it gives OnPtyProcessExited — which
+            // carries the code authoritatively — its chance to win the race instead of
+            // being locked out by a claim staked before we knew anything. The child is
+            // gone by definition, so this returns almost immediately; the timeout is a
+            // ceiling for a pathological reap, not an expected cost.
+            var reaped = false;
+            try { reaped = connection.WaitForExit(ExitReapGraceMs); }
+            catch { /* never let reaping be the reason output stops */ }
+
+            // A child that will not reap inside the grace period leaves no trustworthy
+            // code, and the one we would otherwise read is 0 — the single wrong answer
+            // that reads as SUCCESS. So it is still not reported here.
+            //
+            // It is NOT abandoned either. Leaving the interlock unclaimed means no
+            // ProcessExited is raised AT ALL if the pty layer's own event never fires
+            // — and a host that is never told the process ended cannot leave the state
+            // it entered when the process started. Trading "no wrong exit code" for
+            // "no notification" loses more than it saves; the notification is the part
+            // a host cannot reconstruct.
+            //
+            // The child is dead by definition, so the reap WILL land — the grace period
+            // is only a ceiling on how long this READ LOOP waits for it. Hand the wait
+            // off, so the loop ends now and the host still hears about it.
+            if (!reaped)
+            {
+                ReapInBackground(connection);
+            }
+
+            // TryClaimExit rather than a bare interlock: this loop may have been waiting on a read
+            // while a relaunch replaced the connection, in which case the exit it is holding belongs
+            // to a process this view has already moved on from.
+            if (reaped && TryClaimExit(connection, out var exitSessionId))
+            {
+                var exitCode = connection.ExitCode;
+
+                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(exitCode, exitSessionId));
+
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode) { SessionId = exitSessionId });
+                });
+            }
+        }
+
+        /// <summary>The read loop failed reading a connection this view still owned when it asked.</summary>
+        private async Task OnReadLoopFailedAsync(IPtyConnection connection, Exception ex, long sessionId)
+        {
+            // Only speak for the connection this loop was reading, and only while it is still the
+            // one the view owns.
+            //
+            // The interlock alone could not answer that. InstallConnection RESETS it as it
+            // publishes a new connection, so a stale loop -- one whose stream was closed out from
+            // under it by exactly that replacement, which is how it got here -- read the flag as
+            // 0 and took it for permission to speak. It then wrote "Error reading from process"
+            // into the terminal belonging to its SUCCESSOR: a relaunch that worked, reporting a
+            // failure, describing a process that is already gone.
+            //
+            // ReferenceEquals is asked first because it is the question that was missing. The
+            // interlock stays behind it for its original job: a stream closing after the process
+            // has already exited is expected, and not worth a line of red.
+            if (!ReferenceEquals(_ptyConnection, connection))
+                return;
+
+            // If the process has already exited the stream closing is expected — swallow silently.
+            if (_processExitHandled != 0)
+                return;
+
+            await WriteMessageAsync(TerminalMessageEventArgs.ReadError(ex, sessionId));
         }
 
         /// <summary>
@@ -1021,6 +1161,12 @@ namespace Iciclecreek.Terminal
                 _ptyConnection = connection;
                 Interlocked.Exchange(ref _processExitHandled, 0);
                 _sessionId = connection is null ? 0 : ++_sessionCounter;
+
+                // The outgoing session's loop loses its view with the session. It may be parked in a
+                // read it cannot leave until the process speaks; it must not hold this view meanwhile.
+                _readerLease?.Revoke();
+                _readerLease = null;
+
                 return _sessionId;
             }
         }
@@ -1151,7 +1297,7 @@ namespace Iciclecreek.Terminal
                     // described it as the detach; it was the opposite.
                     //
                     // Detaching needs nothing from Dispose. The unsubscribe above drops this view's event, and
-                    // the cancelled _processCts plus the read loop's ReferenceEquals check stop the reader.
+                    // the cancelled _processCts plus the read loop's revoked lease and session check stop the reader.
                     // Disposing an object the view does not own would be wrong even if the process survived it.
                     if (!_externalConnection)
                     {
@@ -1167,7 +1313,17 @@ namespace Iciclecreek.Terminal
                 {
                     // Cleared with the flag, under the gate: a loop still unwinding must not find a null
                     // connection paired with a clear flag and conclude it owns the exit.
-                    InstallConnection(null);
+                    //
+                    // And under _terminalLock, which the read loop holds while it checks that its
+                    // session is current and writes the chunk. Cleared outside it, the session could end
+                    // between that check and the write, and a detaching view painted a chunk that
+                    // belonged to the connection's next owner. The UI thread already takes this lock
+                    // (ClearScreen, ArrangeOverride), and a write holding it never waits on the UI
+                    // thread without a bound -- see OnTerminalWindowInfoRequested.
+                    lock (_terminalLock)
+                    {
+                        InstallConnection(null);
+                    }
                 }
             }
 
