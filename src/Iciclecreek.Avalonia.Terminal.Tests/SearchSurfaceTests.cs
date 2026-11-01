@@ -127,6 +127,53 @@ public class SearchSurfaceTests
         finally { window.Close(); }
     }
 
+    /// <summary>
+    /// Highlights from a finished search follow their lines up as the top of a full buffer is
+    /// trimmed, and the ones whose lines went are dropped.
+    /// </summary>
+    [AvaloniaTest]
+    public void Highlights_follow_their_lines_when_the_top_is_trimmed()
+    {
+        var control = new TerminalControl { Process = "", BufferSize = 500 };
+        var window = TerminalHost.Show(control);
+        try
+        {
+            window.UpdateLayout();
+            var view = control.View();
+
+            // Full, so every line written from here on trims one off the top.
+            for (var i = 0; i < 700; i++)
+                view.Terminal.Write(i % 10 == 0 ? $"needle {i}\r\n" : $"line {i}\r\n");
+
+            view.FindInBuffer("needle");
+            var rowsBefore = HitRows(view);
+
+            const int trimmed = 25;
+            for (var i = 0; i < trimmed; i++)
+                view.Terminal.Write($"more {i}\r\n");
+
+            var rowsAfter = HitRows(view);
+            Assert.That(rowsAfter, Is.EqualTo(rowsBefore.Select(r => r - trimmed).Where(r => r >= 0).ToList()));
+            Assert.That(rowsAfter, Has.Count.LessThan(rowsBefore.Count), "a match should have gone with the trim");
+            foreach (var row in rowsAfter)
+                Assert.That(view.Terminal.Buffer.GetLine(row)!.TranslateToString(true), Does.StartWith("needle"),
+                            $"the highlight on row {row} is not on a match");
+
+            view.FindInBuffer("needle");
+            Assert.That(HitRows(view), Is.EqualTo(rowsAfter), "a fresh search should agree");
+        }
+        finally { window.Close(); }
+    }
+
+    private static List<int> HitRows(TerminalView view)
+    {
+        var rows = new List<int>();
+        for (var row = 0; row < view.Terminal.Buffer.Lines.Length; row++)
+            foreach (var hit in view.SearchResults!.HitsOnRow(row))
+                rows.Add(hit.BufferRow);
+        return rows;
+    }
+
     [AvaloniaTest]
     public void Options_pass_through()
     {

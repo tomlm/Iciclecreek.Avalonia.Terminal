@@ -1338,6 +1338,9 @@ namespace Iciclecreek.Terminal
         private XT.Search.BufferSearch? _search;
         private int _currentMatchId = -1;
 
+        /// <summary>The published result, for tests to compare hit by hit. UI thread only.</summary>
+        internal XT.Search.BufferSearch? SearchResults => _search;
+
         /// <summary>How many matches the last search found. See also <see cref="SearchTruncated"/>.</summary>
         public int SearchHitCount => _search?.Count ?? 0;
 
@@ -2561,7 +2564,9 @@ namespace Iciclecreek.Terminal
 
         private void OnUnloaded(object? sender, RoutedEventArgs e)
         {
-            // The search subscribes to Buffer.Trimmed, so it has to unhook when the view goes.
+            // The search goes with the view, so one still scanning would only be publishing into a
+            // search being thrown away.
+            CancelSearchInFlight();
             _search?.Dispose();
             _search = null;
             _currentMatchId = -1;

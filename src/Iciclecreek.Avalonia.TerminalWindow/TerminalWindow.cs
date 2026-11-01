@@ -393,6 +393,11 @@ namespace Iciclecreek.Terminal
         public int FindInBuffer(string needle, XTerm.Search.SearchOptions options = default)
             => _terminalControl?.FindInBuffer(needle, options) ?? 0;
 
+        /// <inheritdoc cref="TerminalView.FindInBufferAsync"/>
+        public Task<int> FindInBufferAsync(string needle, XTerm.Search.SearchOptions options = default,
+                                           CancellationToken cancellationToken = default)
+            => _terminalControl?.FindInBufferAsync(needle, options, cancellationToken) ?? Task.FromResult(0);
+
         /// <inheritdoc cref="TerminalView.FindNext"/>
         public bool FindNext() => _terminalControl?.FindNext() ?? false;
 
