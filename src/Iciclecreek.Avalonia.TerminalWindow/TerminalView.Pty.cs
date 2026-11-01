@@ -1063,16 +1063,7 @@ namespace Iciclecreek.Terminal
             // while a relaunch replaced the connection, in which case the exit it is holding belongs
             // to a process this view has already moved on from.
             if (reaped && TryClaimExit(connection, out var exitSessionId))
-            {
-                var exitCode = connection.ExitCode;
-
-                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(exitCode, exitSessionId));
-
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode) { SessionId = exitSessionId });
-                });
-            }
+                await ReportClaimedExitAsync(connection, exitSessionId, reaped: true);
         }
 
         /// <summary>The read loop failed reading a connection this view still owned when it asked.</summary>
@@ -1098,7 +1089,61 @@ namespace Iciclecreek.Terminal
             if (_processExitHandled != 0)
                 return;
 
+            // A read that FAILS is how a Unix pty says the child is gone: once the slave side closes,
+            // read() on the master returns EIO -- an exception here -- rather than the 0 bytes the EOF
+            // path waits for. On Linux that is the ORDINARY end of a process. Only printing it leaves the
+            // interlock unclaimed and the connection installed, so IsLive stays true and, if the pty
+            // layer's own event does not fire, no ProcessExited is raised for a process already dead.
+            //
+            // So establish whether the child is actually gone before calling this an error.
+            var reaped = false;
+            try { reaped = connection.WaitForExit(ExitReapGraceMs); }
+            catch { /* disposed underneath us; below, that is a failed read like any other */ }
+
+            if (reaped)
+            {
+                // Not an error at all: the end of a process by the platform's other route, reported as
+                // EOF reports it. A false claim means the event got there first, or the view moved on.
+                if (TryClaimExit(connection, out var exitSessionId))
+                    await ReportClaimedExitAsync(connection, exitSessionId, reaped: true);
+                return;
+            }
+
+            // Asked again, because that wait is up to a second long and a relaunch or the exit event can
+            // land in it. This line is for the connection the view still owns, as above.
+            if (!ReferenceEquals(_ptyConnection, connection) || _processExitHandled != 0)
+                return;
+
+            // The child is still there, so this really is an I/O failure. The exit is handed off rather
+            // than abandoned with it: this loop is ending, and a child that dies later must still be
+            // announced, for the same reason the EOF path hands off a slow reap.
             await WriteMessageAsync(TerminalMessageEventArgs.ReadError(ex, sessionId));
+            ReapInBackground(connection);
+        }
+
+        /// <summary>
+        /// Report an exit whose interlock the caller has claimed: the notice first, then the event.
+        /// </summary>
+        /// <param name="connection">The connection that ended.</param>
+        /// <param name="exitSessionId">Its id, as <see cref="TryClaimExit"/> returned it.</param>
+        /// <param name="reaped">Whether the child was reaped. If not, the code is reported as unknown:
+        /// the one that could be read is the default 0, which would read as success.</param>
+        private async Task ReportClaimedExitAsync(IPtyConnection connection, long exitSessionId, bool reaped)
+        {
+            int? code = null;
+            if (reaped)
+            {
+                try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
+            }
+
+            await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(code, exitSessionId));
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                ProcessExited?.Invoke(this, code is { } c
+                    ? new ProcessExitedEventArgs(c) { SessionId = exitSessionId }
+                    : ProcessExitedEventArgs.UnknownCode(exitSessionId));
+            });
         }
 
         /// <summary>
@@ -1227,20 +1272,7 @@ namespace Iciclecreek.Terminal
 
                 if (!TryClaimExit(connection, out var exitSessionId)) return;
 
-                int? code = null;
-                if (reaped)
-                {
-                    try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
-                }
-
-                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(code, exitSessionId));
-
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    ProcessExited?.Invoke(this, code is { } c
-                        ? new ProcessExitedEventArgs(c) { SessionId = exitSessionId }
-                        : ProcessExitedEventArgs.UnknownCode(exitSessionId));
-                });
+                await ReportClaimedExitAsync(connection, exitSessionId, reaped);
             });
         }
 

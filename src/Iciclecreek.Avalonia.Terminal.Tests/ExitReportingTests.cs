@@ -111,6 +111,175 @@ public class ExitReportingTests
         public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
     }
 
+    // ── A read that fails ───────────────────────────────────────────────────────────────────────
+
+    /// <summary>Everything the emulator has, rows run together so a line that wrapped still reads whole.</summary>
+    private static string BufferText(TerminalView view)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var y = 0; y < view.Terminal.Buffer.Length; y++)
+        {
+            var line = view.Terminal.Buffer.GetLine(y);
+            if (line == null) continue;
+            for (var x = 0; x < line.Length; x++)
+                text.Append(string.IsNullOrEmpty(line[x].Content) ? " " : line[x].Content);
+        }
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// EIO on the master is the ordinary end of a process on Linux, not an exceptional one. With no event
+    /// from the pty layer the read loop is the only thing left that can report it, and it has to report
+    /// everything the EOF path would: a host told nothing cannot leave the state it entered when the
+    /// process started.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_that_fails_because_the_child_is_gone_reports_the_exit() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exited = new TaskCompletionSource<ProcessExitedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        var session = view.SessionId;
+
+        connection.ChildExits(3);
+        connection.Fail(new IOException("Input/output error"));
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(done, Is.SameAs(exited.Task), "EIO is how the platform ended this process; silence strands the host");
+
+        var report = exited.Task.Result;
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.ExitCode, Is.EqualTo(3), "the real code, read after the reap");
+            Assert.That(report.SessionId, Is.EqualTo(session));
+            Assert.That(view.IsLive, Is.False, "the view stops claiming a live process once the exit is reported");
+        });
+
+        await WaitUntil(() => BufferText(view).Contains("Process exited with code: 3"), "the exit notice was written");
+        Assert.That(BufferText(view), Does.Not.Contain("Error reading from process"),
+            "this is the end of a process, not a failure");
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// A genuine I/O error on a running child prints the error, and "we could not read" must not become
+    /// "you are never told": the exit is still reported when the child does die, though the read loop has
+    /// long since ended.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_error_on_a_live_child_prints_and_still_reports_the_later_exit() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e.ExitCode);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        connection.Fail(new IOException("Input/output error"));
+
+        await WaitUntil(() => BufferText(view).Contains("Error reading from process: Input/output error"),
+            "the error was printed");
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.IsLive, Is.True, "the child is still running");
+            Assert.That(exited.Task.IsCompleted, Is.False, "nothing has ended yet");
+        });
+
+        connection.ChildExits(7);
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(done, Is.SameAs(exited.Task), "the exit must be handed off, not abandoned with the error message");
+        Assert.Multiple(() =>
+        {
+            Assert.That(exited.Task.Result, Is.EqualTo(7));
+            Assert.That(view.IsLive, Is.False);
+        });
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// Establishing whether the child is gone takes up to the reap grace, and a relaunch can land in it.
+    /// The stream closing underneath is how the loop got here, so what it would say about the old process
+    /// must not reach the terminal that now belongs to the new one.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_failure_says_nothing_once_a_successor_arrived_during_the_reap_wait() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var stale = new ReadFailureConnection();
+        view.AttachConnection(stale);
+        stale.Fail(new IOException("Input/output error"));
+        Assert.That(stale.AwaitWaitForExit(TimeSpan.FromSeconds(5)), Is.True, "sanity: the loop reached the reap wait");
+
+        var successor = new RecordingConnection();
+        view.AttachConnection(successor);
+        var session = view.SessionId;
+
+        // Past the grace, so the wait has answered "not gone" and the loop has decided what to do about it.
+        await Task.Delay(1200);
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        stale.ChildExits(9);
+        await Task.Delay(300);
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BufferText(view), Does.Not.Contain("Error reading from process"));
+            Assert.That(Volatile.Read(ref exits), Is.EqualTo(0), "the old process must not speak for its successor");
+            Assert.That(view.IsLive, Is.True);
+            Assert.That(view.SessionId, Is.EqualTo(session));
+        });
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// The pty layer's own event and the read failure are two reports of one exit, and on a real Unix pty
+    /// they arrive together. Whichever is first, the host hears once and sees no error.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_failure_after_the_exit_was_reported_is_silent() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+
+        connection.RaiseProcessExited(5);
+        await WaitUntil(() => Volatile.Read(ref exits) == 1, "the event was reported");
+
+        connection.Fail(new IOException("Input/output error"));
+        await Task.Delay(300);
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Volatile.Read(ref exits), Is.EqualTo(1));
+            Assert.That(BufferText(view), Does.Not.Contain("Error reading from process"));
+        });
+
+        window.Close();
+    });
+
     /// <summary>
     /// The contract, stated without a race: when the read loop sees EOF it must report what the
     /// process ACTUALLY returned, which means not reading the exit code until the child has been
