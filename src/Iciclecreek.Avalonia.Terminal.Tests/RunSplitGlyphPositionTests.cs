@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using NUnit.Framework;
 
 namespace Iciclecreek.Terminal.Tests;
@@ -80,6 +81,10 @@ public class RunSplitGlyphPositionTests
         }
     }
 
+    /// <summary>
+    /// The DrawText branch, which is the only one the headless platform reaches by itself. The glyph branch
+    /// is covered by <see cref="A_glyph_run_is_drawn_at_its_column_not_its_snapped_origin"/>.
+    /// </summary>
     [AvaloniaTest]
     public void A_colour_change_mid_line_does_not_move_the_glyphs_after_it()
     {
@@ -96,14 +101,51 @@ public class RunSplitGlyphPositionTests
             var split = GlyphXs(view);
 
             var runs = (List<TerminalView.CachedTextRun>)view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY]!.Cache!;
-            Assume.That(runs.Count(r => r.Text is not null || r.Glyphs is not null), Is.GreaterThanOrEqualTo(3),
-                "the inverse cells are not a run of their own, so nothing was split");
+            Assume.That(runs.Count(r => r.Text is not null), Is.GreaterThanOrEqualTo(3),
+                "the inverse cells are not a FormattedText run of their own, which is the branch this test covers");
 
             Assert.That(whole, Has.Count.EqualTo(view.Terminal.Cols), "one glyph per cell, the trailing blanks included");
             Assert.That(split, Is.EqualTo(whole).Within(1e-6),
                 "the inverse run in the middle must not shift any glyph on the line");
             Assert.That(whole[7], Is.EqualTo(7 * view.CharWidth).Within(1e-6),
                 "and each glyph sits at its column");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// The DrawGlyphs branch, which is the one ordinary text takes in production.
+    /// </summary>
+    /// <remarks>
+    /// The headless platform never builds a glyph run: its font maps nothing, so TryBuildGlyphRun declines,
+    /// and it matches no fallback font either, so a fallback cell declines too. So the run is put in the
+    /// cache by hand, which is the same list a frame replays. Column 2 snaps from 26.6 to 27.
+    /// </remarks>
+    [AvaloniaTest]
+    public void A_glyph_run_is_drawn_at_its_column_not_its_snapped_origin()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write($"ab{Esc}[7mc{Esc}[0m");
+            GlyphXs(view);
+
+            var runs = (List<TerminalView.CachedTextRun>)view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY]!.Cache!;
+            var index = runs.FindIndex(r => r.StartX == 2 && r.Text is not null);
+            Assert.That(index, Is.GreaterThanOrEqualTo(0), "the inverse cell is not a run of its own at column 2");
+
+            var glyphs = new GlyphRun(new Typeface(view.FontFamily).GlyphTypeface, view.FontSize, "c".AsMemory(),
+                                      new[] { new GlyphInfo(1, 0, view.CharWidth) }, baselineOrigin: new Point(0, 0));
+            var run = runs[index] with { Text = null, Glyphs = glyphs };
+            runs[index] = run;
+
+            var xs = GlyphXs(view);
+
+            var replayed = (List<TerminalView.CachedTextRun>)view.Terminal.Buffer.Lines[view.Terminal.Buffer.ViewportY]!.Cache!;
+            Assert.That(replayed[index], Is.SameAs(run),
+                "the frame rebuilt the line, so it drew FormattedText and said nothing about the glyph branch");
+            Assert.That(xs, Is.EqualTo(new[] { 0, view.CharWidth, 2 * view.CharWidth }).Within(1e-6),
+                "the glyph run sits at its column, not at the snapped origin of its run");
         }
         finally { window.Close(); }
     }
