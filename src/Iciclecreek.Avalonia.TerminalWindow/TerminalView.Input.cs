@@ -236,7 +236,8 @@ namespace Iciclecreek.Terminal
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[{_instanceId}] Clipboard write failed: {ex.Message}");
+                    // The type only: a message is free to quote the text being copied.
+                    Debug.WriteLine($"[{_instanceId}] Clipboard write failed: {ex.GetType().Name}");
                     return false;
                 }
             }
@@ -256,7 +257,7 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TerminalView] Clipboard read failed: {ex.Message}");
+                Debug.WriteLine($"[TerminalView] Clipboard read failed: {ex.GetType().Name}");
                 return null;
             }
         }

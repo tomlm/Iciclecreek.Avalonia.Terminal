@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using Avalonia.Controls;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
@@ -23,7 +25,18 @@ public class ClipboardFailureTests
     public class LockedClipboard : DispatchProxy
     {
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
-            => throw new COMException("OpenClipboard Failed", unchecked((int)0x800401D0));
+            => throw new COMException($"OpenClipboard Failed: {QuotedText}", unchecked((int)0x800401D0));
+    }
+
+    /// <summary>What a platform's error message is free to quote, and the log must not repeat.</summary>
+    private const string QuotedText = "S3CR3T-clipboard-text";
+
+    private sealed class Capture : TraceListener
+    {
+        private readonly StringBuilder _text = new();
+        public override void Write(string? message) { lock (_text) _text.Append(message); }
+        public override void WriteLine(string? message) { lock (_text) _text.AppendLine(message); }
+        public string Text { get { lock (_text) return _text.ToString(); } }
     }
 
     private static (TerminalView view, RecordingConnection pty, Window window, IDisposable unlock) LockedView()
@@ -44,8 +57,20 @@ public class ClipboardFailureTests
         Assert.That(implField, Is.Not.Null, "Avalonia's Clipboard has changed; this test needs updating");
         var real = implField!.GetValue(clipboard);
         implField.SetValue(clipboard, DispatchProxy.Create(implField.FieldType, typeof(LockedClipboard)));
-        Assert.Catch<COMException>(() => clipboard.TryGetTextAsync().GetAwaiter().GetResult(),
-            "sanity: the clipboard has to be failing or this proves nothing");
+
+        // Put back on the way out if this fails too. The caller's finally has not started yet, and this
+        // assembly shares one Application, so a throwing clipboard left behind breaks unrelated tests.
+        try
+        {
+            Assert.Catch<COMException>(() => clipboard.TryGetTextAsync().GetAwaiter().GetResult(),
+                "sanity: the clipboard has to be failing or this proves nothing");
+        }
+        catch
+        {
+            implField.SetValue(clipboard, real);
+            window.Close();
+            throw;
+        }
 
         return (view, pty, window, new Restore(() => implField.SetValue(clipboard, real)));
     }
@@ -68,6 +93,86 @@ public class ClipboardFailureTests
     {
         view.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = key, KeyModifiers = modifiers });
         Thread.Sleep(60);
+    }
+
+    private static PointerPressedEventArgs RightPress(TerminalView view)
+    {
+        var pointer = new global::Avalonia.Input.Pointer(global::Avalonia.Input.Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
+        var props = new PointerPointProperties(RawInputModifiers.RightMouseButton,
+                                               PointerUpdateKind.RightButtonPressed);
+        return new PointerPressedEventArgs(view, pointer, view, new global::Avalonia.Point(10, 10),
+                                           0, props, KeyModifiers.None)
+        {
+            RoutedEvent = InputElement.PointerPressedEvent,
+        };
+    }
+
+    [AvaloniaTest]
+    public void A_right_click_copy_clears_the_selection_once_it_is_on_the_clipboard()
+    {
+        // The other side of the test below, so that one cannot pass by never clearing at all.
+        var view = new TerminalView { Process = "" };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        view.AttachConnection(new RecordingConnection());
+        try
+        {
+            Select(view);
+
+            view.RaiseEvent(RightPress(view));
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(view.Terminal.Selection.HasSelection, Is.False);
+            Assert.That(TopLevel.GetTopLevel(view)!.Clipboard!.TryGetTextAsync().GetAwaiter().GetResult(),
+                Does.StartWith("hello"));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_right_click_copy_the_clipboard_refuses_keeps_the_selection()
+    {
+        var (view, _, window, unlock) = LockedView();
+        try
+        {
+            Select(view);
+
+            view.RaiseEvent(RightPress(view));
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(view.Terminal.Selection.HasSelection, Is.True,
+                "nothing reached the clipboard, so the selection is the only copy left to retry from");
+        }
+        finally { unlock.Dispose(); window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_clipboard_failure_is_logged_without_its_message()
+    {
+        var capture = new Capture();
+        Trace.Listeners.Add(capture);
+        var (view, _, window, unlock) = LockedView();
+        try
+        {
+            Select(view);
+
+            view.CopyAsync().GetAwaiter().GetResult();
+            view.PasteAsync().GetAwaiter().GetResult();
+
+            // Proves the capture works, so an empty log cannot pass for the wrong reason.
+            Assert.That(capture.Text, Does.Contain("Clipboard write failed"));
+            Assert.That(capture.Text, Does.Contain("Clipboard read failed"));
+            Assert.That(capture.Text, Does.Not.Contain(QuotedText));
+        }
+        finally
+        {
+            Trace.Listeners.Remove(capture);
+            unlock.Dispose();
+            window.Close();
+        }
     }
 
     [AvaloniaTest]
