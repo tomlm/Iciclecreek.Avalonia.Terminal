@@ -1433,7 +1433,7 @@ namespace Iciclecreek.Terminal
         /// control does not have focus and a tracked copy would then be wrong until the next press.
         /// Windows-only: the P/Invoke does not exist elsewhere, and neither does Win32 input mode.
         /// </remarks>
-        private static IEnumerable<(bool On, Win32ControlKeyState Flag)> LockStates()
+        internal static IEnumerable<(bool On, Win32ControlKeyState Flag)> LockStates()
         {
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 yield break;

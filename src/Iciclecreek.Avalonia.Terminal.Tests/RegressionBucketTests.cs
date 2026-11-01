@@ -240,16 +240,22 @@ public class RegressionBucketTests
         {
             var sent = SelectAndType(view, pty, negotiate: $"{Esc}[?9001h");
 
+            // Records carry whichever lock keys are on, and those belong to the machine: NumLock is on
+            // for most Windows desktops. No keys are held here, so the locks are all the state there is.
+            var locks = (int)TerminalView.LockStates()
+                .Where(l => l.On)
+                .Aggregate(Win32ControlKeyState.None, (all, l) => all | l.Flag);
+
             // The Backspace records, in the INPUT_RECORD form ConPTY reads: virtual key 8, unicode
             // 8, down and then up. Before the fix the deletion was generated through the legacy
             // path, so what went out was a bare 0x08 -- on the wire, and ignored by a process
             // reading records, which leaves a selection the user watched disappear still in the line.
-            Assert.That(sent, Does.Contain($"{Esc}[8;0;8;1;0;1_{Esc}[8;0;8;0;0;1_"),
+            Assert.That(sent, Does.Contain($"{Esc}[8;0;8;1;{locks};1_{Esc}[8;0;8;0;{locks};1_"),
                 "expected a Win32 Backspace record pair, got: " + Readable(sent));
 
             // And the character AFTER it, in one write: X is virtual key 88, unicode 120. Order is
             // the point -- a deletion arriving after the replacement types into the wrong line.
-            Assert.That(sent, Does.EndWith($"{Esc}[88;0;120;1;0;1_"),
+            Assert.That(sent, Does.EndWith($"{Esc}[88;0;120;1;{locks};1_"),
                 "the key that replaces the selection must follow its deletion: " + Readable(sent));
         }
         finally { window.Close(); }
