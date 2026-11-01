@@ -1927,7 +1927,8 @@ namespace Iciclecreek.Terminal
             //
             // The question has to be asked without consuming the answer: TakeKeyboardSelectionDeletion
             // CLEARS the selection as it takes it, so calling it first leaves CopyAsync nothing to copy.
-            if (!CanRemoveSelection)
+            // A locked keyboard (KAM) cannot send the deletion, so the cut would only be a copy.
+            if (!CanRemoveSelection || IsKeyboardLocked)
                 return false;
 
             if (!await CopyAsync().ConfigureAwait(false))
@@ -3100,6 +3101,8 @@ namespace Iciclecreek.Terminal
                 // Typing means "put me back at the prompt" — every terminal jumps to the tail on input,
                 // and without it a user who scrolled up types blind. Past the bare modifiers for the same
                 // reason the selection-clear below skips them: pressing Ctrl on its own is not typing.
+                // Ahead of the selection extension, whose anchor is measured against the viewport, and so
+                // ahead of the keyboard lock too: a locked keystroke still returns the view to the tail.
                 if (!IsModifierKey(e.Key))
                     FollowTail();
 
@@ -3107,9 +3110,26 @@ namespace Iciclecreek.Terminal
                 // cursor sequence (ESC[1;2C and friends), which no interactive shell binds — zsh just
                 // echoes the ";2C" tail into the command line. Must come BEFORE the blanket clear below,
                 // since this is the one keystroke family that GROWS a selection instead of dropping it.
+                // And above the keyboard lock, because it only moves the selection on the view.
                 if (TryExtendKeyboardSelection(e))
                 {
                     e.Handled = true;
+                    return;
+                }
+
+                // Keyboard Action Mode: the application has locked the keyboard, so from here on nothing
+                // is encoded. Above this line are the gestures that act on the view or the clipboard:
+                // zoom, scrollback, select-input, copy and keyboard selection, which stay available, and
+                // the macOS and Desktop-mode paste and cut chords, which decline in PasteAsync and
+                // CanCut. Everything below sends to the process and stops here -- the standard paste
+                // chords (Ctrl+Shift+V, Shift+Insert) included. The keystroke is consumed rather than
+                // left to bubble -- a locked Tab must not move focus out of the terminal -- except the
+                // legacy Meta chords and bare modifiers, which never were.
+                if (IsKeyboardLocked)
+                {
+                    if (!IsModifierKey(e.Key)
+                        && ((e.KeyModifiers & KeyModifiers.Meta) == 0 || _terminal.KittyKeyboardActive))
+                        e.Handled = true;
                     return;
                 }
 
@@ -3268,6 +3288,7 @@ namespace Iciclecreek.Terminal
                         // Noted so the TextInput that may follow knows this keystroke has already
                         // been reported, and does not send the same character a second time.
                         _win32RecordSentForThisStroke = true;
+                        _win32KeysDown.Add((e.PhysicalKey, e.Key));
 
                         await SendToPtyAsync(toSend).ConfigureAwait(false);
                         return;
@@ -3414,8 +3435,10 @@ namespace Iciclecreek.Terminal
         /// <para>CanRemoveSelection alone was not enough for that. Cut can still decline after it --
         /// with no clipboard to write to, or a selection whose text is empty -- and a chord claimed
         /// on the strength of a cut that then did not happen is swallowed for nothing. Both of those
-        /// are answerable here, synchronously, so this asks all three of the questions CutAsync asks
-        /// rather than the first one.</para>
+        /// are answerable here, synchronously, so this asks every question CutAsync asks rather than
+        /// the first one -- including whether the application has locked the keyboard (KAM), under
+        /// which CutAsync refuses. Without that, Cmd+X over a selection made before the lock was
+        /// claimed and then cut nothing: a swallowed chord.</para>
         /// <para>The last condition is the one that is easy to miss: the deletion has to be
         /// ENCODABLE. EncodeSyntheticKey answers empty when the live protocol has no way to express
         /// a synthetic Backspace, and a cut claimed past that point would have copied to the
@@ -3425,6 +3448,7 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private bool CanCut
             => CanRemoveSelection
+               && !IsKeyboardLocked
                && TopLevel.GetTopLevel(this)?.Clipboard is not null
                && !string.IsNullOrEmpty(_terminal.Selection.GetSelectionText())
                && !string.IsNullOrEmpty(BuildKeyboardSelectionDeletion());
@@ -3551,6 +3575,21 @@ namespace Iciclecreek.Terminal
             {
                 Debug.WriteLine($"[TerminalView] OnTextInput: No PTY or empty text");
                 base.OnTextInput(e);
+                return;
+            }
+
+            // Keyboard Action Mode. Typed text, dead-key results and IME commits all arrive here, and
+            // all of them are sent by this view rather than by the emulator's gated generators. The
+            // selection is left alone: nothing replaced it.
+            //
+            // A deletion the key-down already took is dropped with the text. The lock flips on the
+            // reader thread and can land between the two; left pending, the deletion would ride out
+            // with the next composed text after the unlock, erasing characters nobody selected.
+            if (IsKeyboardLocked)
+            {
+                _win32RecordSentForThisStroke = false;
+                _pendingReplaceKeys = string.Empty;
+                e.Handled = true;
                 return;
             }
 
@@ -3708,6 +3747,13 @@ namespace Iciclecreek.Terminal
         /// and several different keys would otherwise share the one entry.
         /// </remarks>
         private readonly HashSet<(PhysicalKey Physical, Key Logical)> _keysHeld = new();
+
+        /// <summary>
+        /// The keys whose Win32 key-down record has gone out and whose key-up has not, so a release
+        /// arriving under a locked keyboard can tell whether it finishes a keystroke the process
+        /// already saw. Same keying as <see cref="_keysHeld"/>.
+        /// </summary>
+        private readonly HashSet<(PhysicalKey Physical, Key Logical)> _win32KeysDown = new();
 
         /// <summary>
         /// Whether the Win32 path has already reported the keystroke now in flight.
