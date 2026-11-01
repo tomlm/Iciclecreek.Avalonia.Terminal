@@ -187,6 +187,10 @@ namespace Iciclecreek.Terminal
         /// <see cref="FindInBuffer"/> would: <see cref="SearchHitCount"/>, <see cref="SearchTruncated"/>,
         /// and no match chosen. A newer search of either kind, <see cref="ClearSearch"/>, or the view
         /// unloading cancels it, and a cancelled search publishes nothing. Call it on the UI thread.</para>
+        /// <para>An invalidated scan restarts from the top, so a buffer that keeps resizing or switching
+        /// screens -- a long window drag over a huge scrollback -- delays the result until it settles.
+        /// The call stays cancellable throughout, and a caller that searches again on each change
+        /// supersedes the old search anyway.</para>
         /// </remarks>
         /// <returns>How many matches, capped at <see cref="XT.Search.BufferSearch.MaxHits"/>. Cancelled
         /// when superseded, cleared, or <paramref name="cancellationToken"/> fires first.</returns>
@@ -218,30 +222,52 @@ namespace Iciclecreek.Terminal
         /// <summary>The <see cref="FindInBufferAsync"/> still allowed to publish. UI thread only.</summary>
         private CancellationTokenSource? _searchInFlight;
 
+        /// <summary>Test seam: the source of the search still allowed to publish, if any.</summary>
+        internal CancellationTokenSource? SearchInFlight => _searchInFlight;
+
         private async Task<int> FindInSlicesAsync(XT.Search.BufferSearch search, string needle,
                                                   XT.Search.SearchOptions options, CancellationTokenSource inFlight)
         {
             var token = inFlight.Token;
-            var scan = await Task.Run(() => ScanInSlices(search, needle, options, token), token).ConfigureAwait(false);
-
-            // No cancellation check between the last slice and here: the one that counts is on the UI
-            // thread, where a newer search or a clear can no longer slip in behind it.
-            var count = await Dispatcher.UIThread.InvokeAsync(() =>
+            try
             {
-                if (!ReferenceEquals(_searchInFlight, inFlight) || !ReferenceEquals(_search, search)
-                    || inFlight.IsCancellationRequested)
-                    return (int?)null;
+                var scan = await Task.Run(() => ScanInSlices(search, needle, options, token), token).ConfigureAwait(false);
 
+                // No cancellation check between the last slice and here: the one that counts is on the UI
+                // thread, where a newer search or a clear can no longer slip in behind it.
+                var count = await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (!ReferenceEquals(_searchInFlight, inFlight) || !ReferenceEquals(_search, search)
+                        || inFlight.IsCancellationRequested)
+                        return (int?)null;
+
+                    _searchInFlight = null;
+
+                    search.Apply(scan);
+                    _currentMatchId = -1;
+                    InvalidateVisual();
+                    return search.Count;
+                });
+
+                return count ?? throw new OperationCanceledException(token);
+            }
+            finally
+            {
+                // However it ended -- published, cancelled, superseded or faulted -- the search is the
+                // one owner of its source, and lets go of it here, on the UI thread where
+                // _searchInFlight lives. Otherwise a search only the caller's token stopped would keep
+                // its registration on that token until the next search. Posted rather than awaited, so
+                // a search stopped on the worker ends there without waiting for the UI thread.
+                Dispatcher.UIThread.Post(() => EndSearch(inFlight));
+            }
+        }
+
+        private void EndSearch(CancellationTokenSource inFlight)
+        {
+            if (ReferenceEquals(_searchInFlight, inFlight))
                 _searchInFlight = null;
-                inFlight.Dispose();
 
-                search.Apply(scan);
-                _currentMatchId = -1;
-                InvalidateVisual();
-                return search.Count;
-            });
-
-            return count ?? throw new OperationCanceledException(token);
+            inFlight.Dispose();
         }
 
         /// <summary>
@@ -280,9 +306,10 @@ namespace Iciclecreek.Terminal
             if (inFlight is null)
                 return;
 
+            // Cancelled, not disposed: the search may still be reading its token, and it disposes the
+            // source itself when it ends (EndSearch).
             _searchInFlight = null;
             inFlight.Cancel();
-            inFlight.Dispose();
         }
 
         /// <summary>Moves to the next match and scrolls it into view. Wraps at the end.</summary>

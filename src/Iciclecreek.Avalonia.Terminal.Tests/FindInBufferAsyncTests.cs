@@ -472,6 +472,131 @@ public class FindInBufferAsyncTests
         finally { window.Close(); }
     }
 
+    // ---- a search that ends lets go of its cancellation source ---------------------------------
+    //
+    // The source is linked to the caller's token, so one left undisposed keeps a registration on that
+    // token until the next search. The search disposes it on the UI thread by a POST, so each test
+    // runs the queue before looking.
+
+    private static void AssertLetGo(TerminalView view, CancellationTokenSource source)
+    {
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(view.SearchInFlight, Is.Null, "the view still holds the ended search's source");
+        Assert.That(() => source.Cancel(), Throws.TypeOf<ObjectDisposedException>(),
+                    "the ended search's source was not disposed");
+    }
+
+    [AvaloniaTest]
+    public async Task A_search_cancelled_by_its_caller_lets_go_of_its_source()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            FillWithWrappedMatches(view);
+
+            using var cancel = new CancellationTokenSource();
+            view.SearchSliceScanned = new ParkAfterFirstSlice(hold: false) { WhileParked = cancel.Cancel }.OnSlice;
+
+            var search = view.FindInBufferAsync("needle", default, cancel.Token);
+            var source = view.SearchInFlight!;
+
+            Assert.That(await WasCancelled(search), Is.True);
+            AssertLetGo(view, source);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public async Task A_search_whose_scan_throws_lets_go_of_its_source()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            FillWithWrappedMatches(view);
+            view.SearchSliceScanned = _ => throw new InvalidOperationException("the scan failed");
+
+            var search = view.FindInBufferAsync("needle");
+            var source = view.SearchInFlight!;
+
+            var threw = false;
+            try { await search; }
+            catch (InvalidOperationException) { threw = true; }
+
+            Assert.That(threw, Is.True, "the scan's failure should reach the caller");
+            AssertLetGo(view, source);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public async Task A_search_that_publishes_lets_go_of_its_source()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            FillWithWrappedMatches(view);
+
+            var search = view.FindInBufferAsync("needle");
+            var source = view.SearchInFlight!;
+
+            Assert.That(await search, Is.GreaterThan(0));
+            AssertLetGo(view, source);
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>
+    /// A superseded search ending while the newer one is still scanning must release only its own
+    /// source: clearing the field would take the newer search's right to publish with it.
+    /// </summary>
+    [AvaloniaTest]
+    public async Task A_superseded_search_ending_leaves_the_newer_one_in_flight()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            FillWithWrappedMatches(view);
+
+            // First slice of the older search, then first slice of the newer, each parked on its own gate.
+            var olderParked = new ManualResetEventSlim(false);
+            var releaseOlder = new ManualResetEventSlim(false);
+            var newerParked = new ManualResetEventSlim(false);
+            var releaseNewer = new ManualResetEventSlim(false);
+            var slices = 0;
+            view.SearchSliceScanned = _ =>
+            {
+                switch (Interlocked.Increment(ref slices))
+                {
+                    case 1: olderParked.Set(); releaseOlder.Wait(Patience); break;
+                    case 2: newerParked.Set(); releaseNewer.Wait(Patience); break;
+                }
+            };
+
+            var older = view.FindInBufferAsync("needle");
+            var olderSource = view.SearchInFlight!;
+            Assert.That(olderParked.Wait(Patience), Is.True);
+
+            var newer = view.FindInBufferAsync("line 12");
+            var newerSource = view.SearchInFlight!;
+            Assert.That(newerParked.Wait(Patience), Is.True);
+
+            // The older one stops at its next slice and ends -- its release runs now, mid-newer.
+            releaseOlder.Set();
+            Assert.That(SpinWait.SpinUntil(() => older.IsCompleted, Patience), Is.True);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(view.SearchInFlight, Is.SameAs(newerSource), "the older search's end cleared the newer one");
+            Assert.That(() => olderSource.Cancel(), Throws.TypeOf<ObjectDisposedException>());
+
+            releaseNewer.Set();
+            var count = await newer;
+            Assert.That(await WasCancelled(older), Is.True);
+            Assert.That(view.FindInBuffer("line 12"), Is.EqualTo(count));
+            AssertLetGo(view, newerSource);
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaTest]
     public async Task Clearing_cancels_the_search_in_flight()
     {
