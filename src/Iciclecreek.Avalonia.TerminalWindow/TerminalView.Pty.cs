@@ -164,7 +164,7 @@ namespace Iciclecreek.Terminal
                     handover.Unclaim(parked);
             }
 
-            // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
+            // A thread of its own, not the pool — see ReadLoopAsync for why the read is blocking.
             //
             // No readiness wait here, unlike the spawn path, and that is deliberate. AttachConnection is
             // synchronous and called from the UI thread; blocking it for up to five seconds would freeze the
@@ -400,7 +400,7 @@ namespace Iciclecreek.Terminal
 
                 // Start reading from the PTY connection, and do not continue until the loop is actually
                 // reading. The loop is handed THIS connection so a relaunch cannot redirect it onto the next
-                // one — see ReadPtyOutputAsync.
+                // one — see ReadLoopAsync.
                 //
                 // The process is already running the moment SpawnAsync returns, so every instant before the
                 // first read is a window in which it can write, finish, and have its output discarded. A
@@ -813,18 +813,8 @@ namespace Iciclecreek.Terminal
         private ReaderLease? _readerLease;
 
         /// <summary>Starts the read loop for <paramref name="connection"/>, on a thread of its own.</summary>
-        /// <param name="connection">
-        /// The connection this loop reads, passed in rather than re-read from the field on every
-        /// iteration. A read is an await, and a relaunch during one swaps the field — so a loop that
-        /// consults _ptyConnection afterwards can find itself operating on the NEXT process: waiting
-        /// on it, reading its exit code, and claiming the exit interlock LaunchProcess had just
-        /// reset for it, which swallows that process's own exit.
-        /// </param>
-        /// <param name="sessionId">
-        /// Identity of <paramref name="connection"/>, stamped on every chunk this loop reports. Passed in for
-        /// the same reason the connection is: by the time a chunk reaches a subscriber the view may have moved
-        /// on, and the subscriber needs to know which process it is hearing rather than only that one is live.
-        /// </param>
+        /// <param name="connection">The connection the loop reads. See <see cref="ReadLoopAsync"/>.</param>
+        /// <param name="sessionId">Identity of <paramref name="connection"/>. See <see cref="ReadLoopAsync"/>.</param>
         /// <remarks>
         /// The thread is started here, from a static method, even when the caller is already on a
         /// thread it started for the purpose. A closure that captured the view, sitting under the
@@ -861,6 +851,29 @@ namespace Iciclecreek.Terminal
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default).Unwrap();
 
+        /// <summary>Reads <paramref name="connection"/> until it ends or the loop's session does.</summary>
+        /// <param name="lease">
+        /// How the loop reaches its view, which it holds only while the session is its own. See
+        /// <see cref="ReaderLease"/>.
+        /// </param>
+        /// <param name="connection">
+        /// The connection this loop reads, passed in rather than re-read from the field on every
+        /// iteration. A read waits for as long as the process stays quiet, and a relaunch during one swaps
+        /// the field — so a loop that consults _ptyConnection afterwards can find itself operating on the
+        /// NEXT process: waiting on it, reading its exit code, and claiming the exit interlock
+        /// <see cref="InstallConnection"/> had just reset for it, which swallows that process's own exit.
+        /// </param>
+        /// <param name="sessionId">
+        /// Identity of <paramref name="connection"/>, stamped on every chunk this loop reports. Passed in for
+        /// the same reason the connection is: by the time a chunk reaches a subscriber the view may have moved
+        /// on, and the subscriber needs to know which process it is hearing rather than only that one is live.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The session's token. It ends the loop between reads, and during one only when the connection
+        /// supports cancellable reads; a blocking read ends when the stream closes or the process speaks.
+        /// </param>
+        /// <param name="up">Completed once the loop is running and about to read, for a caller waiting to
+        /// know that before it carries on. See the note at the top of the method. Null when nobody is.</param>
         private static async Task ReadLoopAsync(
             ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up)
         {

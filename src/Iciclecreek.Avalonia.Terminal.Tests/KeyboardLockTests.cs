@@ -190,6 +190,48 @@ public class KeyboardLockTests
         finally { window.Close(); }
     }
 
+    /// <summary>
+    /// Unlocked, Cmd+Left/Right is the terminal's own Home/End alias, not a chord for the host's bindings,
+    /// so locking the keyboard must not start handing it to them. Macs only: elsewhere it is no alias.
+    /// </summary>
+    [AvaloniaTest]
+    [TestCase(Key.Left)]
+    [TestCase(Key.Right)]
+    public async Task A_locked_Cmd_arrow_stays_handled_and_sends_nothing(Key key)
+    {
+        if (!OperatingSystem.IsMacOS())
+            Assert.Ignore("Cmd+Left/Right is the macOS Home/End alias; elsewhere it is a legacy Meta chord, and bubbles");
+
+        var (view, pty, window) = LiveView();
+        try
+        {
+            Lock(view);
+
+            var arrow = Press(view, key, KeyModifiers.Meta);
+
+            Assert.That(arrow.Handled, Is.True, "the alias is the terminal's whether or not it may send");
+            Assert.That(await Quiet(pty), Is.Empty);
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>The legacy Meta chords stay the host's under the lock. Only the alias changed sides.</summary>
+    [AvaloniaTest]
+    public async Task A_locked_Meta_chord_still_bubbles_to_the_host()
+    {
+        var (view, pty, window) = LiveView();
+        try
+        {
+            Lock(view);
+
+            var cmdK = Press(view, Key.K, KeyModifiers.Meta, "k");
+
+            Assert.That(cmdK.Handled, Is.False);
+            Assert.That(await Quiet(pty), Is.Empty);
+        }
+        finally { window.Close(); }
+    }
+
     // ------------------------------------- releases of keys pressed before the lock
 
     [AvaloniaTest]
