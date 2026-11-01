@@ -166,6 +166,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
+        /// <inheritdoc cref="TerminalView.ClipboardFailed"/>
+        public event EventHandler<ClipboardFailedEventArgs>? ClipboardFailed;
+
         /// <inheritdoc cref="TerminalView.NotificationRequested"/>
         public event EventHandler<TerminalNotificationEventArgs> NotificationRequested
         {
@@ -889,6 +892,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.ShellReady -= OnTerminalViewShellReady;
                 _terminalView.OutputReceived -= OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
+                _terminalView.ClipboardFailed -= OnTerminalViewClipboardFailed;
                 _terminalView.InputSent -= OnTerminalViewInputSent;
             }
 
@@ -917,6 +921,7 @@ namespace Iciclecreek.Terminal
                 _terminalView.ShellReady += OnTerminalViewShellReady;
                 _terminalView.OutputReceived += OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
+                _terminalView.ClipboardFailed += OnTerminalViewClipboardFailed;
                 _terminalView.InputSent += OnTerminalViewInputSent;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
 
@@ -1013,6 +1018,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewUrlClicked(object? sender, UrlClickedEventArgs e)
         {
             UrlClicked?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewClipboardFailed(object? sender, ClipboardFailedEventArgs e)
+        {
+            ClipboardFailed?.Invoke(this, e);
         }
 
         private void SetCurrentDirectory(string? currentDirectory)

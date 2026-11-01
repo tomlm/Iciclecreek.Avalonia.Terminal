@@ -258,6 +258,19 @@ namespace Iciclecreek.Terminal
         public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
 
         /// <summary>
+        /// Raised on the UI thread when a copy, cut or paste the user asked for with a key press or mouse
+        /// click failed, which on Windows happens while another process has the clipboard open.
+        /// </summary>
+        /// <remarks>
+        /// <para>It exists because those gestures have no caller to throw to, so without it the failure
+        /// goes unnoticed. <see cref="CopyAsync"/>, <see cref="CutAsync"/> and <see cref="PasteAsync"/> throw
+        /// to whoever called them instead, and do not raise this.</para>
+        /// <para>A handler that throws is caught and logged: these gestures run in async void handlers,
+        /// where an escaping exception would end the application.</para>
+        /// </remarks>
+        public event EventHandler<ClipboardFailedEventArgs>? ClipboardFailed;
+
+        /// <summary>
         /// Event raised when a URL in the terminal is Ctrl+Clicked.
         /// </summary>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;

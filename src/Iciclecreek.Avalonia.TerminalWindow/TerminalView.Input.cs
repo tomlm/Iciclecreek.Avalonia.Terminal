@@ -91,6 +91,8 @@ namespace Iciclecreek.Terminal
         /// <remarks>
         /// Does nothing while the application has locked the keyboard (KAM): a paste is typing, and the
         /// emulator's own <c>Terminal.Paste</c> declines it for the same reason.
+        /// <para>Throws if the clipboard fails, which on Windows happens while another process has it
+        /// open. Nothing is sent and any selection is left as it was. An empty clipboard does not throw.</para>
         /// </remarks>
         public async Task PasteAsync()
         {
@@ -128,7 +130,7 @@ namespace Iciclecreek.Terminal
                 return;
             }
 
-            var text = await TryReadClipboardTextAsync(clipboard);
+            var text = await clipboard.TryGetTextAsync();
             // After the clipboard read, for the same reason as the announced path.
             if (!string.IsNullOrEmpty(text) && !IsKeyboardLocked)
             {
@@ -177,7 +179,7 @@ namespace Iciclecreek.Terminal
                 // An uncooperative clipboard offers whatever the probes below still find.
             }
 
-            var text = await TryReadClipboardTextAsync(clipboard);
+            var text = await clipboard.TryGetTextAsync();
             if (!string.IsNullOrEmpty(text) && !data.ContainsKey("text/plain"))
             {
                 mimes.Add("text/plain");
@@ -206,7 +208,11 @@ namespace Iciclecreek.Terminal
         /// <summary>
         /// Copies selected text to the clipboard.
         /// </summary>
-        /// <returns>True if text was copied, false if there is no selection or the clipboard refused it.</returns>
+        /// <returns>True if text was copied, false if no selection.</returns>
+        /// <remarks>
+        /// Throws if the clipboard fails, which on Windows happens while another process has it open.
+        /// The selection is left as it was, so the caller can tell the user and retry.
+        /// </remarks>
         public async Task<bool> CopyAsync()
         {
             if (!_terminal.Selection.HasSelection)
@@ -226,39 +232,41 @@ namespace Iciclecreek.Terminal
                     text = text.Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\r\n");
                 }
 
-                // The clipboard is shared with every other process, and one holding it open makes this
-                // throw. Most callers are async void key and mouse handlers, where an exception escaping
-                // would end the application. False also keeps a cut from deleting what it failed to copy.
-                try
-                {
-                    await clipboard.SetTextAsync(text);
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    // The type only: a message is free to quote the text being copied.
-                    Debug.WriteLine($"[{_instanceId}] Clipboard write failed: {ex.GetType().Name}");
-                    return false;
-                }
+                await clipboard.SetTextAsync(text);
+                return true;
             }
 
             return false;
         }
 
         /// <summary>
-        /// Reads the clipboard's text, or null if there is none or it cannot be read just now.
+        /// Runs a copy, cut or paste that a key press or mouse click asked for, and reports a failure
+        /// through <see cref="ClipboardFailed"/>.
         /// </summary>
-        /// <remarks>Declines rather than throws, for the reason <see cref="CopyAsync"/> gives.</remarks>
-        private static async Task<string?> TryReadClipboardTextAsync(IClipboard clipboard)
+        /// <returns>True if it did not fail.</returns>
+        /// <remarks>
+        /// Those handlers are async void, so an exception escaping one would end the application. Logged by
+        /// type alone, because a clipboard failure's message is free to quote the text involved.
+        /// </remarks>
+        private async Task<bool> TryClipboardGestureAsync(ClipboardOperation operation, Func<Task> gesture)
         {
             try
             {
-                return await clipboard.TryGetTextAsync();
+                await gesture();
+                return true;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[TerminalView] Clipboard read failed: {ex.GetType().Name}");
-                return null;
+                Debug.WriteLine($"[{_instanceId}] Clipboard {operation} failed: {ex.GetType().Name}");
+                try
+                {
+                    ClipboardFailed?.Invoke(this, new ClipboardFailedEventArgs(operation, ex));
+                }
+                catch (Exception handlerEx)
+                {
+                    Debug.WriteLine($"[{_instanceId}] A ClipboardFailed handler threw: {handlerEx.GetType().Name}");
+                }
+                return false;
             }
         }
 
