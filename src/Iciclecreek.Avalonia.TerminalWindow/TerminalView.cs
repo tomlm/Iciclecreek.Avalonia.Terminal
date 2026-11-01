@@ -768,6 +768,23 @@ namespace Iciclecreek.Terminal
                 defaultValue: Colors.White);
 
         /// <summary>
+        /// The colour bold text is drawn in when it uses the DEFAULT foreground — Ghostty's
+        /// <c>bold-color</c>. Null, the default, leaves such text in the foreground colour as before.
+        /// </summary>
+        /// <remarks>
+        /// <para>Only the default foreground is replaced. Bold text a program coloured itself keeps
+        /// its colour; whether bold palette 0-7 moves to the bright half is
+        /// <c>Options.DrawBoldTextInBrightColors</c>, which this does not touch.</para>
+        /// <para>Carried as the emulator's theme bold colour (<c>ThemeOptions.Bold</c>), so it is
+        /// what OSC 5;0 reports. Live: changing it re-applies the theme, which — as with any theme
+        /// change — discards colours a program had set with OSC 4/10/11/12.</para>
+        /// </remarks>
+        public static readonly StyledProperty<Color?> BoldColorProperty =
+            AvaloniaProperty.Register<TerminalView, Color?>(
+                nameof(BoldColor),
+                defaultValue: null);
+
+        /// <summary>
         /// Whether the font's programming ligatures are drawn. Off by default — a host that wants
         /// them opts in.
         /// </summary>
@@ -1437,6 +1454,7 @@ namespace Iciclecreek.Terminal
                 ViewportYProperty,
                 ZoomProperty,
                 CursorColorProperty,
+                BoldColorProperty,
                 CursorStyleProperty,
                 CursorBlinkProperty,
                 SuppressCursorProperty,   // toggling it must repaint immediately
@@ -2099,6 +2117,16 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
+        /// Gets or sets the colour of bold text using the default foreground, or null for none.
+        /// See <see cref="BoldColorProperty"/>.
+        /// </summary>
+        public Color? BoldColor
+        {
+            get => GetValue(BoldColorProperty);
+            set => SetValue(BoldColorProperty, value);
+        }
+
+        /// <summary>
         /// Gets or sets the cursor style used by the terminal.
         /// </summary>
         public XT.Common.CursorStyle CursorStyle
@@ -2229,7 +2257,30 @@ namespace Iciclecreek.Terminal
             if (Background is ISolidColorBrush bg)
                 theme.Background = ToHex(bg.Color);
 
-            static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+            // Only when set, so a host that put a bold colour in Options.Theme itself keeps it.
+            if (BoldColor is Color bold)
+                theme.Bold = ToHex(bold);
+        }
+
+        private static string ToHex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+
+        /// <summary>
+        /// Moves the live emulator's bold colour to <see cref="BoldColor"/>.
+        /// </summary>
+        /// <remarks>
+        /// The palette has no setter for the bold colour alone; a new theme is how it moves. Built
+        /// from the current one with the brushes seeded again, so re-applying it does not put the
+        /// default pair back to what it was at startup.
+        /// </remarks>
+        private void ApplyBoldColor()
+        {
+            if (_terminal == null)
+                return;
+
+            var theme = new XT.Options.ThemeOptions(_terminal.Options.Theme);
+            SeedThemeFromBrushes(theme);
+            theme.Bold = BoldColor is Color bold ? ToHex(bold) : null;
+            _terminal.Options.Theme = theme;
         }
 
         /// <summary>
@@ -2336,6 +2387,14 @@ namespace Iciclecreek.Terminal
                 // Straight through to the live emulator: this is read on every line feed, so moving
                 // it takes effect on the next one rather than needing a rebuild.
                 _terminal.Options.ConvertEol = (bool)change.NewValue!;
+            }
+            else if (change.Property == BoldColorProperty)
+            {
+                ApplyBoldColor();
+
+                // Directly as well as through the ColorChanged walk the theme raises, which is
+                // posted: the next frame must not replay a line resolved under the old colour.
+                InvalidateRunCaches();
             }
             else if (change.Property == LigaturesProperty || change.Property == FaintOpacityProperty)
             {

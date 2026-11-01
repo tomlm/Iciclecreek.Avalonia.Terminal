@@ -53,12 +53,11 @@ namespace Iciclecreek.Avalonia.Terminal
         /// </remarks>
         public static Color? GetBackgroundColor(this BufferCell cell, ColorSnapshot palette)
         {
-            var color = cell.Attributes.GetBgColor();
-            var mode = cell.Attributes.GetBgColorMode();
+            var attributes = cell.Attributes;
+            if (IsDefaultBackground(attributes))
+                return null;
 
-            if (color == 257) return null;  // Default color
-
-            return cell.ExtractColor(color, mode, palette);
+            return cell.ExtractColor(attributes.GetBgColor(), attributes.GetBgColorMode(), palette);
         }
 
         /// <summary>
@@ -106,8 +105,8 @@ namespace Iciclecreek.Avalonia.Terminal
         }
 
         /// <summary>
-        /// A cell's foreground colour, or <see langword="null"/> when it uses the terminal's DEFAULT
-        /// foreground.
+        /// A cell's foreground colour, or <see langword="null"/> when it is drawn in the terminal's
+        /// DEFAULT foreground (a default cell, unless it is bold and the theme sets a bold colour).
         /// </summary>
         /// <param name="boldIsBright">
         /// The emulator's <c>DrawBoldTextInBrightColors</c>. Passed in because this is a RENDERER
@@ -121,8 +120,13 @@ namespace Iciclecreek.Avalonia.Terminal
         /// chosen. #8B0000 bold is not #DC5555; it is the colour the program named.</para>
         /// <para>So it applies to palette indices 0-7 only, and becomes index + 8: the same rule
         /// xterm.js applies, and the reason the option is named after bright COLORS rather than
-        /// brightness. A default foreground is not a palette index and is left alone, which is also
-        /// what xterm.js does.</para>
+        /// brightness. A default foreground is not a palette index and is never brightened; bold
+        /// text using it takes the theme's bold colour instead when one is set (Ghostty's
+        /// <c>bold-color</c>, <see cref="ColorSnapshot.Bold"/>), and otherwise stays the default,
+        /// which reports as null like any other default cell.</para>
+        /// <para>All of that is the emulator's <see cref="ColorSnapshot.ResolveForeground"/>, called
+        /// rather than repeated, so the bold rules and the colour-mode encoding they read live in
+        /// one place, XTerm.NET.</para>
         /// <para>Dim is no longer applied here at all. It was applied twice — 0.6 on each channel
         /// here and again as opacity in <see cref="GetForegroundBrush(BufferCell, ColorSnapshot, IBrush, bool, double)"/> — and never at all to text
         /// using the default foreground, which returns before reaching this. Opacity is the one that
@@ -132,18 +136,35 @@ namespace Iciclecreek.Avalonia.Terminal
         public static Color? GetForegroundColor(this BufferCell cell, ColorSnapshot palette,
                                                 bool boldIsBright = true)
         {
-            var color = cell.Attributes.GetFgColor();
-            var mode = cell.Attributes.GetFgColorMode();
-            if (color == 256)
-                return null;  // Default color
+            var attributes = cell.Attributes;
 
-            // Mode 0 is the palette, for both the basic sixteen and the 256 index; mode 1 is direct
-            // RGB, which has no bright counterpart to select.
-            if (boldIsBright && mode == 0 && color < 8 && cell.Attributes.IsBold())
-                color += 8;
+            // Null keeps meaning "the default", so GetForegroundBrush can still hand back a host's
+            // gradient. A bold default cell with a bold colour set is no longer drawn in the default.
+            if (IsDefaultForeground(attributes) && !(palette.Bold.HasValue && attributes.IsBold()))
+                return null;
 
-            return cell.ExtractColor(color, mode, palette);
+            return FromRgb(palette.ResolveForeground(attributes, boldIsBright));
         }
+
+        /// <summary>Whether a cell's foreground is the terminal's default rather than a colour of its own.</summary>
+        /// <remarks>
+        /// One of the two places this control reads XTerm.NET's colour encoding directly (the other is
+        /// <see cref="IsDefaultBackground"/>, with <see cref="ExtractColor"/> behind it): today the
+        /// default is the out-of-palette value 256 for a foreground and 257 for a background, under
+        /// palette mode 0. When that encoding changes, these are what change with it.
+        /// <para>The mode is half the test, not a formality. The value and mode share one packed int,
+        /// so 24-bit #000100 (<c>38;2;0;1;0</c>) is also the value 256, in mode 1; checking the value
+        /// alone drew that colour in the theme's foreground, and the #000101 background as no
+        /// background at all.</para>
+        /// </remarks>
+        private static bool IsDefaultForeground(in AttributeData attributes)
+            => attributes.GetFgColorMode() == 0 && attributes.GetFgColor() == 256;
+
+        /// <summary>Whether a cell's background is the terminal's default. See <see cref="IsDefaultForeground"/>.</summary>
+        // TODO: replace this and GetBackgroundColor's ExtractColor call with ColorSnapshot.ResolveBackground
+        // (null for the default background) once XTerm.NET ships it, so no mode value is read here at all.
+        private static bool IsDefaultBackground(in AttributeData attributes)
+            => attributes.GetBgColorMode() == 0 && attributes.GetBgColor() == 257;
 
         /// <summary>
         /// The brush to draw a cell's text in. A cell using the DEFAULT foreground resolves to the
@@ -285,6 +306,12 @@ namespace Iciclecreek.Avalonia.Terminal
             return cell.ExtractColor(color, mode, palette);
         }
 
+        /// <summary>A background or underline colour from its value and XTerm.NET colour mode.</summary>
+        /// <remarks>
+        /// Reads the mode encoding directly: 1 is 24-bit RGB, anything else a palette index. The
+        /// foreground no longer comes through here; it is resolved by the emulator's
+        /// <see cref="ColorSnapshot.ResolveForeground"/>.
+        /// </remarks>
         private static Color? ExtractColor(this BufferCell cell, int color, int mode, ColorSnapshot palette)
         {
             Color? realColor;
