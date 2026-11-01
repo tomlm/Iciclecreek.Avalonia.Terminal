@@ -3648,7 +3648,9 @@ namespace Iciclecreek.Terminal
 
             try
             {
-                Debug.WriteLine($"[TerminalView] OnTextInput: Sending '{e.Text}' to PTY");
+                // The length, never the text: what is typed here includes passwords, and a host that
+                // bridges Trace.Listeners into its log would record them one keystroke at a time.
+                Debug.WriteLine($"[TerminalView] OnTextInput: Sending {e.Text!.Length} chars to PTY");
 
                 // Before the await, for the reason given on the key-up path: this handler is async
                 // void, so it returns to the routing at the await and the event goes on bubbling
@@ -3888,12 +3890,31 @@ namespace Iciclecreek.Terminal
             {
                 // One failing callback must not swallow the rest of the batch. Separately posted,
                 // each of these was independent; batching them must not make them share a fate.
-                // The WHOLE exception, not just its message. A message alone drops the stack and any
-                // inner exception, which is most of what makes a swallowed failure diagnosable --
-                // and swallowing is the point here, so this line is all anybody gets.
+                // The stack and every inner exception, not just the message: swallowing is the point
+                // here, so this line is all anybody gets. But not the messages either. These callbacks
+                // carry what the program sent -- notification bodies, titles, clipboard text -- and a
+                // host's exception is free to quote it.
                 try { callback(); }
-                catch (Exception ex) { Debug.WriteLine($"[TerminalView] host callback failed: {ex}"); }
+                catch (Exception ex) { Debug.WriteLine($"[TerminalView] host callback failed: {DescribeWithoutMessages(ex)}"); }
             }
+        }
+
+        /// <summary>
+        /// An exception's types and stack traces, inner ones included, without any message: for logging an
+        /// exception raised by host code, whose message may quote terminal data or input.
+        /// </summary>
+        internal static string DescribeWithoutMessages(Exception ex)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (Exception? e = ex; e != null; e = e.InnerException)
+            {
+                if (sb.Length > 0)
+                    sb.Append(" ---> ");
+                sb.Append(e.GetType().FullName);
+                if (e.StackTrace is { } stack)
+                    sb.AppendLine().Append(stack);
+            }
+            return sb.ToString();
         }
 
         /// <summary>

@@ -1215,7 +1215,8 @@ namespace Iciclecreek.Terminal
             // If we can't get a virtual key code, we can't generate a Win32 sequence
             if (vk == 0)
             {
-                Debug.WriteLine($"[TerminalView] Win32: No VK for Key={e.Key}");
+                // Not the key's name: it is a keystroke, and this runs for every one that has no VK.
+                Debug.WriteLine("[TerminalView] Win32: No VK for the key");
                 return string.Empty;
             }
 
