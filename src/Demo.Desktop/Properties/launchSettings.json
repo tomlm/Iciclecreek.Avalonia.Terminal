@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Demo.Desktop": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "PTY_TRACE": "0"
+      }
+    }
+  }
+}
