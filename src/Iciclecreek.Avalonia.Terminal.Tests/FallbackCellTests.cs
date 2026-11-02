@@ -81,31 +81,60 @@ public class FallbackCellTests
     }
 
     /// <summary>
-    /// Where the platform has a font for it, the fallback glyph is drawn on the grid: one cell's
-    /// advance, the grid's baseline, and ink no wider than the cell.
+    /// Stands in for the font lookup, which the headless platform cannot do: its font manager matches no
+    /// font for a character and its stand-in font maps nothing. Everything after the lookup is the real path.
     /// </summary>
-    [AvaloniaTest]
-    public void A_fallback_glyph_is_fitted_to_its_cell()
+    private static void FallbackFontHas(TerminalView view, int codePoint, double inkLeftEm, double inkWidthEm)
     {
-        TerminalView.PrimaryGlyphProbe = null;
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var record = typeof(TerminalView).GetNestedType("FallbackGlyph", System.Reflection.BindingFlags.NonPublic)!;
+        var glyph = Activator.CreateInstance(record, new Typeface(view.FontFamily).GlyphTypeface, (ushort)1, inkLeftEm, inkWidthEm);
+        var known = (System.Collections.IDictionary)typeof(TerminalView).GetField("_fallbackGlyphs", flags)!.GetValue(view)!;
+        known[(codePoint, FontStyle.Normal, FontWeight.Normal)] = glyph;
+    }
+
+    /// <summary>
+    /// The fallback glyph is drawn on the grid: one cell's advance, the grid's baseline, and its ink centred
+    /// in the cell, at a smaller size only if it would not otherwise fit. Widths are in cells; the headless
+    /// cell is exactly FontSize wide, so a cell of ink is 1 em.
+    /// </summary>
+    [TestCase(1.5, 1.0)]
+    [TestCase(1.0, 1.0)]
+    [TestCase(0.5, 0.5)]
+    [AvaloniaTest]
+    public void A_fallback_glyph_is_fitted_to_its_cell(double inkCells, double drawnCells)
+    {
+        const double inkLeftEm = 0.1;
+        TerminalView.PrimaryGlyphProbe = cp => cp != 0x23F5;
         var (view, window) = Realised();
         try
         {
+            var inkWidthEm = inkCells * view.CharWidth / view.FontSize;
+            FallbackFontHas(view, 0x23F5, inkLeftEm, inkWidthEm);
+
             view.Terminal.Write("a⏵b");
 
             var runs = TextRuns(view);
-            var fallback = runs.SingleOrDefault(r => r.StartX == 1);
-            Assume.That(fallback?.CellCount, Is.EqualTo(1), "the primary font has U+23F5, so there is nothing to fall back from");
-            Assume.That(fallback!.Glyphs, Is.Not.Null, "no font on this machine has U+23F5");
+            var fallback = runs.Single(r => r.StartX == 1);
+            Assert.That(fallback.CellCount, Is.EqualTo(1), "a character the font lacks is a run of its own");
+            Assert.That(fallback.Glyphs, Is.Not.Null, "the fallback cell did not take the glyph path");
 
             var glyphs = fallback.Glyphs!;
-            Assert.That(glyphs.GlyphInfos.Single().GlyphAdvance, Is.EqualTo(view.CharWidth).Within(1e-9));
-            Assert.That(glyphs.FontRenderingEmSize, Is.LessThanOrEqualTo(view.FontSize));
-            if (runs[0].Glyphs is { } beside)
-                Assert.That(glyphs.BaselineOrigin.Y, Is.EqualTo(beside.BaselineOrigin.Y).Within(1e-9),
-                    "on the same baseline as the text beside it");
-            if (glyphs.BuildGeometry() is { } ink)
-                Assert.That(ink.Bounds.Width, Is.LessThanOrEqualTo(view.CharWidth + 1e-6));
+            var info = glyphs.GlyphInfos.Single();
+            var size = glyphs.FontRenderingEmSize;
+            Assert.That(info.GlyphAdvance, Is.EqualTo(view.CharWidth).Within(1e-9));
+            Assert.That(inkWidthEm * size, Is.EqualTo(drawnCells * view.CharWidth).Within(1e-9),
+                "ink wider than the cell is shrunk to it, and ink that fits keeps the text's size");
+
+            var baseline = (double)typeof(TerminalView)
+                .GetField("_baseline", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(view)!;
+            Assert.That(baseline, Is.GreaterThan(0), "a baseline of 0 could not tell the grid's from a default");
+            Assert.That(glyphs.BaselineOrigin.Y, Is.EqualTo(baseline).Within(1e-9), "on the grid's baseline");
+
+            var inkLeft = info.GlyphOffset.X + inkLeftEm * size;
+            var inkRight = inkLeft + inkWidthEm * size;
+            Assert.That(inkLeft, Is.EqualTo(view.CharWidth - inkRight).Within(1e-9), "the ink is centred in the cell");
         }
         finally { window.Close(); }
     }

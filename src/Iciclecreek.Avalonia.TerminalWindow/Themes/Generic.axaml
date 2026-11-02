@@ -1,6 +1,11 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:Iciclecreek.Terminal">
+
+    <!-- How the control tells this theme is already there, however it got there. See LoadDefaultStyles. -->
+    <Styles.Resources>
+        <x:String x:Key="Iciclecreek.Terminal.DefaultThemeLoaded">true</x:String>
+    </Styles.Resources>
     
     <!-- FontFamily is set here rather than only as a default value, because a default LOSES to an inherited
          one: FluentTheme puts a proportional font (Inter) on the tree and it flows straight down into the

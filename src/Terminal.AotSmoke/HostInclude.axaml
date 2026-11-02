@@ -1,0 +1,6 @@
+<!-- A host pulling the theme in from its own XAML. Being here at all checks that this still compiles. -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Terminal.AotSmoke.HostInclude">
+    <StyleInclude Source="avares://Iciclecreek.Avalonia.Terminal/Themes/Generic.axaml"/>
+</Styles>

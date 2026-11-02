@@ -168,6 +168,71 @@ internal sealed class PushConnection : IPtyConnection
 }
 
 /// <summary>
+/// A connection whose read fails on demand, with the child's fate decided separately, and whose
+/// ProcessExited fires only when a test says so.
+/// </summary>
+/// <remarks>
+/// Once the slave side of a Unix pty closes, read() on the master returns EIO rather than 0 bytes, so a
+/// failing read is how the ordinary end of a process arrives there. The same exception can also be a
+/// genuine I/O error on a child that is still running. Which of the two a test is in depends only on
+/// whether it has called <see cref="ChildExits"/>, and <see cref="WaitForExit"/> blocks as the real one
+/// does, so "still running" costs the view its real wait rather than a spin.
+/// </remarks>
+internal sealed class ReadFailureConnection : IPtyConnection
+{
+    private readonly PushStream _stream = new();
+    private readonly ManualResetEventSlim _exited = new(false);
+    private readonly ManualResetEventSlim _waitedOn = new(false);
+    private volatile int _exitCode;
+    private int _waitCalls;
+
+    public Stream ReaderStream => _stream;
+    public Stream WriterStream { get; } = new MemoryStream();
+
+    /// <summary>How many times anything has asked whether the child is gone: is it still being watched?</summary>
+    public int WaitCalls => Volatile.Read(ref _waitCalls);
+
+    public void Fail(Exception failure) => _stream.Fail(failure);
+
+    /// <summary>The child is gone from here on, and reaps with <paramref name="exitCode"/>.</summary>
+    public void ChildExits(int exitCode)
+    {
+        _exitCode = exitCode;
+        _exited.Set();
+    }
+
+    /// <summary>
+    /// Raises the pty layer's own exit event, for the tests where it gets there first. The library does
+    /// not expose the args' constructor, so they carry the default code; these tests count reports.
+    /// </summary>
+    public void RaiseProcessExited(int exitCode)
+    {
+        ChildExits(exitCode);
+        var args = (PtyExitedEventArgs)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(PtyExitedEventArgs));
+        ProcessExited?.Invoke(this, args);
+    }
+
+    /// <summary>Blocks until somebody has asked whether the child is gone, or the timeout passes.</summary>
+    public bool AwaitWaitForExit(TimeSpan timeout) => _waitedOn.Wait(timeout);
+
+    /// <summary>The default 0 until reaped, as on a real connection.</summary>
+    public int ExitCode => _exited.IsSet ? _exitCode : 0;
+
+    public bool WaitForExit(int milliseconds)
+    {
+        Interlocked.Increment(ref _waitCalls);
+        _waitedOn.Set();
+        return _exited.Wait(milliseconds);
+    }
+
+    public int Pid => -1;
+    public void Kill() { }
+    public void Resize(int columns, int rows) { }
+    public void Dispose() { }
+    public event EventHandler<PtyExitedEventArgs>? ProcessExited;
+}
+
+/// <summary>
 /// A blocking pty double whose reads are served in the order they were MADE, one chunk per read, only
 /// when the test hands one out.
 /// </summary>

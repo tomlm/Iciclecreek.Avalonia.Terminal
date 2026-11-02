@@ -111,6 +111,421 @@ public class ExitReportingTests
         public event EventHandler<PtyExitedEventArgs>? ProcessExited { add { } remove { } }
     }
 
+    // ── A read that fails ───────────────────────────────────────────────────────────────────────
+
+    /// <summary>Everything the emulator has, rows run together so a line that wrapped still reads whole.</summary>
+    private static string BufferText(TerminalView view)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var y = 0; y < view.Terminal.Buffer.Length; y++)
+        {
+            var line = view.Terminal.Buffer.GetLine(y);
+            if (line == null) continue;
+            for (var x = 0; x < line.Length; x++)
+                text.Append(string.IsNullOrEmpty(line[x].Content) ? " " : line[x].Content);
+        }
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// EIO on the master is the ordinary end of a process on Linux, not an exceptional one. With no event
+    /// from the pty layer the read loop is the only thing left that can report it, and it has to report
+    /// everything the EOF path would: a host told nothing cannot leave the state it entered when the
+    /// process started.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_that_fails_because_the_child_is_gone_reports_the_exit() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exited = new TaskCompletionSource<ProcessExitedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        var session = view.SessionId;
+
+        connection.ChildExits(3);
+        connection.Fail(new IOException("Input/output error"));
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(done, Is.SameAs(exited.Task), "EIO is how the platform ended this process; silence strands the host");
+
+        var report = exited.Task.Result;
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.ExitCode, Is.EqualTo(3), "the real code, read after the reap");
+            Assert.That(report.SessionId, Is.EqualTo(session));
+            Assert.That(view.IsLive, Is.False, "the view stops claiming a live process once the exit is reported");
+        });
+
+        await WaitUntil(() => BufferText(view).Contains("Process exited with code: 3"), "the exit notice was written");
+        Assert.That(BufferText(view), Does.Not.Contain("Error reading from process"),
+            "this is the end of a process, not a failure");
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// A genuine I/O error on a running child prints the error, and "we could not read" must not become
+    /// "you are never told": the exit is still reported when the child does die, though the read loop has
+    /// long since ended.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_error_on_a_live_child_prints_and_still_reports_the_later_exit() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e.ExitCode);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        connection.Fail(new IOException("Input/output error"));
+
+        await WaitUntil(() => BufferText(view).Contains("Error reading from process: Input/output error"),
+            "the error was printed");
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.IsLive, Is.True, "the child is still running");
+            Assert.That(exited.Task.IsCompleted, Is.False, "nothing has ended yet");
+        });
+
+        connection.ChildExits(7);
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(done, Is.SameAs(exited.Task), "the exit must be handed off, not abandoned with the error message");
+        Assert.Multiple(() =>
+        {
+            Assert.That(exited.Task.Result, Is.EqualTo(7));
+            Assert.That(view.IsLive, Is.False);
+        });
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// Establishing whether the child is gone takes up to the reap grace, and a relaunch can land in it.
+    /// The stream closing underneath is how the loop got here, so what it would say about the old process
+    /// must not reach the terminal that now belongs to the new one.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_failure_says_nothing_once_a_successor_arrived_during_the_reap_wait() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var stale = new ReadFailureConnection();
+        view.AttachConnection(stale);
+        stale.Fail(new IOException("Input/output error"));
+        Assert.That(stale.AwaitWaitForExit(TimeSpan.FromSeconds(5)), Is.True, "sanity: the loop reached the reap wait");
+
+        var successor = new RecordingConnection();
+        view.AttachConnection(successor);
+        var session = view.SessionId;
+
+        // Past the grace, so the wait has answered "not gone" and the loop has decided what to do about it.
+        await Task.Delay(1200);
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        stale.ChildExits(9);
+        await Task.Delay(300);
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BufferText(view), Does.Not.Contain("Error reading from process"));
+            Assert.That(Volatile.Read(ref exits), Is.EqualTo(0), "the old process must not speak for its successor");
+            Assert.That(view.IsLive, Is.True);
+            Assert.That(view.SessionId, Is.EqualTo(session));
+        });
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// The pty layer's own event and the read failure are two reports of one exit, and on a real Unix pty
+    /// they arrive together. Whichever is first, the host hears once and sees no error.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_read_failure_after_the_exit_was_reported_is_silent() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+
+        connection.RaiseProcessExited(5);
+        await WaitUntil(() => Volatile.Read(ref exits) == 1, "the event was reported");
+
+        connection.Fail(new IOException("Input/output error"));
+        await Task.Delay(300);
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Volatile.Read(ref exits), Is.EqualTo(1));
+            Assert.That(BufferText(view), Does.Not.Contain("Error reading from process"));
+        });
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// The ceiling that ends EOF's wait is for a child EOF says is dead. A read error says no such thing,
+    /// so a child outliving the ceiling is not reported as ended: that would turn IsLive false for a
+    /// running process, and the claimed interlock would then lock out its real exit and code.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_live_child_past_the_ceiling_is_not_reported_until_it_really_exits() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "", ExitReapCeilingMs = 100 };
+        var window = Show(view);
+
+        var reported = new List<ProcessExitedEventArgs>();
+        view.ProcessExited += (_, e) => reported.Add(e);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        var session = view.SessionId;
+        connection.Fail(new IOException("Input/output error"));
+
+        await WaitUntil(() => BufferText(view).Contains("Error reading from process"), "the error was printed");
+        await Task.Delay(600);   // well past the ceiling
+        await WaitUntil(() => connection.WaitCalls > 1, "it is being watched, not abandoned");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reported, Is.Empty, "the child is still running");
+            Assert.That(view.IsLive, Is.True);
+        });
+
+        connection.ChildExits(7);
+        await WaitUntil(() => reported.Count > 0, "the real exit was reported");
+        await Task.Delay(300);   // room for a second report, if there were one
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reported, Has.Count.EqualTo(1));
+            Assert.That(reported[0].ExitCode, Is.EqualTo(7), "the real code");
+            Assert.That(reported[0].ExitCodeKnown, Is.True);
+            Assert.That(reported[0].SessionId, Is.EqualTo(session));
+            Assert.That(view.IsLive, Is.False);
+        });
+
+        window.Close();
+    });
+
+    /// <summary>The pty layer's own event beats the watch to it, and the watch then stops looking.</summary>
+    [AvaloniaTest]
+    public Task The_pty_layers_event_during_the_watch_is_the_one_report() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        connection.Fail(new IOException("Input/output error"));
+        await WaitUntil(() => BufferText(view).Contains("Error reading from process"), "the error was printed");
+
+        connection.RaiseProcessExited(5);
+        await WaitUntil(() => Volatile.Read(ref exits) == 1, "the event was reported");
+        await Task.Delay(600);
+
+        Assert.That(Volatile.Read(ref exits), Is.EqualTo(1));
+        await AssertNoLongerWatched(connection);
+
+        window.Close();
+    });
+
+    private static async Task AssertNoLongerWatched(ReadFailureConnection connection)
+    {
+        // One poll may already be between its check and its look.
+        await Task.Delay(400);
+        var calls = connection.WaitCalls;
+        await Task.Delay(800);
+        Assert.That(connection.WaitCalls, Is.EqualTo(calls), "still polling a connection this view is done with");
+    }
+
+    /// <summary>
+    /// A detached connection is handed back alive and undisposed, so the interlock (which the detach
+    /// resets) and a throwing WaitForExit would never stop the watch. With no ceiling either, it would
+    /// poll for as long as the child lived.
+    /// </summary>
+    [AvaloniaTest]
+    public Task A_detach_ends_the_watch_and_the_exit_is_not_reported_here() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var connection = new ReadFailureConnection();
+        view.AttachConnection(connection);
+        connection.Fail(new IOException("Input/output error"));
+        await WaitUntil(() => connection.WaitCalls > 1, "the watch is polling");
+
+        Assert.That(view.DetachConnection(), Is.SameAs(connection));
+        await AssertNoLongerWatched(connection);
+
+        connection.ChildExits(9);
+        await Task.Delay(400);
+
+        Assert.That(Volatile.Read(ref exits), Is.EqualTo(0), "this view gave the process away");
+
+        window.Close();
+    });
+
+    /// <summary>The same, for a relaunch: the old process must not speak for its successor.</summary>
+    [AvaloniaTest]
+    public Task A_relaunch_ends_the_watch_and_the_old_exit_is_not_reported() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "" };
+        var window = Show(view);
+
+        var exits = 0;
+        view.ProcessExited += (_, _) => Interlocked.Increment(ref exits);
+
+        var stale = new ReadFailureConnection();
+        view.AttachConnection(stale);
+        stale.Fail(new IOException("Input/output error"));
+        await WaitUntil(() => stale.WaitCalls > 1, "the watch is polling");
+
+        view.AttachConnection(new RecordingConnection());
+        await AssertNoLongerWatched(stale);
+
+        stale.ChildExits(9);
+        await Task.Delay(400);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Volatile.Read(ref exits), Is.EqualTo(0));
+            Assert.That(view.IsLive, Is.True, "the successor is running");
+        });
+
+        window.Close();
+    });
+
+    /// <summary>The next view to attach a handed-back connection is the one that hears the exit.</summary>
+    [AvaloniaTest]
+    public Task After_a_detach_the_next_owner_hears_the_exit() => RunAsync(async () =>
+    {
+        var first = new TerminalView { Process = "" };
+        var firstWindow = Show(first);
+        var second = new TerminalView { Process = "" };
+        var secondWindow = Show(second);
+
+        var firstExits = 0;
+        first.ProcessExited += (_, _) => Interlocked.Increment(ref firstExits);
+        var heard = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        second.ProcessExited += (_, e) => heard.TrySetResult(e.ExitCode);
+
+        var connection = new ReadFailureConnection();
+        first.AttachConnection(connection);
+        connection.Fail(new IOException("Input/output error"));
+        await WaitUntil(() => connection.WaitCalls > 1, "the first view's watch is polling");
+
+        first.DetachConnection();
+        second.AttachConnection(connection);
+        connection.ChildExits(4);
+
+        var done = await Task.WhenAny(heard.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(done, Is.SameAs(heard.Task));
+        Assert.Multiple(() =>
+        {
+            Assert.That(heard.Task.Result, Is.EqualTo(4));
+            Assert.That(Volatile.Read(ref firstExits), Is.EqualTo(0));
+        });
+
+        firstWindow.Close();
+        secondWindow.Close();
+    });
+
+    /// <summary>
+    /// The watch can outlast the view's interest in the process by hours, so it must not hold the emulator
+    /// and the scrollback for that long once the view has let the connection go.
+    /// </summary>
+    [AvaloniaTest]
+    public void A_detached_view_is_not_kept_alive_by_the_watch()
+    {
+        var connection = new ReadFailureConnection();
+        var view = WatchThenDetach(connection);
+
+        for (var i = 0; i < 5 && view.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+
+        Assert.That(view.IsAlive, Is.False, "the watch is keeping the detached view alive");
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference WatchThenDetach(ReadFailureConnection connection)
+    {
+        // Never shown, so no window can be what is holding it. That also means no emulator to write the
+        // error line to, so the line is taken as handled.
+        var view = new TerminalView { Process = "" };
+        view.WritingMessage += (_, e) => e.Handled = true;
+
+        view.AttachConnection(connection);
+        connection.Fail(new IOException("Input/output error"));
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (connection.WaitCalls < 2 && DateTime.UtcNow < deadline)
+        {
+            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Thread.Sleep(10);
+        }
+        Assert.That(connection.WaitCalls, Is.GreaterThan(1), "sanity: the watch is polling, which is the case under test");
+
+        view.DetachConnection();
+        return new WeakReference(view);
+    }
+
+    /// <summary>
+    /// EOF does say the child is dead, so there the ceiling stands: a child that never reaps still ends in a
+    /// report, with the code unknown rather than the 0 that would read as success.
+    /// </summary>
+    [AvaloniaTest]
+    public Task At_EOF_the_ceiling_reports_an_exit_with_an_unknown_code() => RunAsync(async () =>
+    {
+        var view = new TerminalView { Process = "", ExitReapCeilingMs = 200 };
+        var window = Show(view);
+
+        var exited = new TaskCompletionSource<ProcessExitedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        view.ProcessExited += (_, e) => exited.TrySetResult(e);
+
+        view.AttachConnection(new ExitedButNotYetReaped(realExitCode: 3, everReaps: false));
+        var session = view.SessionId;
+
+        var done = await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.That(done, Is.SameAs(exited.Task), "a host told nothing cannot leave the state it entered");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exited.Task.Result.ExitCodeKnown, Is.False);
+            Assert.That(exited.Task.Result.SessionId, Is.EqualTo(session));
+            Assert.That(view.IsLive, Is.False);
+        });
+
+        window.Close();
+    });
+
     /// <summary>
     /// The contract, stated without a race: when the read loop sees EOF it must report what the
     /// process ACTUALLY returned, which means not reading the exit code until the child has been

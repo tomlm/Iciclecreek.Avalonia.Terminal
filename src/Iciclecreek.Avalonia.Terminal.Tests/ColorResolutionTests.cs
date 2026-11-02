@@ -144,6 +144,79 @@ public class ColorResolutionTests
         finally { window.Close(); }
     }
 
+    // ------------------------------------------------------- backgrounds of each colour mode
+
+    [AvaloniaTest]
+    [TestCase("41", 1)]             // 16-colour
+    [TestCase("101", 9)]            // 16-colour, bright
+    [TestCase("48;5;0", 0)]         // 256-colour
+    [TestCase("48;5;9", 9)]
+    [TestCase("48;5;196", 196)]
+    [TestCase("48;5;255", 255)]
+    public void An_indexed_background_takes_its_palette_entry(string sgr, int index)
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var (cell, palette) = FirstCell(view, $"{Esc}[{sgr}mX");
+
+            Assert.That(cell.GetBackgroundColor(palette), Is.EqualTo(Rgb(palette[index])));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void An_indexed_background_follows_a_palette_change()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            view.Terminal.Write($"{Esc}]4;196;rgb:12/34/56{Esc}\\");
+            var (cell, palette) = FirstCell(view, $"{Esc}[48;5;196mX");
+
+            Assert.That(cell.GetBackgroundColor(palette), Is.EqualTo(Color.FromRgb(0x12, 0x34, 0x56)));
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_24_bit_background_keeps_its_colour()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var (black, palette) = FirstCell(view, $"{Esc}[48;2;0;0;0mX");
+            var (white, _) = FirstCell(view, $"\r\n{Esc}[48;2;255;255;255mX");
+            var (value256, _) = FirstCell(view, $"\r\n{Esc}[48;2;0;1;0mX");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(black.GetBackgroundColor(palette), Is.EqualTo(Color.FromRgb(0, 0, 0)));
+                Assert.That(white.GetBackgroundColor(palette), Is.EqualTo(Color.FromRgb(255, 255, 255)));
+                Assert.That(value256.GetBackgroundColor(palette), Is.EqualTo(Color.FromRgb(0, 1, 0)));
+            });
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void Resetting_returns_a_background_to_the_default()
+    {
+        var (view, window) = Realised();
+        try
+        {
+            var (afterReset, palette) = FirstCell(view, $"{Esc}[48;5;196m{Esc}[0mX");
+            var (afterSgr49, _) = FirstCell(view, $"\r\n{Esc}[48;2;1;2;3m{Esc}[49mX");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterReset.GetBackgroundColor(palette), Is.Null);
+                Assert.That(afterSgr49.GetBackgroundColor(palette), Is.Null);
+            });
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaTest]
     public void Bold_stays_in_the_dim_half_when_the_option_is_off()
     {

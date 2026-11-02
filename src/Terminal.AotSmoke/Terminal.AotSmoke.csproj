@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Published and RUN by CI, because the failures this exists for cannot happen anywhere else: a JIT build
+       trims nothing, so the test suite passes whether or not a trimmed one works. Not in the solution, so an
+       ordinary build does not need the ILCompiler package. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <TrimMode>full</TrimMode>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
+    <SmokeAvaloniaVersion Condition="'$(SmokeAvaloniaVersion)' == ''">12.0.4</SmokeAvaloniaVersion>
+  </PropertyGroup>
+
+  <!-- Homebrew's .NET links its own OpenSSL and Brotli, and clang does not search here by itself. -->
+  <ItemGroup Condition="Exists('/opt/homebrew/opt/openssl@3/lib')">
+    <LinkerArg Include="-L/opt/homebrew/opt/openssl@3/lib -L/opt/homebrew/lib" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="$(SmokeAvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Desktop" Version="$(SmokeAvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Headless" Version="$(SmokeAvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Skia" Version="$(SmokeAvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="$(SmokeAvaloniaVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Iciclecreek.Avalonia.TerminalWindow\Iciclecreek.Avalonia.Terminal.csproj" />
+  </ItemGroup>
+
+</Project>
