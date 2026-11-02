@@ -183,6 +183,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
+        /// <inheritdoc cref="TerminalView.ClipboardFailed"/>
+        public event EventHandler<ClipboardFailedEventArgs>? ClipboardFailed;
+
         /// <inheritdoc cref="TerminalView.NotificationRequested"/>
         public event EventHandler<TerminalNotificationEventArgs> NotificationRequested
         {
@@ -797,6 +800,7 @@ namespace Iciclecreek.Terminal
             _terminalControl.ShellReady += OnTerminalControlShellReady;
             _terminalControl.OutputReceived += OnTerminalControlOutputReceived;
             _terminalControl.UrlClicked += OnTerminalControlUrlClicked;
+            _terminalControl.ClipboardFailed += OnTerminalControlClipboardFailed;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
             TerminalView.AddWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -993,6 +997,7 @@ namespace Iciclecreek.Terminal
                 _terminalControl.ShellReady -= OnTerminalControlShellReady;
                 _terminalControl.OutputReceived -= OnTerminalControlOutputReceived;
                 _terminalControl.UrlClicked -= OnTerminalControlUrlClicked;
+                _terminalControl.ClipboardFailed -= OnTerminalControlClipboardFailed;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
                 TerminalView.RemoveWindowResizedHandler(_terminalControl, OnTerminalWindowResized);
@@ -1054,6 +1059,11 @@ namespace Iciclecreek.Terminal
         private void OnTerminalControlUrlClicked(object? sender, UrlClickedEventArgs e)
         {
             UrlClicked?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlClipboardFailed(object? sender, ClipboardFailedEventArgs e)
+        {
+            ClipboardFailed?.Invoke(this, e);
         }
 
         private void OnTerminalControlWritingMessage(object? sender, TerminalMessageEventArgs e)

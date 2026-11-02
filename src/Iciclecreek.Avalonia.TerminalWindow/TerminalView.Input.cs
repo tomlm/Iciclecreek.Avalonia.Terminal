@@ -91,6 +91,8 @@ namespace Iciclecreek.Terminal
         /// <remarks>
         /// Does nothing while the application has locked the keyboard (KAM): a paste is typing, and the
         /// emulator's own <c>Terminal.Paste</c> declines it for the same reason.
+        /// <para>Throws if the clipboard fails, which on Windows happens while another process has it
+        /// open. Nothing is sent and any selection is left as it was. An empty clipboard does not throw.</para>
         /// </remarks>
         public async Task PasteAsync()
         {
@@ -207,6 +209,10 @@ namespace Iciclecreek.Terminal
         /// Copies selected text to the clipboard.
         /// </summary>
         /// <returns>True if text was copied, false if no selection.</returns>
+        /// <remarks>
+        /// Throws if the clipboard fails, which on Windows happens while another process has it open.
+        /// The selection is left as it was, so the caller can tell the user and retry.
+        /// </remarks>
         public async Task<bool> CopyAsync()
         {
             if (!_terminal.Selection.HasSelection)
@@ -231,6 +237,47 @@ namespace Iciclecreek.Terminal
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Runs a copy, cut or paste that a key press or mouse click asked for, and reports a failure
+        /// through <see cref="ClipboardFailed"/>.
+        /// </summary>
+        /// <returns>True if it did not fail.</returns>
+        /// <remarks>
+        /// Those handlers are async void, so an exception escaping one would end the application.
+        /// </remarks>
+        private async Task<bool> TryClipboardGestureAsync(ClipboardOperation operation, Func<Task> gesture)
+        {
+            try
+            {
+                await gesture();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ReportClipboardFailure(operation, ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Tells the host about a clipboard failure there is no caller to throw to.
+        /// </summary>
+        /// <remarks>
+        /// Logged by type alone, because a clipboard failure's message is free to quote the text involved.
+        /// </remarks>
+        private void ReportClipboardFailure(ClipboardOperation operation, Exception exception)
+        {
+            Debug.WriteLine($"[{_instanceId}] Clipboard {operation} failed: {exception.GetType().Name}");
+            try
+            {
+                ClipboardFailed?.Invoke(this, new ClipboardFailedEventArgs(operation, exception));
+            }
+            catch (Exception handlerEx)
+            {
+                Debug.WriteLine($"[{_instanceId}] A ClipboardFailed handler threw: {handlerEx.GetType().Name}");
+            }
         }
 
         // True when the key is a modifier pressed on its own (no associated character),
@@ -988,11 +1035,12 @@ namespace Iciclecreek.Terminal
                 else
                     await clipboard.SetTextAsync(text);
             }
-            catch
+            catch (Exception ex)
             {
                 // Awaited rather than discarded so a failure cannot escape as an unobserved task
-                // exception. There is nobody to report it to: the pty stream cannot wait on the OS
+                // exception. The host is the only one to tell: the pty stream cannot wait on the OS
                 // clipboard, and the program that asked has no way to be told.
+                ReportClipboardFailure(ClipboardOperation.ProgramWrite, ex);
             }
         }
 
@@ -1046,15 +1094,17 @@ namespace Iciclecreek.Terminal
         private async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
             string? text;
+            Exception? failure = null;
             try
             {
                 // Read here rather than on the reader thread: the visual-tree walk is UI state too.
                 var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
                 text = clipboard is null ? null : await clipboard.TryGetTextAsync();
             }
-            catch
+            catch (Exception ex)
             {
                 text = null;   // a locked or unavailable clipboard declines rather than throws
+                failure = ex;
             }
 
             // Always answered, even with null: a deferred request the host never completes leaves a
@@ -1073,6 +1123,11 @@ namespace Iciclecreek.Terminal
             {
                 e.Respond(text);
             }
+
+            // After the answer and outside the lock, so no handler can keep the program waiting or
+            // stall the reader.
+            if (failure is not null)
+                ReportClipboardFailure(ClipboardOperation.ProgramRead, failure);
         }
 
         private bool TryGetPrintableChar(KeyEventArgs e, out char character)
@@ -1405,7 +1460,7 @@ namespace Iciclecreek.Terminal
         /// control does not have focus and a tracked copy would then be wrong until the next press.
         /// Windows-only: the P/Invoke does not exist elsewhere, and neither does Win32 input mode.
         /// </remarks>
-        private static IEnumerable<(bool On, Win32ControlKeyState Flag)> LockStates()
+        internal static IEnumerable<(bool On, Win32ControlKeyState Flag)> LockStates()
         {
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 yield break;

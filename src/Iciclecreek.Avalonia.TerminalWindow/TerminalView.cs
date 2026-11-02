@@ -2952,7 +2952,7 @@ namespace Iciclecreek.Terminal
                     // Copy leaves the selection in place, the way every other application does:
                     // copying is not a destructive act, and a selection you can no longer see is one
                     // you cannot copy again, extend, or replace.
-                    await CopyAsync();
+                    await TryClipboardGestureAsync(ClipboardOperation.Copy, CopyAsync);
                     RequestPaint();
                 }
                 else
@@ -2999,7 +2999,7 @@ namespace Iciclecreek.Terminal
                             // Copy leaves the selection in place, the way every other application does:
                             // copying is not a destructive act, and a selection you can no longer see is one
                             // you cannot copy again, extend, or replace.
-                            await CopyAsync();
+                            await TryClipboardGestureAsync(ClipboardOperation.Copy, CopyAsync);
                             RequestPaint();
                         }
                         return;
@@ -3009,7 +3009,7 @@ namespace Iciclecreek.Terminal
                     if (e.Key == Key.V)
                     {
                         e.Handled = true;
-                        await PasteAsync();
+                        await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync);
                         return;
                     }
                 }
@@ -3034,7 +3034,7 @@ namespace Iciclecreek.Terminal
                         if (CanCut)
                         {
                             e.Handled = true;
-                            await CutAsync().ConfigureAwait(false);
+                            await TryClipboardGestureAsync(ClipboardOperation.Cut, CutAsync).ConfigureAwait(false);
                             return;
                         }
                     }
@@ -3071,7 +3071,7 @@ namespace Iciclecreek.Terminal
 
                             case Key.V:
                                 e.Handled = true;
-                                await PasteAsync().ConfigureAwait(false);
+                                await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync).ConfigureAwait(false);
                                 return;
 
                             case Key.X:
@@ -3086,7 +3086,7 @@ namespace Iciclecreek.Terminal
                                 if (CanCut)
                                 {
                                     e.Handled = true;
-                                    await CutAsync().ConfigureAwait(false);
+                                    await TryClipboardGestureAsync(ClipboardOperation.Cut, CutAsync).ConfigureAwait(false);
                                     return;
                                 }
                                 break;
@@ -3116,7 +3116,7 @@ namespace Iciclecreek.Terminal
                         // Copy leaves the selection in place, the way every other application does:
                         // copying is not a destructive act, and a selection you can no longer see is one
                         // you cannot copy again, extend, or replace.
-                        await CopyAsync();
+                        await TryClipboardGestureAsync(ClipboardOperation.Copy, CopyAsync);
                         RequestPaint();
                         return;
                     }
@@ -3133,7 +3133,7 @@ namespace Iciclecreek.Terminal
                         // Copy leaves the selection in place, the way every other application does:
                         // copying is not a destructive act, and a selection you can no longer see is one
                         // you cannot copy again, extend, or replace.
-                        await CopyAsync();
+                        await TryClipboardGestureAsync(ClipboardOperation.Copy, CopyAsync);
                         RequestPaint();
                         return;
                     }
@@ -3226,7 +3226,7 @@ namespace Iciclecreek.Terminal
                 if (shortcuts && TerminalKeyGestures.Paste.Matches(e))
                 {
                     e.Handled = true;
-                    await PasteAsync();
+                    await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync);
                     return;
                 }
 
