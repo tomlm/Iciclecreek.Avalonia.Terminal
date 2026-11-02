@@ -3,22 +3,28 @@ using System;
 namespace Iciclecreek.Terminal
 {
     /// <summary>
-    /// The clipboard operation a key press or mouse click asked for.
+    /// The clipboard operation that failed.
     /// </summary>
     public enum ClipboardOperation
     {
-        /// <summary>Copying the selection.</summary>
+        /// <summary>The user copying the selection.</summary>
         Copy,
 
-        /// <summary>Copying the selection and removing it from the shell's input.</summary>
+        /// <summary>The user copying the selection and removing it from the shell's input.</summary>
         Cut,
 
-        /// <summary>Pasting into the terminal.</summary>
+        /// <summary>The user pasting into the terminal.</summary>
         Paste,
+
+        /// <summary>The running program writing to the clipboard (OSC 52 or Kitty OSC 5522).</summary>
+        ProgramWrite,
+
+        /// <summary>The running program reading the clipboard (OSC 52 or Kitty OSC 5522).</summary>
+        ProgramRead,
     }
 
     /// <summary>
-    /// Provides data for the event raised when a copy, cut or paste the user asked for failed.
+    /// Provides data for the event raised when a clipboard operation with no caller to throw to failed.
     /// </summary>
     public class ClipboardFailedEventArgs : EventArgs
     {

@@ -245,8 +245,7 @@ namespace Iciclecreek.Terminal
         /// </summary>
         /// <returns>True if it did not fail.</returns>
         /// <remarks>
-        /// Those handlers are async void, so an exception escaping one would end the application. Logged by
-        /// type alone, because a clipboard failure's message is free to quote the text involved.
+        /// Those handlers are async void, so an exception escaping one would end the application.
         /// </remarks>
         private async Task<bool> TryClipboardGestureAsync(ClipboardOperation operation, Func<Task> gesture)
         {
@@ -257,16 +256,27 @@ namespace Iciclecreek.Terminal
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[{_instanceId}] Clipboard {operation} failed: {ex.GetType().Name}");
-                try
-                {
-                    ClipboardFailed?.Invoke(this, new ClipboardFailedEventArgs(operation, ex));
-                }
-                catch (Exception handlerEx)
-                {
-                    Debug.WriteLine($"[{_instanceId}] A ClipboardFailed handler threw: {handlerEx.GetType().Name}");
-                }
+                ReportClipboardFailure(operation, ex);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Tells the host about a clipboard failure there is no caller to throw to.
+        /// </summary>
+        /// <remarks>
+        /// Logged by type alone, because a clipboard failure's message is free to quote the text involved.
+        /// </remarks>
+        private void ReportClipboardFailure(ClipboardOperation operation, Exception exception)
+        {
+            Debug.WriteLine($"[{_instanceId}] Clipboard {operation} failed: {exception.GetType().Name}");
+            try
+            {
+                ClipboardFailed?.Invoke(this, new ClipboardFailedEventArgs(operation, exception));
+            }
+            catch (Exception handlerEx)
+            {
+                Debug.WriteLine($"[{_instanceId}] A ClipboardFailed handler threw: {handlerEx.GetType().Name}");
             }
         }
 
@@ -1025,11 +1035,12 @@ namespace Iciclecreek.Terminal
                 else
                     await clipboard.SetTextAsync(text);
             }
-            catch
+            catch (Exception ex)
             {
                 // Awaited rather than discarded so a failure cannot escape as an unobserved task
-                // exception. There is nobody to report it to: the pty stream cannot wait on the OS
+                // exception. The host is the only one to tell: the pty stream cannot wait on the OS
                 // clipboard, and the program that asked has no way to be told.
+                ReportClipboardFailure(ClipboardOperation.ProgramWrite, ex);
             }
         }
 
@@ -1083,15 +1094,17 @@ namespace Iciclecreek.Terminal
         private async Task RespondFromClipboardAsync(XT.Events.TerminalEvents.ClipboardReadEventArgs e)
         {
             string? text;
+            Exception? failure = null;
             try
             {
                 // Read here rather than on the reader thread: the visual-tree walk is UI state too.
                 var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
                 text = clipboard is null ? null : await clipboard.TryGetTextAsync();
             }
-            catch
+            catch (Exception ex)
             {
                 text = null;   // a locked or unavailable clipboard declines rather than throws
+                failure = ex;
             }
 
             // Always answered, even with null: a deferred request the host never completes leaves a
@@ -1110,6 +1123,11 @@ namespace Iciclecreek.Terminal
             {
                 e.Respond(text);
             }
+
+            // After the answer and outside the lock, so no handler can keep the program waiting or
+            // stall the reader.
+            if (failure is not null)
+                ReportClipboardFailure(ClipboardOperation.ProgramRead, failure);
         }
 
         private bool TryGetPrintableChar(KeyEventArgs e, out char character)

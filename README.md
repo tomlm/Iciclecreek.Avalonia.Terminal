@@ -141,7 +141,7 @@ public partial class MainWindow : Window
 | Event | Description |
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. |
-| `ClipboardFailed` | Raised when a copy, cut or paste the user asked for with a key press or mouse click failed, which on Windows happens while another process has the clipboard open. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
+| `ClipboardFailed` | Raised when a clipboard operation with no caller to throw to failed, which on Windows happens while another process has the clipboard open: a copy, cut or paste from a key press or mouse click, or the running program's own request. Check `Operation` before telling the user, because a program can make requests in the background. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
 
 ### TerminalWindow
 
@@ -218,7 +218,7 @@ Window manipulation commands from the terminal (resize, move, minimize, maximize
 | Event | Description |
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. If `CloseOnProcessExit` is `true`, the event is raised before the window closes. |
-| `ClipboardFailed` | Raised when a copy, cut or paste the user asked for with a key press or mouse click failed, which on Windows happens while another process has the clipboard open. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
+| `ClipboardFailed` | Raised when a clipboard operation with no caller to throw to failed, which on Windows happens while another process has the clipboard open: a copy, cut or paste from a key press or mouse click, or the running program's own request. Check `Operation` before telling the user, because a program can make requests in the background. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
 
 
 ### Keyboard shortcuts

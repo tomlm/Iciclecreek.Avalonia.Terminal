@@ -15,13 +15,14 @@ namespace Iciclecreek.Terminal.Tests;
 /// <summary>
 /// The clipboard belongs to every process on the machine, and on Windows one holding it open makes
 /// Avalonia's calls throw. A host has to hear about that: the public methods throw to their caller, and
-/// the key and mouse handlers, which have no caller, raise ClipboardFailed. They are async void, so an
-/// exception escaping one would end the application.
+/// the key and mouse handlers and the program's own requests, which have no caller, raise ClipboardFailed.
+/// The handlers are async void, so an exception escaping one would end the application.
 /// </summary>
 [TestFixture]
 public class ClipboardFailureTests
 {
     private const string Esc = "\u001b";
+    private const string Bel = "\u0007";
 
     /// <summary>What a platform's error message is free to quote, and the log must not repeat.</summary>
     private const string QuotedText = "S3CR3T-clipboard-text";
@@ -355,6 +356,130 @@ public class ClipboardFailureTests
             window.Close();
         }
     }
+
+    // ------------------------------------------------------ the program's own requests
+
+    private static string B64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+
+    [AvaloniaTest]
+    public void A_program_write_reports_a_locked_clipboard()
+    {
+        AssertProgramRequestReports(ClipboardOperation.ProgramWrite, _ => { },
+            view => view.Terminal.Write($"{Esc}]52;c;{B64("from the program")}{Bel}"));
+    }
+
+    [AvaloniaTest]
+    public void A_program_clearing_the_clipboard_reports_a_locked_clipboard()
+    {
+        AssertProgramRequestReports(ClipboardOperation.ProgramWrite, _ => { },
+            view => view.Terminal.Write($"{Esc}]52;c;{Bel}"));
+    }
+
+    [AvaloniaTest]
+    public void A_program_read_reports_a_locked_clipboard()
+    {
+        AssertProgramRequestReports(ClipboardOperation.ProgramRead,
+            view => view.Terminal.Options.ClipboardReadEnabled = true,
+            view => view.Terminal.Write($"{Esc}]52;c;?{Bel}"));
+    }
+
+    [AvaloniaTest]
+    public void A_program_read_the_host_has_not_enabled_reports_nothing()
+    {
+        // A decision, not a failure: the clipboard was never touched.
+        var (view, _, window, unlock) = LockedView();
+        var reported = 0;
+        view.ClipboardFailed += (_, _) => reported++;
+        try
+        {
+            view.Terminal.Write($"{Esc}]52;c;?{Bel}");
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(reported, Is.Zero);
+        }
+        finally { unlock.Dispose(); window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_program_read_is_answered_before_the_host_is_told()
+    {
+        // 5522 has to answer every request, so a handler must not be able to keep the program waiting.
+        var (view, _, window, unlock) = LockedView();
+        var responses = new List<string>();
+        var answeredByThen = -1;
+        view.Terminal.Options.ClipboardReadEnabled = true;
+        view.Terminal.DataReceived += (_, e) => responses.Add(e.Data);
+        view.ClipboardFailed += (_, _) =>
+        {
+            answeredByThen = responses.Count;
+            throw new InvalidOperationException("from the host");
+        };
+        try
+        {
+            view.Terminal.Write($"{Esc}]5522;type=read;{B64("text/plain")}{Bel}");
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(answeredByThen, Is.GreaterThan(0), "the reply must already be on its way when the handler runs");
+        }
+        finally { unlock.Dispose(); window.Close(); }
+    }
+
+    [AvaloniaTest]
+    public void A_failed_program_write_does_not_stop_the_next_one()
+    {
+        var (view, _, window, unlock) = LockedView();
+        view.ClipboardFailed += (_, _) => throw new InvalidOperationException("from the host");
+        try
+        {
+            view.Terminal.Write($"{Esc}]52;c;{B64("lost")}{Bel}");
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+        }
+        finally { unlock.Dispose(); }
+
+        try
+        {
+            view.Terminal.Write($"{Esc}]52;c;{B64("next")}{Bel}");
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(TopLevel.GetTopLevel(view)!.Clipboard!.TryGetTextAsync().GetAwaiter().GetResult(), Is.EqualTo("next"));
+        }
+        finally { window.Close(); }
+    }
+
+    private static void AssertProgramRequestReports(ClipboardOperation expected, Action<TerminalView> arrange, Action<TerminalView> request)
+    {
+        var capture = new Capture();
+        var reported = new List<ClipboardFailedEventArgs>();
+        var (view, _, window, unlock) = LockedView();
+        view.ClipboardFailed += (_, e) => reported.Add(e);
+        Trace.Listeners.Add(capture);
+        try
+        {
+            arrange(view);
+            request(view);
+            Thread.Sleep(60);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.That(reported, Has.Count.EqualTo(1));
+            Assert.That(reported[0].Operation, Is.EqualTo(expected));
+            Assert.That(reported[0].Exception, Is.TypeOf<COMException>());
+            Assert.That(capture.Text, Does.Contain($"Clipboard {expected} failed: COMException"),
+                "proves the capture works, so the next line cannot pass on an empty log");
+            Assert.That(capture.Text, Does.Not.Contain(QuotedText), "the failure is logged without its message");
+        }
+        finally
+        {
+            Trace.Listeners.Remove(capture);
+            unlock.Dispose();
+            window.Close();
+        }
+    }
+
+    // ---------------------------------------------------------------- the wrappers
 
     [AvaloniaTest]
     public void TerminalControl_forwards_ClipboardFailed()
