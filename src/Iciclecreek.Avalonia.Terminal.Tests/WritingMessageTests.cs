@@ -169,13 +169,14 @@ public class WritingMessageTests
     [AvaloniaTest]
     public async Task A_failed_read_is_offered_to_the_host_with_its_exception()
     {
-        // What a Unix pty's default blocking stream throws when the child closes its end.
+        // The child is still running, so this is a real failure. Were it gone, the same exception would
+        // be the ordinary end of the process, and the message would be its exit -- see ExitReportingTests.
         var failure = new IOException("Input/output error");
         TerminalMessageEventArgs? seen = null;
 
         var view = new TerminalView { Process = "" };
         var window = Show(view);
-        var connection = new PushConnection();
+        var connection = new ReadFailureConnection();
         view.WritingMessage += (_, e) => { seen = e; e.Handled = true; };
         view.AttachConnection(connection);
 
@@ -195,7 +196,7 @@ public class WritingMessageTests
     {
         var view = new TerminalView { Process = "" };
         var window = Show(view);
-        var connection = new PushConnection();
+        var connection = new ReadFailureConnection();
         view.AttachConnection(connection);
 
         connection.Fail(new IOException("Input/output error"));

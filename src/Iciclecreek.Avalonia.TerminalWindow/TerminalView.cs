@@ -219,11 +219,16 @@ namespace Iciclecreek.Terminal
         private const int ExitReapGraceMs = 1000;
 
         /// <summary>How long the BACKGROUND wait keeps trying after the read loop's grace period expires.
-        /// The child is dead by definition, so this is a ceiling on patience, not an expected cost.</summary>
-        private const int ExitReapCeilingMs = 30_000;
+        /// The child is dead by definition, so this is a ceiling on patience, not an expected cost.
+        /// Settable only so a test need not wait it out.</summary>
+        internal int ExitReapCeilingMs { get; set; } = 30_000;
 
         /// <summary>Poll slice for that wait. Short enough to report promptly, long enough not to spin.</summary>
         private const int ExitReapPollMs = 100;
+
+        /// <summary>How often to look at a child a read error left running, which can be for hours. See
+        /// <see cref="WatchForExitAfterReadErrorAsync"/>.</summary>
+        private const int ReadErrorExitPollMs = 250;
         private readonly object _terminalLock = new object(); // Serialises all _terminal.Write/WriteLine calls
 
         // Cursor blinking
@@ -316,6 +321,10 @@ namespace Iciclecreek.Terminal
         // a full-screen app runs, so `_terminal.Buffer.Trimmed -= ...` at an arbitrary moment can detach the
         // handler from a buffer that never had it and leave the real one subscribed.
         private TerminalBuffer? _scrollbackBuffer;
+
+        // What the host's own Options.Theme had for bold, which BoldColor overrides while it is set and
+        // gives back when it is cleared.
+        private string? _hostBoldColor;
 
         // AutoScrollToBottom mirrored for the reader thread. The write path runs OFF the UI thread (the
         // Dispatcher.UIThread.Post beside it is the giveaway), so reading the StyledProperty there would be
@@ -1092,12 +1101,12 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void WriteOwnLine(string text)
         {
-            int oldMax, newMax;
+            int oldMax, newMax, oldY, newY;
 
             lock (_terminalLock)
             {
                 oldMax = MaxScrollback;
-                var oldY = _terminal.Buffer.ViewportY;
+                oldY = _terminal.Buffer.ViewportY;
 
                 _followBottom = _isAlternateBuffer || (_autoScroll && _terminal.Buffer.IsAtBottom);
 
@@ -1121,9 +1130,11 @@ namespace Iciclecreek.Terminal
                 }
 
                 newMax = MaxScrollback;
+                newY = _terminal.Buffer.ViewportY;
             }
 
             RaiseMaxScrollbackChanged(oldMax, newMax);
+            RaiseViewportYChanged(oldY, newY);
             RequestPaint();
         }
 
@@ -1537,6 +1548,7 @@ namespace Iciclecreek.Terminal
             // the values SGR 39/49 resolve to, what OSC 10/11 report, and — the part an assignment after
             // construction would miss — what OSC 110/111 RESET to. Reset to a colour the host never chose
             // is how a program "restoring the defaults" ends up with white on black.
+            _hostBoldColor = options.Theme.Bold;
             SeedThemeFromBrushes(options.Theme);
 
             // OSC 22 is opt-in in the emulator, and the opt-in is the host saying it has somewhere to put
@@ -1835,14 +1847,26 @@ namespace Iciclecreek.Terminal
         /// thread, because the view's own lines can be written from the pty reader's exit path.
         /// </remarks>
         private void RaiseMaxScrollbackChanged(int oldMax, int newMax)
+            => RaiseScrollPositionChanged(MaxScrollbackProperty, oldMax, newMax);
+
+        /// <summary>
+        /// Raise <see cref="ViewportYProperty"/> after the same mutations, which can move the viewport
+        /// without moving YBase: a line written to a full scrollback trims a parked view's position instead.
+        /// The scrollbar's thumb follows this notification, so it stayed stale until the next output.
+        /// </summary>
+        /// <remarks>Read and posted as <see cref="RaiseMaxScrollbackChanged"/> is, and raised after it, the order the read loop uses.</remarks>
+        private void RaiseViewportYChanged(int oldY, int newY)
+            => RaiseScrollPositionChanged(ViewportYProperty, oldY, newY);
+
+        private void RaiseScrollPositionChanged(DirectProperty<TerminalView, int> property, int oldValue, int newValue)
         {
-            if (oldMax == newMax)
+            if (oldValue == newValue)
                 return;
 
             if (Dispatcher.UIThread.CheckAccess())
-                RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax);
+                RaisePropertyChanged(property, oldValue, newValue);
             else
-                Dispatcher.UIThread.Post(() => RaisePropertyChanged(MaxScrollbackProperty, oldMax, newMax));
+                Dispatcher.UIThread.Post(() => RaisePropertyChanged(property, oldValue, newValue));
         }
 
         public int ViewportLines => _terminal.Rows;
@@ -1864,16 +1888,19 @@ namespace Iciclecreek.Terminal
         {
             if (_terminal == null) return;
 
-            int oldMax, newMax;
+            int oldMax, newMax, oldY, newY;
             lock (_terminalLock)
             {
                 oldMax = MaxScrollback;
+                oldY = _terminal.Buffer.ViewportY;
                 Interlocked.Increment(ref _liveWriteGeneration);
                 _terminal.Write("\u001b[H\u001b[2J\u001b[3J");   // home · erase screen · erase scrollback
                 _terminal.Buffer.ScrollToBottom();
                 newMax = MaxScrollback;
+                newY = _terminal.Buffer.ViewportY;
             }
             RaiseMaxScrollbackChanged(oldMax, newMax);
+            RaiseViewportYChanged(oldY, newY);
             RequestPaint();
         }
 
@@ -2281,14 +2308,19 @@ namespace Iciclecreek.Terminal
         /// from the current one with the brushes seeded again, so re-applying it does not put the
         /// default pair back to what it was at startup.
         /// </remarks>
-        private void ApplyBoldColor()
+        /// <param name="previous">The value <see cref="BoldColor"/> is moving from. Null means the theme's
+        /// bold colour is still the host's own, and this is the moment to remember it.</param>
+        private void ApplyBoldColor(Color? previous)
         {
             if (_terminal == null)
                 return;
 
             var theme = new XT.Options.ThemeOptions(_terminal.Options.Theme);
+            if (previous is null)
+                _hostBoldColor = theme.Bold;
+
             SeedThemeFromBrushes(theme);
-            theme.Bold = BoldColor is Color bold ? ToHex(bold) : null;
+            theme.Bold = BoldColor is Color bold ? ToHex(bold) : _hostBoldColor;
             _terminal.Options.Theme = theme;
         }
 
@@ -2399,7 +2431,7 @@ namespace Iciclecreek.Terminal
             }
             else if (change.Property == BoldColorProperty)
             {
-                ApplyBoldColor();
+                ApplyBoldColor((Color?)change.OldValue);
 
                 // Directly as well as through the ColorChanged walk the theme raises, which is
                 // posted: the next frame must not replay a line resolved under the old colour.
@@ -2867,6 +2899,10 @@ namespace Iciclecreek.Terminal
             return false;
         }
 
+        /// <summary>Cmd+Left or Cmd+Right on macOS, which has no Home or End to press instead.</summary>
+        private static bool IsCommandArrow(KeyEventArgs e)
+            => IsMacOS && e.KeyModifiers == KeyModifiers.Meta && e.Key is Key.Left or Key.Right;
+
         protected override async void OnKeyDown(KeyEventArgs e)
         {
             // A TextInput belongs to the current stroke only. A previous non-text key may have
@@ -3129,11 +3165,13 @@ namespace Iciclecreek.Terminal
                 // CanCut. Everything below sends to the process and stops here -- the standard paste
                 // chords (Ctrl+Shift+V, Shift+Insert) included. The keystroke is consumed rather than
                 // left to bubble -- a locked Tab must not move focus out of the terminal -- except the
-                // legacy Meta chords and bare modifiers, which never were.
+                // legacy Meta chords and bare modifiers, which never were. Cmd+Left/Right is not one of
+                // those: it is the Home/End alias below, a key the terminal claims when unlocked too.
                 if (IsKeyboardLocked)
                 {
                     if (!IsModifierKey(e.Key)
-                        && ((e.KeyModifiers & KeyModifiers.Meta) == 0 || _terminal.KittyKeyboardActive))
+                        && ((e.KeyModifiers & KeyModifiers.Meta) == 0 || _terminal.KittyKeyboardActive
+                            || IsCommandArrow(e)))
                         e.Handled = true;
                     return;
                 }
@@ -3206,8 +3244,7 @@ namespace Iciclecreek.Terminal
                 // asked for CSI-u reads Cmd+Left as a modified arrow in that encoding, and handing
                 // it ESC[H instead sends a key nobody pressed, in a protocol it is no longer
                 // reading. Falling through delivers the actual chord.
-                if (IsMacOS && e.KeyModifiers == KeyModifiers.Meta && e.Key is Key.Left or Key.Right
-                    && !_terminal.KittyKeyboardActive)
+                if (IsCommandArrow(e) && !_terminal.KittyKeyboardActive)
                 {
                     e.Handled = true;
                     await SendToPtyAsync(e.Key == Key.Left ? "\u001b[H" : "\u001b[F").ConfigureAwait(false);

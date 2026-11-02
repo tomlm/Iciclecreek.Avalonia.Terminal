@@ -164,7 +164,7 @@ namespace Iciclecreek.Terminal
                     handover.Unclaim(parked);
             }
 
-            // A thread of its own, not the pool — see ReadPtyOutputAsync for why the read is blocking.
+            // A thread of its own, not the pool — see ReadLoopAsync for why the read is blocking.
             //
             // No readiness wait here, unlike the spawn path, and that is deliberate. AttachConnection is
             // synchronous and called from the UI thread; blocking it for up to five seconds would freeze the
@@ -400,7 +400,7 @@ namespace Iciclecreek.Terminal
 
                 // Start reading from the PTY connection, and do not continue until the loop is actually
                 // reading. The loop is handed THIS connection so a relaunch cannot redirect it onto the next
-                // one — see ReadPtyOutputAsync.
+                // one — see ReadLoopAsync.
                 //
                 // The process is already running the moment SpawnAsync returns, so every instant before the
                 // first read is a window in which it can write, finish, and have its output discarded. A
@@ -431,8 +431,10 @@ namespace Iciclecreek.Terminal
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     var oldMax = MaxScrollback;
+                    var oldY = _terminal.Buffer.ViewportY;
                     _terminal.WriteLine($"Error launching process: {ex.Message}\n");
                     RaiseMaxScrollbackChanged(oldMax, MaxScrollback);
+                    RaiseViewportYChanged(oldY, _terminal.Buffer.ViewportY);
                 });
             }
         }
@@ -811,18 +813,8 @@ namespace Iciclecreek.Terminal
         private ReaderLease? _readerLease;
 
         /// <summary>Starts the read loop for <paramref name="connection"/>, on a thread of its own.</summary>
-        /// <param name="connection">
-        /// The connection this loop reads, passed in rather than re-read from the field on every
-        /// iteration. A read is an await, and a relaunch during one swaps the field — so a loop that
-        /// consults _ptyConnection afterwards can find itself operating on the NEXT process: waiting
-        /// on it, reading its exit code, and claiming the exit interlock LaunchProcess had just
-        /// reset for it, which swallows that process's own exit.
-        /// </param>
-        /// <param name="sessionId">
-        /// Identity of <paramref name="connection"/>, stamped on every chunk this loop reports. Passed in for
-        /// the same reason the connection is: by the time a chunk reaches a subscriber the view may have moved
-        /// on, and the subscriber needs to know which process it is hearing rather than only that one is live.
-        /// </param>
+        /// <param name="connection">The connection the loop reads. See <see cref="ReadLoopAsync"/>.</param>
+        /// <param name="sessionId">Identity of <paramref name="connection"/>. See <see cref="ReadLoopAsync"/>.</param>
         /// <remarks>
         /// The thread is started here, from a static method, even when the caller is already on a
         /// thread it started for the purpose. A closure that captured the view, sitting under the
@@ -859,6 +851,29 @@ namespace Iciclecreek.Terminal
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default).Unwrap();
 
+        /// <summary>Reads <paramref name="connection"/> until it ends or the loop's session does.</summary>
+        /// <param name="lease">
+        /// How the loop reaches its view, which it holds only while the session is its own. See
+        /// <see cref="ReaderLease"/>.
+        /// </param>
+        /// <param name="connection">
+        /// The connection this loop reads, passed in rather than re-read from the field on every
+        /// iteration. A read waits for as long as the process stays quiet, and a relaunch during one swaps
+        /// the field — so a loop that consults _ptyConnection afterwards can find itself operating on the
+        /// NEXT process: waiting on it, reading its exit code, and claiming the exit interlock
+        /// <see cref="InstallConnection"/> had just reset for it, which swallows that process's own exit.
+        /// </param>
+        /// <param name="sessionId">
+        /// Identity of <paramref name="connection"/>, stamped on every chunk this loop reports. Passed in for
+        /// the same reason the connection is: by the time a chunk reaches a subscriber the view may have moved
+        /// on, and the subscriber needs to know which process it is hearing rather than only that one is live.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// The session's token. It ends the loop between reads, and during one only when the connection
+        /// supports cancellable reads; a blocking read ends when the stream closes or the process speaks.
+        /// </param>
+        /// <param name="up">Completed once the loop is running and about to read, for a caller waiting to
+        /// know that before it carries on. See the note at the top of the method. Null when nobody is.</param>
         private static async Task ReadLoopAsync(
             ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up)
         {
@@ -1002,7 +1017,7 @@ namespace Iciclecreek.Terminal
             catch (Exception ex)
             {
                 if (lease.View is { } view)
-                    await view.OnReadLoopFailedAsync(connection, ex, sessionId);
+                    await view.OnReadLoopFailedAsync(lease, connection, ex, sessionId);
             }
         }
 
@@ -1063,20 +1078,11 @@ namespace Iciclecreek.Terminal
             // while a relaunch replaced the connection, in which case the exit it is holding belongs
             // to a process this view has already moved on from.
             if (reaped && TryClaimExit(connection, out var exitSessionId))
-            {
-                var exitCode = connection.ExitCode;
-
-                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(exitCode, exitSessionId));
-
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    ProcessExited?.Invoke(this, new ProcessExitedEventArgs(exitCode) { SessionId = exitSessionId });
-                });
-            }
+                await ReportClaimedExitAsync(connection, exitSessionId, reaped: true);
         }
 
         /// <summary>The read loop failed reading a connection this view still owned when it asked.</summary>
-        private async Task OnReadLoopFailedAsync(IPtyConnection connection, Exception ex, long sessionId)
+        private async Task OnReadLoopFailedAsync(ReaderLease lease, IPtyConnection connection, Exception ex, long sessionId)
         {
             // Only speak for the connection this loop was reading, and only while it is still the
             // one the view owns.
@@ -1098,7 +1104,103 @@ namespace Iciclecreek.Terminal
             if (_processExitHandled != 0)
                 return;
 
+            // A read that FAILS is how a Unix pty says the child is gone: once the slave side closes,
+            // read() on the master returns EIO -- an exception here -- rather than the 0 bytes the EOF
+            // path waits for. On Linux that is the ORDINARY end of a process. Only printing it leaves the
+            // interlock unclaimed and the connection installed, so IsLive stays true and, if the pty
+            // layer's own event does not fire, no ProcessExited is raised for a process already dead.
+            //
+            // So establish whether the child is actually gone before calling this an error.
+            var reaped = false;
+            try { reaped = connection.WaitForExit(ExitReapGraceMs); }
+            catch { /* disposed underneath us; below, that is a failed read like any other */ }
+
+            if (reaped)
+            {
+                // Not an error at all: the end of a process by the platform's other route, reported as
+                // EOF reports it. A false claim means the event got there first, or the view moved on.
+                if (TryClaimExit(connection, out var exitSessionId))
+                    await ReportClaimedExitAsync(connection, exitSessionId, reaped: true);
+                return;
+            }
+
+            // Asked again, because that wait is up to a second long and a relaunch or the exit event can
+            // land in it. This line is for the connection the view still owns, as above.
+            if (!ReferenceEquals(_ptyConnection, connection) || _processExitHandled != 0)
+                return;
+
+            // The child is still there, so this really is an I/O failure. This loop is ending, and a child
+            // that dies later must still be announced. Not through ReapInBackground, whose ceiling is for a
+            // child EOF says is dead: here it would report a running process as ended, and the interlock
+            // that claimed would then lock out its real exit and code.
             await WriteMessageAsync(TerminalMessageEventArgs.ReadError(ex, sessionId));
+            _ = WatchForExitAfterReadErrorAsync(lease, connection);
+        }
+
+        /// <summary>
+        /// Watch a child that a read error left running, and report its exit when it really happens.
+        /// </summary>
+        /// <remarks>
+        /// <para>No ceiling, so nothing else ends this for a child that lives on: it runs for as long as the
+        /// session does. The lease is what ends it. <see cref="InstallConnection"/> revokes it on a relaunch
+        /// or a detach, including a detach that hands the connection back alive, where neither the interlock
+        /// nor a throwing WaitForExit would ever say stop.</para>
+        /// <para>Static and reaching the view only through the lease, like the read loop, so a detached view
+        /// is not kept alive by this. <see cref="ReportExitIfStillOwnedAsync"/> is what keeps the view out of
+        /// this state machine. The wait is a timer rather than a blocking WaitForExit, so this costs no pool
+        /// thread however long the child lives: asked with 0, WaitForExit only looks.</para>
+        /// <para>The interlock is not asked here. If the pty layer's event reported first, the child is gone,
+        /// so the next look ends this and the claim below refuses.</para>
+        /// </remarks>
+        private static async Task WatchForExitAfterReadErrorAsync(ReaderLease lease, IPtyConnection connection)
+        {
+            while (true)
+            {
+                await Task.Delay(ReadErrorExitPollMs).ConfigureAwait(false);
+
+                if (lease.Revoked)
+                    return;
+
+                bool exited;
+                try { exited = connection.WaitForExit(0); }
+                catch { return; }   // disposed / gone -- nothing left to report about
+
+                if (exited)
+                {
+                    await ReportExitIfStillOwnedAsync(lease, connection).ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
+
+        private static Task ReportExitIfStillOwnedAsync(ReaderLease lease, IPtyConnection connection)
+            => lease.View is { } view && view.TryClaimExit(connection, out var exitSessionId)
+                ? view.ReportClaimedExitAsync(connection, exitSessionId, reaped: true)
+                : Task.CompletedTask;
+
+        /// <summary>
+        /// Report an exit whose interlock the caller has claimed: the notice first, then the event.
+        /// </summary>
+        /// <param name="connection">The connection that ended.</param>
+        /// <param name="exitSessionId">Its id, as <see cref="TryClaimExit"/> returned it.</param>
+        /// <param name="reaped">Whether the child was reaped. If not, the code is reported as unknown:
+        /// the one that could be read is the default 0, which would read as success.</param>
+        private async Task ReportClaimedExitAsync(IPtyConnection connection, long exitSessionId, bool reaped)
+        {
+            int? code = null;
+            if (reaped)
+            {
+                try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
+            }
+
+            await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(code, exitSessionId));
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                ProcessExited?.Invoke(this, code is { } c
+                    ? new ProcessExitedEventArgs(c) { SessionId = exitSessionId }
+                    : ProcessExitedEventArgs.UnknownCode(exitSessionId));
+            });
         }
 
         /// <summary>
@@ -1227,20 +1329,7 @@ namespace Iciclecreek.Terminal
 
                 if (!TryClaimExit(connection, out var exitSessionId)) return;
 
-                int? code = null;
-                if (reaped)
-                {
-                    try { code = connection.ExitCode; } catch { /* fall through as unknown */ }
-                }
-
-                await WriteMessageAsync(TerminalMessageEventArgs.ProcessExited(code, exitSessionId));
-
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    ProcessExited?.Invoke(this, code is { } c
-                        ? new ProcessExitedEventArgs(c) { SessionId = exitSessionId }
-                        : ProcessExitedEventArgs.UnknownCode(exitSessionId));
-                });
+                await ReportClaimedExitAsync(connection, exitSessionId, reaped);
             });
         }
 

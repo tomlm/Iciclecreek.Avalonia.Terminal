@@ -195,6 +195,64 @@ public class BoldColorTests
         finally { window.Close(); }
     }
 
+    private const int HostBold = 0x112233;
+
+    private static (TerminalView view, Window window) RealisedWithHostBold(Color? boldColor)
+    {
+        var options = new XTerm.Options.TerminalOptions();
+        options.Theme.Bold = "#112233";
+
+        var view = new TerminalView { Process = "", Options = options, BoldColor = boldColor };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        window.Show();
+        window.UpdateLayout();
+        return (view, window);
+    }
+
+    /// <summary>
+    /// A null BoldColor leaves a host's own Options.Theme.Bold alone, so clearing one has to give it back,
+    /// not wipe it.
+    /// </summary>
+    [AvaloniaTest]
+    public void Clearing_the_bold_colour_restores_the_hosts_own()
+    {
+        var (view, window) = RealisedWithHostBold(null);
+        try
+        {
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(HostBold), "sanity: the host's bold is in use");
+
+            view.BoldColor = Orange;
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(0xFFAA00));
+
+            view.BoldColor = Colors.Lime;
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(0x00FF00));
+
+            view.BoldColor = null;
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(HostBold),
+                "going colour to colour on the way must not have replaced what is remembered");
+
+            view.BoldColor = Orange;
+            view.BoldColor = null;
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(HostBold), "and again");
+        }
+        finally { window.Close(); }
+    }
+
+    /// <summary>Set before the emulator exists, it overrides the host's bold from the start. That has to come back too.</summary>
+    [AvaloniaTest]
+    public void Clearing_a_bold_colour_set_at_startup_restores_the_hosts_own()
+    {
+        var (view, window) = RealisedWithHostBold(Orange);
+        try
+        {
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(0xFFAA00), "sanity: BoldColor wins while set");
+
+            view.BoldColor = null;
+            Assert.That(view.Terminal.Colors.Take().Bold, Is.EqualTo(HostBold));
+        }
+        finally { window.Close(); }
+    }
+
     /// <summary>
     /// The live change goes through a new theme, which re-seeds the default pair. It has to be the
     /// host's CURRENT pair, not the one the emulator was built with.

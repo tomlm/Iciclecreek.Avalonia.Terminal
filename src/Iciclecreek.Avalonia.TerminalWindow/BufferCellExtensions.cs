@@ -54,10 +54,7 @@ namespace Iciclecreek.Avalonia.Terminal
         public static Color? GetBackgroundColor(this BufferCell cell, ColorSnapshot palette)
         {
             var attributes = cell.Attributes;
-            if (IsDefaultBackground(attributes))
-                return null;
-
-            return cell.ExtractColor(attributes.GetBgColor(), attributes.GetBgColorMode(), palette);
+            return palette.ResolveBackground(attributes) is { } rgb ? FromRgb(rgb) : null;
         }
 
         /// <summary>
@@ -148,23 +145,12 @@ namespace Iciclecreek.Avalonia.Terminal
 
         /// <summary>Whether a cell's foreground is the terminal's default rather than a colour of its own.</summary>
         /// <remarks>
-        /// One of the two places this control reads XTerm.NET's colour encoding directly (the other is
-        /// <see cref="IsDefaultBackground"/>, with <see cref="ExtractColor"/> behind it): today the
-        /// default is the out-of-palette value 256 for a foreground and 257 for a background, under
-        /// palette mode 0. When that encoding changes, these are what change with it.
-        /// <para>The mode is half the test, not a formality. The value and mode share one packed int,
-        /// so 24-bit #000100 (<c>38;2;0;1;0</c>) is also the value 256, in mode 1; checking the value
-        /// alone drew that colour in the theme's foreground, and the #000101 background as no
-        /// background at all.</para>
+        /// Asked of the emulator's colour kind, not of the packed value: value and mode share one int, so
+        /// 24-bit #000100 (<c>38;2;0;1;0</c>) has the same value as the default foreground, and checking
+        /// the value alone drew that colour in the theme's foreground.
         /// </remarks>
         private static bool IsDefaultForeground(in AttributeData attributes)
-            => attributes.GetFgColorMode() == 0 && attributes.GetFgColor() == 256;
-
-        /// <summary>Whether a cell's background is the terminal's default. See <see cref="IsDefaultForeground"/>.</summary>
-        // TODO: replace this and GetBackgroundColor's ExtractColor call with ColorSnapshot.ResolveBackground
-        // (null for the default background) once XTerm.NET ships it, so no mode value is read here at all.
-        private static bool IsDefaultBackground(in AttributeData attributes)
-            => attributes.GetBgColorMode() == 0 && attributes.GetBgColor() == 257;
+            => attributes.GetFgColorKind() == ColorMode.Default;
 
         /// <summary>
         /// The brush to draw a cell's text in. A cell using the DEFAULT foreground resolves to the
@@ -303,29 +289,18 @@ namespace Iciclecreek.Avalonia.Terminal
             if (!cell.Attributes.TryGetUnderlineColor(out var color, out var mode))
                 return null;
 
-            return cell.ExtractColor(color, mode, palette);
+            return ExtractColor(color, mode, palette);
         }
 
-        /// <summary>A background or underline colour from its value and XTerm.NET colour mode.</summary>
+        /// <summary>An underline colour from its value and XTerm.NET colour mode.</summary>
         /// <remarks>
-        /// Reads the mode encoding directly: 1 is 24-bit RGB, anything else a palette index. The
-        /// foreground no longer comes through here; it is resolved by the emulator's
-        /// <see cref="ColorSnapshot.ResolveForeground"/>.
+        /// The one place this control still reads the mode encoding: 1 is 24-bit RGB, anything else a
+        /// palette index. It stays because <see cref="AttributeData.TryGetUnderlineColor"/> is all the
+        /// emulator offers for the underline, a raw value and mode, with no kind accessor and no resolver
+        /// like <see cref="ColorSnapshot.ResolveBackground"/>.
         /// </remarks>
-        private static Color? ExtractColor(this BufferCell cell, int color, int mode, ColorSnapshot palette)
-        {
-            Color? realColor;
-            if (mode == 1)  // RGB mode
-            {
-                int r = (color >> 16) & 0xFF;
-                int g = (color >> 8) & 0xFF;
-                int b = color & 0xFF;
-                realColor = Color.FromRgb((byte)r, (byte)g, (byte)b);
-            }
-            else
-                realColor = PalleteToColor(color, palette);  // Palette mode
-            return realColor;
-        }
+        private static Color ExtractColor(int color, int mode, ColorSnapshot palette)
+            => mode == 1 ? FromRgb(color) : PalleteToColor(color, palette);
 
         /// <summary>
         /// Whether <paramref name="brush"/> hides what is behind it completely.
