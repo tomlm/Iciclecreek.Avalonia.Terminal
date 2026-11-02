@@ -242,6 +242,9 @@ namespace Iciclecreek.Terminal
 
         private static bool _stylesLoaded = false;
 
+        // Keep in step with the x:Key in Themes/Generic.axaml.
+        private const string ThemeMarkerKey = "Iciclecreek.Terminal.DefaultThemeLoaded";
+
         static TerminalControl()
         {
             // Automatically load the default theme styles
@@ -261,19 +264,19 @@ namespace Iciclecreek.Terminal
             if (_stylesLoaded || Application.Current == null)
                 return;
 
-            var uri = new Uri("avares://Iciclecreek.Avalonia.Terminal/Themes/Generic.axaml");
-
-            // Check if styles are already loaded to avoid duplicates
-            foreach (var style in Application.Current.Styles)
+            // Asks for a resource the theme carries rather than looking for the object that loaded it. A
+            // StyleInclude in a host's compiled XAML is replaced by its contents at build time, so there
+            // is no StyleInclude left in Styles to find, and the theme would be loaded a second time.
+            if (Application.Current.TryGetResource(ThemeMarkerKey, null, out _))
             {
-                if (style is global::Avalonia.Markup.Xaml.Styling.StyleInclude include && include.Source == uri)
-                {
-                    _stylesLoaded = true;
-                    return;
-                }
+                _stylesLoaded = true;
+                return;
             }
 
-            var styles = (IStyle)new global::Avalonia.Markup.Xaml.Styling.StyleInclude(uri) { Source = uri };
+            // Created directly, not through new StyleInclude(uri). That finds the compiled XAML by
+            // reflection on a generated class nothing references, so a trimmed build has removed the class
+            // and this throws from the static constructor, leaving the control unusable for the process.
+            var styles = new TerminalTheme();
 
             // FIRST, not last. Later styles win in Avalonia, so appending put this library's default
             // theme above everything the application had already set -- a host that styled
