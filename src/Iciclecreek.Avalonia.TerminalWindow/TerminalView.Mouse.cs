@@ -91,13 +91,14 @@ namespace Iciclecreek.Terminal
 
                         if (_terminal.Selection.HasSelection)
                         {
-                            await CopyAsync();
-                            _terminal.Selection.ClearSelection();
+                            // Only once it is on the clipboard: a failed copy keeps the selection to retry.
+                            if (await TryClipboardGestureAsync(ClipboardOperation.Copy, CopyAsync))
+                                _terminal.Selection.ClearSelection();
                             RequestPaint();
                         }
                         else
                         {
-                            await PasteAsync();
+                            await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync);
                         }
                         return;
                     }

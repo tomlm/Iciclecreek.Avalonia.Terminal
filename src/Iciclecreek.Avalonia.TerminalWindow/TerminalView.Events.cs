@@ -258,6 +258,25 @@ namespace Iciclecreek.Terminal
         public event EventHandler<OutputReceivedEventArgs>? OutputReceived;
 
         /// <summary>
+        /// Raised on the UI thread when a clipboard operation with no caller to throw to failed, which on
+        /// Windows happens while another process has the clipboard open.
+        /// </summary>
+        /// <remarks>
+        /// <para>That means a copy, cut or paste the user asked for with a key press or mouse click, and the
+        /// running program's own clipboard requests. <see cref="CopyAsync"/>, <see cref="CutAsync"/> and
+        /// <see cref="PasteAsync"/> throw to whoever called them instead, and do not raise this.</para>
+        /// <para>Check <see cref="ClipboardFailedEventArgs.Operation"/> before telling the user anything. A
+        /// program can make requests in the background and as often as it likes, so a failed
+        /// <see cref="ClipboardOperation.ProgramWrite"/> or <see cref="ClipboardOperation.ProgramRead"/> may
+        /// be nothing they did, and there may be many.</para>
+        /// <para>A program's request is unaffected by what a handler does: its read has already been answered
+        /// when this is raised. Do not block here, because later clipboard writes wait behind a failed one.</para>
+        /// <para>A handler that throws is caught and logged: an escaping exception would end the
+        /// application.</para>
+        /// </remarks>
+        public event EventHandler<ClipboardFailedEventArgs>? ClipboardFailed;
+
+        /// <summary>
         /// Event raised when a URL in the terminal is Ctrl+Clicked.
         /// </summary>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
