@@ -1,0 +1,9 @@
+<!-- What the control installs, as a type it can create directly. Generic.axaml keeps its address, which a
+     host's own StyleInclude compiles against; this file is how the library reaches it without going through
+     that address at run time. -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Iciclecreek.Terminal.TerminalTheme"
+        x:ClassModifier="internal">
+    <StyleInclude Source="/Themes/Generic.axaml"/>
+</Styles>
