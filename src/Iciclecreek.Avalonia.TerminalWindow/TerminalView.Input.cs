@@ -91,13 +91,25 @@ namespace Iciclecreek.Terminal
         /// <remarks>
         /// Does nothing while the application has locked the keyboard (KAM): a paste is typing, and the
         /// emulator's own <c>Terminal.Paste</c> declines it for the same reason.
+        /// <para>Raises <see cref="PasteRequested"/> first, as every paste does.</para>
         /// <para>Throws if the clipboard fails, which on Windows happens while another process has it
         /// open. Nothing is sent and any selection is left as it was. An empty clipboard does not throw.</para>
         /// </remarks>
-        public async Task PasteAsync()
+        public Task PasteAsync() => PasteAsync(PasteSource.Api);
+
+        private async Task PasteAsync(PasteSource source)
         {
-            if (_ptyConnection == null)
+            // The session this paste is FOR, taken before the first await. The clipboard read and a host's
+            // deferral can both outlast it: a relaunch or AttachConnection while a confirmation is open
+            // would otherwise send the old session's clipboard text, confirmed for that process, to the
+            // new one. Every connection change is a new SessionId, the same object attached again
+            // included, so that is what is checked after every await and before anything is sent; the
+            // writes also go only to the original connection.
+            var connection = _ptyConnection;
+            if (connection == null)
                 return;
+            var session = SessionId;
+            bool SameSession() => SessionId == session;
 
             var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
             if (clipboard == null)
@@ -109,12 +121,45 @@ namespace Iciclecreek.Terminal
             // (the spec forbids sending both for one paste). The formats are read here, up
             // front, because the redemption arrives later on the pty stream where nothing can
             // await the OS clipboard.
+            PasteFormats? formats = null;
+            string? text;
             if (_terminal.PasteNotificationMode)
             {
-                var paste = await BuildPasteAsync(clipboard);
-                // Asked after the clipboard read, at the moment of sending: the lock can arrive while
-                // the read is awaited. Terminal.Paste declines by itself, but the deletion is ours.
-                if (paste is null || IsKeyboardLocked)
+                formats = await ReadPasteFormatsAsync(clipboard);
+                if (formats is null)
+                    return;
+                text = formats.Text;
+            }
+            else
+            {
+                text = await clipboard.TryGetTextAsync();
+                if (string.IsNullOrEmpty(text))
+                    return;
+            }
+
+            if (!SameSession())
+                return;
+
+            var request = new PasteRequestedEventArgs(text ?? "", source,
+                _terminal.BracketedPasteMode, _terminal.PasteNotificationMode);
+            if (!await RaisePasteRequestedAsync(request) || !SameSession())
+                return;
+
+            // Every mode is read again here, after the clipboard read and whatever the host awaited: the
+            // lock, the bracketing and the announcement can all change meanwhile, and what goes out has to
+            // match the program's state as it is now. Terminal.Paste declines a locked paste by itself, but
+            // the deletion is ours.
+            if (IsKeyboardLocked)
+                return;
+
+            if (_terminal.PasteNotificationMode)
+            {
+                // Rebuilt only when the host changed the text, so the clipboard's own text/plain bytes go
+                // out untouched otherwise. A paste read in the classic mode is announced as its text alone.
+                var paste = (formats is not null && request.Text == (text ?? "")
+                    ? formats
+                    : (formats ?? new PasteFormats()).WithText(request.Text)).ToPaste();
+                if (paste is null)
                     return;
 
                 // An announced paste REPLACES a selection too, exactly as the classic path below does:
@@ -124,27 +169,97 @@ namespace Iciclecreek.Terminal
                 // _terminal.Selection - skipping it left the replaced text still highlighted.
                 var deletion = TakeKeyboardSelectionDeletion();
                 if (deletion.Length > 0)
-                    await SendToPtyAsync(deletion);
+                    await SendToPtyAsync(deletion, to: connection, session: session);
 
+                // The deletion's write is an await too; the announcement goes to the current connection.
+                if (!SameSession())
+                    return;
                 _terminal.Paste(paste);
                 return;
             }
 
-            var text = await clipboard.TryGetTextAsync();
-            // After the clipboard read, for the same reason as the announced path.
-            if (!string.IsNullOrEmpty(text) && !IsKeyboardLocked)
-            {
-                // Wrap paste in bracketed paste sequences if mode is enabled
-                if (_terminal.BracketedPasteMode)
-                {
-                    text = $"\u001b[200~{text}\u001b[201~";
-                }
+            text = request.Text;
+            if (text.Length == 0)
+                return;
 
-                // Pasting over a selection REPLACES it, the way typing over one does. Taken before the
-                // text and written with it in a single call, so the deletion cannot lose the race against
-                // whatever arrives next — the same reason typing does it that way.
-                await SendToPtyAsync(TakeKeyboardSelectionDeletion() + text);
+            // Wrap paste in bracketed paste sequences if mode is enabled
+            if (_terminal.BracketedPasteMode)
+            {
+                text = $"\u001b[200~{text}\u001b[201~";
             }
+
+            // Pasting over a selection REPLACES it, the way typing over one does. Taken before the
+            // text and written with it in a single call, so the deletion cannot lose the race against
+            // whatever arrives next — the same reason typing does it that way.
+            await SendToPtyAsync(TakeKeyboardSelectionDeletion() + text, to: connection, session: session);
+        }
+
+        /// <summary>
+        /// Raises <see cref="PasteRequested"/> and waits out any deferral. False when the paste should not
+        /// go ahead: cancelled, or a handler threw.
+        /// </summary>
+        /// <remarks>
+        /// A throwing handler cancels rather than lets the paste through: a host that vets pastes and fails
+        /// part-way should fail closed. It is logged, by type alone, since its message may quote the text.
+        /// </remarks>
+        private async Task<bool> RaisePasteRequestedAsync(PasteRequestedEventArgs request)
+        {
+            if (PasteRequested is not { } handler)
+                return true;
+
+            try
+            {
+                handler(this, request);
+                await request.WhenDeferralsCompleteAsync();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[{_instanceId}] A PasteRequested handler threw: {ex.GetType().Name}");
+                return false;
+            }
+
+            return !request.Cancel;
+        }
+
+        /// <summary>The formats an announced paste offers, by MIME type.</summary>
+        private sealed class PasteFormats
+        {
+            private readonly List<string> _mimes = new();
+            private readonly Dictionary<string, byte[]> _data = new();
+
+            public void Add(string mime, byte[] bytes)
+            {
+                if (_data.ContainsKey(mime))
+                    return;
+                _mimes.Add(mime);
+                _data[mime] = bytes;
+            }
+
+            public bool Has(string mime) => _data.ContainsKey(mime);
+
+            public bool IsEmpty => _mimes.Count == 0;
+
+            public string? Text => _data.TryGetValue("text/plain", out var bytes)
+                ? System.Text.Encoding.UTF8.GetString(bytes)
+                : null;
+
+            /// <summary>The same formats with <c>text/plain</c> set to <paramref name="text"/>, or dropped when it is empty.</summary>
+            public PasteFormats WithText(string text)
+            {
+                var copy = new PasteFormats();
+                foreach (var mime in _mimes)
+                {
+                    if (mime != "text/plain")
+                        copy.Add(mime, _data[mime]);
+                }
+                if (text.Length > 0)
+                    copy.Add("text/plain", System.Text.Encoding.UTF8.GetBytes(text));
+                return copy;
+            }
+
+            public XT.TerminalPaste? ToPaste() => IsEmpty
+                ? null
+                : new XT.TerminalPaste(_mimes, mime => _data.TryGetValue(mime, out var bytes) ? bytes : null);
         }
 
         /// <summary>
@@ -153,10 +268,9 @@ namespace Iciclecreek.Terminal
         /// (one file URI per line, the drag-and-drop convention); platform formats that already
         /// look like MIME types ride along untranslated for applications that know them.
         /// </summary>
-        private static async Task<XT.TerminalPaste?> BuildPasteAsync(IClipboard clipboard)
+        private static async Task<PasteFormats?> ReadPasteFormatsAsync(IClipboard clipboard)
         {
-            var mimes = new List<string>();
-            var data = new Dictionary<string, byte[]>();
+            var formats = new PasteFormats();
 
             // Platform formats whose identifier already IS a MIME type (the norm on X11 and
             // Wayland) ride along untranslated for applications that know them.
@@ -168,10 +282,7 @@ namespace Iciclecreek.Terminal
                         continue;
                     var bytesFormat = DataFormat.CreateBytesPlatformFormat(format.Identifier);
                     if (await clipboard.TryGetValueAsync(bytesFormat) is { } bytes)
-                    {
-                        mimes.Add(format.Identifier);
-                        data[format.Identifier] = bytes;
-                    }
+                        formats.Add(format.Identifier, bytes);
                 }
             }
             catch
@@ -180,29 +291,21 @@ namespace Iciclecreek.Terminal
             }
 
             var text = await clipboard.TryGetTextAsync();
-            if (!string.IsNullOrEmpty(text) && !data.ContainsKey("text/plain"))
-            {
-                mimes.Add("text/plain");
-                data["text/plain"] = System.Text.Encoding.UTF8.GetBytes(text);
-            }
+            if (!string.IsNullOrEmpty(text))
+                formats.Add("text/plain", System.Text.Encoding.UTF8.GetBytes(text));
 
             try
             {
-                if (await clipboard.TryGetFilesAsync() is { Length: > 0 } files && !data.ContainsKey("text/uri-list"))
-                {
-                    var uriList = string.Join('\n', files.Select(f => f.Path.AbsoluteUri));
-                    mimes.Add("text/uri-list");
-                    data["text/uri-list"] = System.Text.Encoding.UTF8.GetBytes(uriList);
-                }
+                if (await clipboard.TryGetFilesAsync() is { Length: > 0 } files)
+                    formats.Add("text/uri-list",
+                        System.Text.Encoding.UTF8.GetBytes(string.Join('\n', files.Select(f => f.Path.AbsoluteUri))));
             }
             catch
             {
                 // No files, then.
             }
 
-            return mimes.Count == 0
-                ? null
-                : new XT.TerminalPaste(mimes, mime => data.TryGetValue(mime, out var bytes) ? bytes : null);
+            return formats.IsEmpty ? null : formats;
         }
 
         /// <summary>
@@ -569,6 +672,8 @@ namespace Iciclecreek.Terminal
 
         protected override async void OnKeyUp(KeyEventArgs e)
         {
+            RefreshHoverForModifierKey(e, pressed: false);
+
             // Only process input if this terminal has focus
             if (!IsFocused)
             {

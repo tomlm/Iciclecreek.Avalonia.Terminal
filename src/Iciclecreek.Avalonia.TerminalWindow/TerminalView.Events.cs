@@ -282,6 +282,29 @@ namespace Iciclecreek.Terminal
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
         /// <summary>
+        /// Raised on the UI thread when <see cref="HoveredLink"/> changes: the pointer moved onto a link,
+        /// from one link to another, or off a link.
+        /// </summary>
+        /// <remarks>
+        /// Once per change, never for a move within the same link, so a host can show a preview of the
+        /// target without debouncing.
+        /// </remarks>
+        public event EventHandler<HoveredLinkChangedEventArgs>? HoveredLinkChanged;
+
+        /// <summary>
+        /// Raised on the UI thread before anything is pasted, on every path: <see cref="PasteAsync"/>, the
+        /// paste keys, and right-click. The handler sees the clipboard's text and can replace it, cancel the
+        /// paste, or hold it with <see cref="PasteRequestedEventArgs.GetDeferral"/> while it asks the user.
+        /// </summary>
+        /// <remarks>
+        /// <para>Raised after the clipboard is read, and only when there is something to paste. The terminal
+        /// does its own framing afterwards, with the program's modes as they are then; see
+        /// <see cref="PasteRequestedEventArgs"/>.</para>
+        /// <para>A handler that throws cancels the paste; the exception is logged and goes no further.</para>
+        /// </remarks>
+        public event EventHandler<PasteRequestedEventArgs>? PasteRequested;
+
+        /// <summary>
         /// Event raised when the terminal title changes.
         /// </summary>
         public event EventHandler<TitleChangedEventArgs>? TitleChanged;

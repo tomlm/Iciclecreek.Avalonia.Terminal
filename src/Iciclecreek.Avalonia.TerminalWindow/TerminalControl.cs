@@ -166,6 +166,12 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
+        /// <inheritdoc cref="TerminalView.HoveredLinkChanged"/>
+        public event EventHandler<HoveredLinkChangedEventArgs>? HoveredLinkChanged;
+
+        /// <inheritdoc cref="TerminalView.PasteRequested"/>
+        public event EventHandler<PasteRequestedEventArgs>? PasteRequested;
+
         /// <inheritdoc cref="TerminalView.ClipboardFailed"/>
         public event EventHandler<ClipboardFailedEventArgs>? ClipboardFailed;
 
@@ -547,6 +553,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.IsLive"/>
         public bool IsLive => _terminalView?.IsLive ?? false;
 
+        /// <inheritdoc cref="TerminalView.HoveredLink"/>
+        public TerminalLink? HoveredLink => _terminalView?.HoveredLink;
+
         /// <inheritdoc cref="TerminalView.SessionId"/>
         public long SessionId => _terminalView?.SessionId ?? 0;
 
@@ -581,6 +590,58 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(ShortcutModeProperty);
             set => SetValue(ShortcutModeProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.ClearSelectionOnTypingProperty"/>
+        public static readonly StyledProperty<bool> ClearSelectionOnTypingProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(ClearSelectionOnTyping),
+                defaultValue: true);
+
+        /// <inheritdoc cref="TerminalView.ClearSelectionOnTypingProperty"/>
+        public bool ClearSelectionOnTyping
+        {
+            get => GetValue(ClearSelectionOnTypingProperty);
+            set => SetValue(ClearSelectionOnTypingProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.LinkClickModifiersProperty"/>
+        public static readonly StyledProperty<KeyModifiers> LinkClickModifiersProperty =
+            AvaloniaProperty.Register<TerminalControl, KeyModifiers>(
+                nameof(LinkClickModifiers),
+                defaultValue: KeyModifiers.Control);
+
+        /// <inheritdoc cref="TerminalView.LinkClickModifiersProperty"/>
+        public KeyModifiers LinkClickModifiers
+        {
+            get => GetValue(LinkClickModifiersProperty);
+            set => SetValue(LinkClickModifiersProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.LinkHighlightRequiresModifierProperty"/>
+        public static readonly StyledProperty<bool> LinkHighlightRequiresModifierProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(LinkHighlightRequiresModifier),
+                defaultValue: false);
+
+        /// <inheritdoc cref="TerminalView.LinkHighlightRequiresModifierProperty"/>
+        public bool LinkHighlightRequiresModifier
+        {
+            get => GetValue(LinkHighlightRequiresModifierProperty);
+            set => SetValue(LinkHighlightRequiresModifierProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.DetectUrlsProperty"/>
+        public static readonly StyledProperty<bool> DetectUrlsProperty =
+            AvaloniaProperty.Register<TerminalControl, bool>(
+                nameof(DetectUrls),
+                defaultValue: true);
+
+        /// <inheritdoc cref="TerminalView.DetectUrlsProperty"/>
+        public bool DetectUrls
+        {
+            get => GetValue(DetectUrlsProperty);
+            set => SetValue(DetectUrlsProperty, value);
         }
 
         /// <inheritdoc cref="TerminalView.CutAsync"/>
@@ -895,6 +956,8 @@ namespace Iciclecreek.Terminal
                 _terminalView.ShellReady -= OnTerminalViewShellReady;
                 _terminalView.OutputReceived -= OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked -= OnTerminalViewUrlClicked;
+                _terminalView.HoveredLinkChanged -= OnTerminalViewHoveredLinkChanged;
+                _terminalView.PasteRequested -= OnTerminalViewPasteRequested;
                 _terminalView.ClipboardFailed -= OnTerminalViewClipboardFailed;
                 _terminalView.InputSent -= OnTerminalViewInputSent;
             }
@@ -924,6 +987,8 @@ namespace Iciclecreek.Terminal
                 _terminalView.ShellReady += OnTerminalViewShellReady;
                 _terminalView.OutputReceived += OnTerminalViewOutputReceived;
                 _terminalView.UrlClicked += OnTerminalViewUrlClicked;
+                _terminalView.HoveredLinkChanged += OnTerminalViewHoveredLinkChanged;
+                _terminalView.PasteRequested += OnTerminalViewPasteRequested;
                 _terminalView.ClipboardFailed += OnTerminalViewClipboardFailed;
                 _terminalView.InputSent += OnTerminalViewInputSent;
                 SetCurrentDirectory(_terminalView.CurrentDirectory);
@@ -1021,6 +1086,17 @@ namespace Iciclecreek.Terminal
         private void OnTerminalViewUrlClicked(object? sender, UrlClickedEventArgs e)
         {
             UrlClicked?.Invoke(this, e);
+        }
+
+        private void OnTerminalViewHoveredLinkChanged(object? sender, HoveredLinkChangedEventArgs e)
+        {
+            HoveredLinkChanged?.Invoke(this, e);
+        }
+
+        // The same args object travels up, so Text, Cancel and deferrals set out here are what the view acts on.
+        private void OnTerminalViewPasteRequested(object? sender, PasteRequestedEventArgs e)
+        {
+            PasteRequested?.Invoke(this, e);
         }
 
         private void OnTerminalViewClipboardFailed(object? sender, ClipboardFailedEventArgs e)
