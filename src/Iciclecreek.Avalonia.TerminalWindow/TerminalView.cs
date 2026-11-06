@@ -2748,6 +2748,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened += OnTerminalWindowFullscreened;
             _terminal.BellRang += OnTerminalBellRang;
             _terminal.DirectoryChanged += OnTerminalDirectoryChanged;
+            _terminal.ShellStateChanged += OnTerminalShellStateChanged;
             _terminal.ClipboardWriteRequested += OnTerminalClipboardWriteRequested;
             _terminal.ClipboardReadRequested += OnTerminalClipboardReadRequested;
             _terminal.NotificationReceived += OnTerminalNotificationReceived;
@@ -2791,6 +2792,7 @@ namespace Iciclecreek.Terminal
             _terminal.WindowFullscreened -= OnTerminalWindowFullscreened;
             _terminal.BellRang -= OnTerminalBellRang;
             _terminal.DirectoryChanged -= OnTerminalDirectoryChanged;
+            _terminal.ShellStateChanged -= OnTerminalShellStateChanged;
             _terminal.ClipboardWriteRequested -= OnTerminalClipboardWriteRequested;
             _terminal.ClipboardReadRequested -= OnTerminalClipboardReadRequested;
             _terminal.NotificationReceived -= OnTerminalNotificationReceived;
