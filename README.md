@@ -117,6 +117,7 @@ public partial class MainWindow : Window
 | `ShortcutMode` | `ShortcutMode` | `Terminal` | Which convention the contested keys follow: `Terminal` (Ctrl+A/V/X belong to the program), `Desktop` (they select all, paste and cut) or `None` (no keyboard shortcuts at all). See [Keyboard shortcuts](#keyboard-shortcuts) |
 | `IsAlternateBuffer` | `bool` | Read-only | True while a full-screen application (vim, htop, less) is using the alternate screen buffer |
 | `IsLive` | `bool` | Read-only | True while a PTY is attached and its process has not exited |
+| `ShellState` | `ShellState` | Read-only | Where the shell is, from its OSC 133 shell integration marks: `Unknown`, `Prompt`, `Input` or `Running`. `Running` means a command owns the terminal, which is when closing it should ask first. A shell without integration stays `Unknown` |
 
 **Methods:**
 
@@ -141,6 +142,7 @@ public partial class MainWindow : Window
 | Event | Description |
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. |
+| `ShellStateChanged` | Raised on the UI thread when `ShellState` changes. `ShellStateChangedEventArgs` carries `OldState`, `NewState` and, when a `133;D` ended a command, its `ExitCode`. A bubbling routed event, so a handler on `TerminalControl` or `TerminalWindow` sees it too. |
 | `ClipboardFailed` | Raised when a clipboard operation with no caller to throw to failed, which on Windows happens while another process has the clipboard open: a copy, cut or paste from a key press or mouse click, or the running program's own request. Check `Operation` before telling the user, because a program can make requests in the background. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
 
 ### TerminalWindow
