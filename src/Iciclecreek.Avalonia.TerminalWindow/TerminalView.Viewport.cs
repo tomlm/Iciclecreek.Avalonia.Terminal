@@ -498,19 +498,17 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private int WordBoundary(int from, int direction, int cols, int lastBoundary)
         {
-            // What counts as a word is XTerm.NET's definition, not a second one invented here.
-            // SelectionManager.IsWordChar is what double-click expansion uses, and a terminal that
-            // disagreed with itself about where "foo-bar" ends depending on whether you reached for the
-            // mouse or the keyboard would be worse than either answer on its own.
-            static bool IsWordChar(string? content)
-                => !string.IsNullOrEmpty(content)
-                   && (char.IsLetterOrDigit(content[0]) || content[0] == '_');
+            // What counts as a word is XTerm.NET's definition, not a second one kept here: the same
+            // SelectionManager.IsWordChar double-click expansion uses, WordSeparators included. A terminal
+            // that disagreed with itself about where "foo-bar" ends depending on whether you reached for
+            // the mouse or the keyboard would be worse than either answer on its own.
+            bool IsWordChar(string? content) => _terminal.Selection.IsWordChar(content);
 
             // A wide glyph — CJK, emoji — occupies two cells: the glyph, then a width-0 PLACEHOLDER whose
             // content is empty. Read as content that placeholder is not a word character, so a word scan
             // stops between the two halves of one character and the selection covers half a glyph. It is
             // part of the glyph before it, so it is never a separator.
-            static bool IsSeparator((string? Content, int Width) cell)
+            bool IsSeparator((string? Content, int Width) cell)
                 => cell.Width != 0 && !IsWordChar(cell.Content);
 
             (string? Content, int Width) CellAt(int boundary)
@@ -829,6 +827,9 @@ namespace Iciclecreek.Terminal
             var declared = FindHyperlinkAtColumn(bufferLine, col);
             if (declared is not null)
                 return declared;
+
+            if (!DetectUrls)
+                return null;
 
             var logical = BuildLogicalLine(bufferLine);
             if (logical == null)

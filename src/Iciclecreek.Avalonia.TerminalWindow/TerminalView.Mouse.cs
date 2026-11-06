@@ -52,11 +52,12 @@ namespace Iciclecreek.Terminal
                 _kbSelAnchor = null;
                 _kbSelWholeInput = false;
 
-                // Ctrl+Click on a URL. Resolved from the press position rather than the hover state,
-                // which goes stale whenever the viewport moves without the pointer (wheel scroll, new
-                // output), and armed here but raised on release the way other terminals do it.
+                // Ctrl+Click (LinkClickModifiers) on a URL. Resolved from the press position rather than
+                // the hover state, which goes stale whenever the viewport moves without the pointer
+                // (wheel scroll, new output), and armed here but raised on release the way other
+                // terminals do it.
                 _pendingUrlClick = null;
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+                if (LinkModifiersHeld(e.KeyModifiers) &&
                     e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
                 {
                     var pressed = FindUrlAtColumn(_terminal.Buffer.ViewportY + row, col);
@@ -98,7 +99,7 @@ namespace Iciclecreek.Terminal
                         }
                         else
                         {
-                            await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync);
+                            await TryClipboardGestureAsync(ClipboardOperation.Paste, () => PasteAsync(PasteSource.RightClick));
                         }
                         return;
                     }
@@ -238,6 +239,7 @@ namespace Iciclecreek.Terminal
                 var point = e.GetPosition(this);
                 var col = PointerColumn(point.X);
                 var row = PointerRow(point.Y);
+                _lastPointerCell = (row, col);
 
                 // If we're selecting, update the selection
                 if (_isSelecting)
@@ -274,7 +276,7 @@ namespace Iciclecreek.Terminal
 
                 // URL hover detection
                 int bufferLine = _terminal.Buffer.ViewportY + row;
-                UpdateHoveredUrl(bufferLine, col);
+                UpdateHoveredUrl(bufferLine, col, e.KeyModifiers);
 
                 // Forward mouse event to application
                 if (_ptyConnection == null)
@@ -472,8 +474,23 @@ namespace Iciclecreek.Terminal
             return XT.Input.MouseButton.None;
         }
 
-        private void UpdateHoveredUrl(int bufferLine, int col)
+        /// <summary>Whether every key in <see cref="LinkClickModifiers"/> is down in <paramref name="modifiers"/>.</summary>
+        private bool LinkModifiersHeld(KeyModifiers modifiers)
         {
+            var required = LinkClickModifiers;
+            return (modifiers & required) == required;
+        }
+
+        private void UpdateHoveredUrl(int bufferLine, int col, KeyModifiers modifiers)
+        {
+            // Not armed: nothing is highlighted, whatever is under the pointer. Clearing also drops the
+            // probe below, so pressing the modifier on the same cell scans it afresh.
+            if (LinkHighlightRequiresModifier && !LinkModifiersHeld(modifiers))
+            {
+                ClearHoveredUrl();
+                return;
+            }
+
             // Pointer moves arrive far more often than they cross a cell boundary; scanning the line
             // again for the same cell would be pure waste.
             if (_lastHoverProbe is { } probe && probe.Line == bufferLine && probe.Col == col)
@@ -490,7 +507,8 @@ namespace Iciclecreek.Terminal
             if (found.SameAs(_hoveredLink))
                 return;
 
-            ClearHoveredUrl();
+            // One link straight to another is one change, not a leave and an enter.
+            var previous = _hoveredLink;
             _hoveredLink = found;
 
             if (!_cursorOverridden)
@@ -500,6 +518,7 @@ namespace Iciclecreek.Terminal
             }
             SetCurrentValue(CursorProperty, HandCursor);
             RequestPaint();
+            RaiseHoveredLinkChanged(previous, found);
         }
 
         private void ClearHoveredUrl()
@@ -518,9 +537,56 @@ namespace Iciclecreek.Terminal
             if (_hoveredLink == null)
                 return;
 
+            var previous = _hoveredLink;
             _hoveredLink = null;
             // The underline is an overlay drawn after the text runs, so the cached runs stay valid.
             RequestPaint();
+            RaiseHoveredLinkChanged(previous, null);
+        }
+
+        private void RaiseHoveredLinkChanged(HoveredUrl? previous, HoveredUrl? current)
+        {
+            var handler = HoveredLinkChanged;
+            if (handler == null)
+                return;
+
+            try
+            {
+                handler(this, new HoveredLinkChangedEventArgs(previous?.Public, current?.Public));
+            }
+            catch (Exception ex)
+            {
+                // Raised from pointer and key handling, where an escaping exception would skip the mouse
+                // report or key the program was owed, and from the link property setters, where it
+                // would surface in the host as a failed assignment.
+                Debug.WriteLine($"[TerminalView] HoveredLinkChanged handler threw: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// A modifier key went down or up. With <see cref="LinkHighlightRequiresModifier"/> set that can
+        /// arm or disarm the link under a pointer that has not moved, so the hover is looked at again.
+        /// </summary>
+        private void RefreshHoverForModifierKey(KeyEventArgs e, bool pressed)
+        {
+            if (!LinkHighlightRequiresModifier || _lastPointerCell is not { } cell || _isSelecting)
+                return;
+
+            var key = e.Key switch
+            {
+                Key.LeftCtrl or Key.RightCtrl => KeyModifiers.Control,
+                Key.LeftShift or Key.RightShift => KeyModifiers.Shift,
+                Key.LeftAlt or Key.RightAlt => KeyModifiers.Alt,
+                Key.LWin or Key.RWin => KeyModifiers.Meta,
+                _ => KeyModifiers.None,
+            };
+            if (key == KeyModifiers.None)
+                return;
+
+            // From the key itself rather than e.KeyModifiers alone, because platforms disagree on
+            // whether a modifier's own press and release already include it.
+            var modifiers = pressed ? e.KeyModifiers | key : e.KeyModifiers & ~key;
+            UpdateHoveredUrl(_terminal.Buffer.ViewportY + cell.Row, cell.Col, modifiers);
         }
 
         /// <summary>
