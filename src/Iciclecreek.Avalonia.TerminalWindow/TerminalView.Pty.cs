@@ -221,6 +221,16 @@ namespace Iciclecreek.Terminal
 
             if (connection is null)
             {
+                // Nothing attached yet may still mean a launch waiting on its spawn, which would otherwise
+                // install a process after this returned. Retiring its source is what supersedes it, as the
+                // other cleanup paths do: a spawn the pool has not started is cancelled, and one that comes
+                // back finds itself no longer current and kills what it spawned.
+                if (SpawnInFlightIsCurrent)
+                {
+                    _processCts!.Cancel();
+                    _processCts.Dispose();
+                    _processCts = null;
+                }
                 return null;
             }
 
@@ -361,7 +371,19 @@ namespace Iciclecreek.Terminal
                     options.CommandLine = ProcessArgs.ToArray();
                 }
 
-                var spawned = await (SpawnOverride ?? PtyProvider.SpawnAsync)(options, launchCts.Token);
+                // Resumes on the UI thread, so everything below -- the supersession check, installing the
+                // connection, the catch-up resize, starting the reader -- runs exactly where it always did.
+                IPtyConnection spawned;
+                _spawningCts = launchCts;
+                try
+                {
+                    spawned = await (SpawnOverride ?? SpawnOnThreadPool)(options, launchCts.Token);
+                }
+                finally
+                {
+                    if (ReferenceEquals(_spawningCts, launchCts))
+                        _spawningCts = null;
+                }
 
                 // Superseded while the spawn was awaited -- disposed, detached from the tree, relaunched, or
                 // handed a connection to attach. Each of those ran CleanupProcess, which had no connection
@@ -440,10 +462,55 @@ namespace Iciclecreek.Terminal
         }
 
         /// <summary>
-        /// Test seam: replaces <see cref="PtyProvider.SpawnAsync"/> for this view's launches, so a test can
-        /// hold a spawn in flight and decide when, and with what, it completes.
+        /// Test seam: replaces the whole spawn step for this view's launches -- the thread-pool hop included --
+        /// so a test can hold a spawn in flight and decide when, and with what, it completes. Called on the UI
+        /// thread at the moment of the launch, which is what lets a test read the view's state at that moment.
         /// </summary>
         internal Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? SpawnOverride { get; set; }
+
+        /// <summary>
+        /// Test seam below the hop: replaces <see cref="PtyProvider.SpawnAsync"/> itself, and is called where it
+        /// would have been, on the thread pool.
+        /// </summary>
+        internal Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? PtySpawnOverride { get; set; }
+
+        /// <summary>
+        /// <see cref="PtyProvider.SpawnAsync"/>, run on the thread pool rather than the caller's thread.
+        /// </summary>
+        /// <remarks>
+        /// SpawnAsync is asynchronous in signature only: on every platform Porta.Pty does the whole spawn
+        /// synchronously -- merging the environment, then native <c>pty_spawn</c> (fork and exec) on macOS and
+        /// Linux or creating the pseudo console and process on Windows -- and returns <c>Task.FromResult</c>.
+        /// Awaiting it on the UI thread ran all of that on the UI thread -- inside the first layout pass for an early launch,
+        /// and inside Loaded otherwise. On the pool it overlaps with layout and the first render instead.
+        /// Nothing about the order changes: the reader still starts only after the connection is installed,
+        /// and whatever the child writes meanwhile waits in the pty, as it did while the UI thread was busy.
+        /// </remarks>
+        /// <summary>
+        /// The source of the launch whose spawn is being awaited, from the moment it is handed to the pool
+        /// until it returns. UI thread only.
+        /// </summary>
+        private CancellationTokenSource? _spawningCts;
+
+        /// <summary>
+        /// Whether a launch is waiting on its spawn AND is still the current launch -- so OnLoaded, which
+        /// sees no connection yet, must leave the process to it rather than start a second one.
+        /// </summary>
+        /// <remarks>
+        /// With the spawn on the pool, every launch yields before its connection is installed, so a caller's
+        /// <c>await LaunchProcess()</c> made before Loaded can now have Loaded land in the middle of it. The same
+        /// window <see cref="EarlyLaunchIsCurrent"/> closes for the early launch, open to any explicit one.
+        /// Current is judged the same way: anything that superseded the launch -- a detach, an attach, another
+        /// launch -- replaced or cleared <c>_processCts</c>, and then Loaded must launch after all.
+        /// </remarks>
+        private bool SpawnInFlightIsCurrent =>
+            _spawningCts != null && ReferenceEquals(_spawningCts, _processCts);
+
+        private Task<IPtyConnection> SpawnOnThreadPool(PtyOptions options, CancellationToken token)
+        {
+            var spawn = PtySpawnOverride ?? PtyProvider.SpawnAsync;
+            return Task.Run(() => spawn(options, token), token);
+        }
 
         /// <summary>
         /// Launch the terminal process with the specified parameters, updating the Process, ProcessArgs, and StartingDirectory properties. 
