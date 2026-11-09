@@ -6,7 +6,7 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <PropertyGroup>
-    <Version>4.1.3</Version>
+    <Version>4.1.4</Version>
     <AssemblyVersion>4.1.3.0</AssemblyVersion>
     <Description>Avalonia terminal controls (TerminalControl/TerminalWindow) that provide an XTerm console for hosting console applications in Avalonia, including Sixel and Kitty graphics.</Description>
     <Company>Iciclecreek</Company>
