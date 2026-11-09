@@ -112,7 +112,7 @@ namespace Iciclecreek.Terminal
         {
             if (_atomicUpdate)
             {
-                if (Stopwatch.GetElapsedTime(_atomicUpdateStartedAt) < AtomicUpdateTimeout)
+                if (AtomicUpdateClock.GetElapsedTime(_atomicUpdateStartedAt) < AtomicUpdateTimeout)
                     return;
 
                 _atomicUpdate = false;

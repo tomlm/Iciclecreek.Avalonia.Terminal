@@ -5,6 +5,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Headless.NUnit;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Microsoft.Extensions.Time.Testing;
 using NUnit.Framework;
 
 namespace Iciclecreek.Terminal.Tests;
@@ -22,6 +23,10 @@ namespace Iciclecreek.Terminal.Tests;
 public class ControlSurfaceTests
 {
     // ------------------------------------------- handlers added before the template
+    //
+    // No waiting after a send in any of these. InputSent is raised synchronously at the top of
+    // SendInputAsync, before its first await, so by the time the call returns every handler that
+    // will ever see "hello" has seen it. A sleep here only bought a chance to fail on a slow box.
 
     [AvaloniaTest]
     public void A_handler_added_before_the_template_still_receives_input()
@@ -42,7 +47,6 @@ public class ControlSurfaceTests
 
             control.Terminal.Write("");   // force the view to exist before sending
             control.SendInputAsync("hello").GetAwaiter().GetResult();
-            Thread.Sleep(150);
 
             lock (seen)
                 Assert.That(seen.ToString(), Does.Contain("hello"),
@@ -68,9 +72,15 @@ public class ControlSurfaceTests
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
-            control.SendInputAsync("hello").GetAwaiter().GetResult();
-            Thread.Sleep(150);
+            // The control for "nothing arrived": a handler still attached must see this send, or
+            // an empty `seen` would only mean the send never happened.
+            var still = new System.Text.StringBuilder();
+            control.InputSent += (_, data) => { lock (still) still.Append(data); };
 
+            control.SendInputAsync("hello").GetAwaiter().GetResult();
+
+            lock (still)
+                Assert.That(still.ToString(), Does.Contain("hello"), "sanity: the send must have been raised");
             lock (seen)
                 Assert.That(seen.ToString(), Is.Empty);
         }
@@ -96,6 +106,7 @@ public class ControlSurfaceTests
 
             var seen = new System.Text.StringBuilder();
             control.InputSent += (_, data) => { lock (seen) seen.Append(data); };
+            var orphan = control.View();
 
             // A second template application, which OnApplyTemplate explicitly supports -- it
             // unsubscribes the old parts at the top.
@@ -105,11 +116,17 @@ public class ControlSurfaceTests
             Dispatcher.UIThread.RunJobs();
 
             control.SendInputAsync("hello").GetAwaiter().GetResult();
-            Thread.Sleep(150);
 
             lock (seen)
                 Assert.That(seen.ToString(), Does.Contain("hello"),
                     "a handler must follow the control, not the view it happened to be added under");
+
+            // And the view it left behind must no longer reach the control's handlers.
+            Assert.That(control.View(), Is.Not.SameAs(orphan), "sanity: the template must have built a new view");
+            orphan.SendInputAsync("stale").GetAwaiter().GetResult();
+            lock (seen)
+                Assert.That(seen.ToString(), Does.Not.Contain("stale"),
+                    "the old view is still subscribed: re-applying the template leaked it");
         }
         finally { window.Close(); }
     }
@@ -130,7 +147,6 @@ public class ControlSurfaceTests
             Dispatcher.UIThread.RunJobs();
 
             control.SendInputAsync("hello").GetAwaiter().GetResult();
-            Thread.Sleep(150);
 
             Assert.That(sender, Is.SameAs(control), "matching ProcessExited, ShellReady and the rest");
         }
@@ -158,7 +174,6 @@ public class ControlSurfaceTests
             Dispatcher.UIThread.RunJobs();
 
             control.SendInputAsync("hello").GetAwaiter().GetResult();
-            Thread.Sleep(150);
 
             lock (seen)
                 Assert.That(seen.ToString(), Does.Contain("hello"));
@@ -222,7 +237,10 @@ public class ControlSurfaceTests
         // in OnAttachedToLogicalTree, and reading that was enough to convince me the finding was
         // wrong. What it does not show is that the method returns two lines earlier on a FIRST
         // attach, because the emulator does not exist yet. This test is what settled it.
-        var view = new TerminalView { Process = "" };
+        //
+        // On a clock that does not move, so a slow machine cannot blow the deadline between the
+        // BSU and the assertion and end the update for a reason this test is not about.
+        var view = new TerminalView { Process = "", AtomicUpdateClock = new FakeTimeProvider() };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
         window.UpdateLayout();
@@ -254,10 +272,13 @@ public class ControlSurfaceTests
         // torn frame, and the faster the frames the likelier the overlap -- which is why it showed
         // on a heavy full-screen demo and not on light ones.
         //
-        // The loop runs longer than the old 150ms timeout on purpose: a stale tick had to have time
-        // to come due while a later update was open, and pumping between each step is what would
-        // have run it.
-        var view = new TerminalView { Process = "" };
+        // The run spans more than the 150ms deadline on purpose: a stale tick had to have time to
+        // come due while a later update was open, and pumping between each step is what would have
+        // run it. That time is the view's clock, stepped 5ms a frame, so each update stays well
+        // inside its own deadline however slowly the machine pumps -- on the wall clock, one slow
+        // pump was enough to blow the deadline and fail this for a reason it is not about.
+        var clock = new FakeTimeProvider();
+        var view = new TerminalView { Process = "", AtomicUpdateClock = clock };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
         window.UpdateLayout();
@@ -273,7 +294,8 @@ public class ControlSurfaceTests
                 Assert.That(AtomicUpdate(view), Is.True,
                     $"frame {frame}: the update was ended by something other than its own ESU");
 
-                Thread.Sleep(5);
+                clock.Advance(TimeSpan.FromMilliseconds(5));
+                RequestPaint(view);
                 Dispatcher.UIThread.RunJobs();
 
                 Assert.That(AtomicUpdate(view), Is.True,
@@ -294,7 +316,11 @@ public class ControlSurfaceTests
         // The safety net the timer used to provide, now enforced where the question is already
         // asked. An application that sets the mode and never clears it is broken, and the terminal
         // must not withhold every frame for the rest of the session on its account.
-        var view = new TerminalView { Process = "" };
+        //
+        // On the view's own clock, stepped by hand. Against the wall clock this flaked both ways: a
+        // slow pump between BSU and the first check already passed 150ms and ended the update early.
+        var clock = new FakeTimeProvider();
+        var view = new TerminalView { Process = "", AtomicUpdateClock = clock };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
         window.UpdateLayout();
@@ -307,13 +333,15 @@ public class ControlSurfaceTests
             Assert.That(AtomicUpdate(view), Is.True, "sanity: the update is open");
 
             // Inside the deadline nothing changes -- which is the half that stops this passing for
-            // the wrong reason, by simply never holding a frame at all.
+            // the wrong reason, by simply never holding a frame at all. One tick short of it is the
+            // tightest that holds.
+            clock.Advance(TimeSpan.FromMilliseconds(150) - TimeSpan.FromTicks(1));
             RequestPaint(view);
             Assert.That(AtomicUpdate(view), Is.True,
                 "a frame inside the deadline must still be held; an update that is not held is not "
                 + "an atomic update");
 
-            Thread.Sleep(200);
+            clock.Advance(TimeSpan.FromTicks(1));
 
             RequestPaint(view);
             Assert.That(AtomicUpdate(view), Is.False,
