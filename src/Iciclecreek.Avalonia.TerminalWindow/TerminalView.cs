@@ -105,7 +105,7 @@ namespace Iciclecreek.Terminal
         // Source-generated rather than RegexOptions.Compiled at runtime: the compiled form emits IL the
         // first time the type is touched, and the first terminal of a run was paying for that.
         [GeneratedRegex(@"https?://[^\s<>""'`]+", RegexOptions.Compiled)]
-        private static partial Regex UrlRegex { get; }
+        internal static partial Regex UrlRegex { get; }
         private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
         private HoveredUrl? _hoveredLink;
         private Cursor? _savedCursor;
@@ -2694,7 +2694,7 @@ namespace Iciclecreek.Terminal
             // An early launch still waiting on its spawn has no connection to show for it yet, so the null
             // check alone would start a second process beside it -- but only one that is still current; see
             // EarlyLaunchIsCurrent for the one that is not.
-            if (_ptyConnection == null && !EarlyLaunchIsCurrent && !string.IsNullOrEmpty(Process))
+            if (_ptyConnection == null && !EarlyLaunchIsCurrent && !SpawnInFlightIsCurrent && !string.IsNullOrEmpty(Process))
             {
                 await LaunchProcess();
             }
