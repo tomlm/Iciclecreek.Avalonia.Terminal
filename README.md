@@ -115,8 +115,14 @@ public partial class MainWindow : Window
 | `ViewportLines` | `int` | Read-only | Number of lines visible |
 | `Zoom` | `double` | `1.0` | Multiplier on `FontSize`, 0.5–3.0. View state driven by the zoom shortcuts; `FontSize` itself is left alone so a host binding to it keeps working |
 | `ShortcutMode` | `ShortcutMode` | `Terminal` | Which convention the contested keys follow: `Terminal` (Ctrl+A/V/X belong to the program), `Desktop` (they select all, paste and cut) or `None` (no keyboard shortcuts at all). See [Keyboard shortcuts](#keyboard-shortcuts) |
+| `ClearSelectionOnTyping` | `bool` | `true` | Whether typing drops a mouse selection. Set `false` to keep it while typing; a Shift+arrow selection over the input is still replaced by what is typed |
+| `LinkClickModifiers` | `KeyModifiers` | `Control` | The modifier keys a left click on a link must hold to raise `UrlClicked`. Every one named must be down. A macOS host will usually want `Meta` (Cmd) |
+| `LinkHighlightRequiresModifier` | `bool` | `false` | Underline a link, show the hand cursor and report it in `HoveredLink` only while `LinkClickModifiers` are held. Pressing or releasing the modifier updates it without moving the pointer |
+| `DetectUrls` | `bool` | `true` | Treat text that looks like a URL as a link. Links a program declares with OSC 8 are unaffected |
+| `HoveredLink` | `TerminalLink?` | Read-only | The link highlighted under the pointer: its `Url`, whether it came from OSC 8 (`FromSequence`), and the cells it covers (`Segments`) |
 | `IsAlternateBuffer` | `bool` | Read-only | True while a full-screen application (vim, htop, less) is using the alternate screen buffer |
 | `IsLive` | `bool` | Read-only | True while a PTY is attached and its process has not exited |
+| `ShellState` | `ShellState` | Read-only | Where the shell is, from its OSC 133 shell integration marks: `Unknown`, `Prompt`, `Input` or `Running`. `Running` means a command owns the terminal, which is when closing it should ask first. A shell without integration stays `Unknown` |
 
 **Methods:**
 
@@ -141,7 +147,11 @@ public partial class MainWindow : Window
 | Event | Description |
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. |
+| `ShellStateChanged` | Raised on the UI thread when `ShellState` changes. `ShellStateChangedEventArgs` carries `OldState`, `NewState` and, when a `133;D` ended a command, its `ExitCode`. A bubbling routed event, so a handler on `TerminalControl` or `TerminalWindow` sees it too. |
 | `ClipboardFailed` | Raised when a clipboard operation with no caller to throw to failed, which on Windows happens while another process has the clipboard open: a copy, cut or paste from a key press or mouse click, or the running program's own request. Check `Operation` before telling the user, because a program can make requests in the background. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
+| `UrlClicked` | Raised when a link is clicked with `LinkClickModifiers` held. The terminal never opens it; `UrlClickedEventArgs` carries the `Url` and whether it came from OSC 8, so the host can check the scheme first. |
+| `PasteRequested` | Raised before anything is pasted, from `PasteAsync`, the paste keys and right-click alike. The handler sees the clipboard's text in `PasteRequestedEventArgs` and can replace it, set `Cancel`, or hold the paste with `GetDeferral()` while it asks the user. The terminal does its own bracketing and paste announcement afterwards, so `Text` is the bare text. |
+| `HoveredLinkChanged` | Raised when `HoveredLink` changes: the pointer moved onto a link, from one link to another, or off one. Once per change, never for moves within a link. |
 
 ### TerminalWindow
 
@@ -219,6 +229,9 @@ Window manipulation commands from the terminal (resize, move, minimize, maximize
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. If `CloseOnProcessExit` is `true`, the event is raised before the window closes. |
 | `ClipboardFailed` | Raised when a clipboard operation with no caller to throw to failed, which on Windows happens while another process has the clipboard open: a copy, cut or paste from a key press or mouse click, or the running program's own request. Check `Operation` before telling the user, because a program can make requests in the background. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
+| `UrlClicked` | Raised when a link is clicked with `LinkClickModifiers` held. The terminal never opens it; `UrlClickedEventArgs` carries the `Url` and whether it came from OSC 8, so the host can check the scheme first. |
+| `PasteRequested` | Raised before anything is pasted, from `PasteAsync`, the paste keys and right-click alike. The handler sees the clipboard's text in `PasteRequestedEventArgs` and can replace it, set `Cancel`, or hold the paste with `GetDeferral()` while it asks the user. The terminal does its own bracketing and paste announcement afterwards, so `Text` is the bare text. |
+| `HoveredLinkChanged` | Raised when `HoveredLink` changes: the pointer moved onto a link, from one link to another, or off one. Once per change, never for moves within a link. |
 
 
 ### Keyboard shortcuts

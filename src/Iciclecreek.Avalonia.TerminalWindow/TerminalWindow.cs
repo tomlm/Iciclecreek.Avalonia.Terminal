@@ -183,6 +183,12 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.UrlClicked"/>
         public event EventHandler<UrlClickedEventArgs>? UrlClicked;
 
+        /// <inheritdoc cref="TerminalView.HoveredLinkChanged"/>
+        public event EventHandler<HoveredLinkChangedEventArgs>? HoveredLinkChanged;
+
+        /// <inheritdoc cref="TerminalView.PasteRequested"/>
+        public event EventHandler<PasteRequestedEventArgs>? PasteRequested;
+
         /// <inheritdoc cref="TerminalView.ClipboardFailed"/>
         public event EventHandler<ClipboardFailedEventArgs>? ClipboardFailed;
 
@@ -270,6 +276,58 @@ namespace Iciclecreek.Terminal
         {
             get => GetValue(ShortcutModeProperty);
             set => SetValue(ShortcutModeProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.ClearSelectionOnTypingProperty"/>
+        public static readonly StyledProperty<bool> ClearSelectionOnTypingProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(ClearSelectionOnTyping),
+                defaultValue: true);
+
+        /// <inheritdoc cref="TerminalView.ClearSelectionOnTypingProperty"/>
+        public bool ClearSelectionOnTyping
+        {
+            get => GetValue(ClearSelectionOnTypingProperty);
+            set => SetValue(ClearSelectionOnTypingProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.LinkClickModifiersProperty"/>
+        public static readonly StyledProperty<KeyModifiers> LinkClickModifiersProperty =
+            AvaloniaProperty.Register<TerminalWindow, KeyModifiers>(
+                nameof(LinkClickModifiers),
+                defaultValue: KeyModifiers.Control);
+
+        /// <inheritdoc cref="TerminalView.LinkClickModifiersProperty"/>
+        public KeyModifiers LinkClickModifiers
+        {
+            get => GetValue(LinkClickModifiersProperty);
+            set => SetValue(LinkClickModifiersProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.LinkHighlightRequiresModifierProperty"/>
+        public static readonly StyledProperty<bool> LinkHighlightRequiresModifierProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(LinkHighlightRequiresModifier),
+                defaultValue: false);
+
+        /// <inheritdoc cref="TerminalView.LinkHighlightRequiresModifierProperty"/>
+        public bool LinkHighlightRequiresModifier
+        {
+            get => GetValue(LinkHighlightRequiresModifierProperty);
+            set => SetValue(LinkHighlightRequiresModifierProperty, value);
+        }
+
+        /// <inheritdoc cref="TerminalView.DetectUrlsProperty"/>
+        public static readonly StyledProperty<bool> DetectUrlsProperty =
+            AvaloniaProperty.Register<TerminalWindow, bool>(
+                nameof(DetectUrls),
+                defaultValue: true);
+
+        /// <inheritdoc cref="TerminalView.DetectUrlsProperty"/>
+        public bool DetectUrls
+        {
+            get => GetValue(DetectUrlsProperty);
+            set => SetValue(DetectUrlsProperty, value);
         }
 
         /// <inheritdoc cref="TerminalView.CutAsync"/>
@@ -647,6 +705,9 @@ namespace Iciclecreek.Terminal
         /// <inheritdoc cref="TerminalView.IsLive"/>
         public bool IsLive => _terminalControl?.IsLive ?? false;
 
+        /// <inheritdoc cref="TerminalView.HoveredLink"/>
+        public TerminalLink? HoveredLink => _terminalControl?.HoveredLink;
+
         /// <inheritdoc cref="TerminalView.SessionId"/>
         public long SessionId => _terminalControl?.SessionId ?? 0;
 
@@ -800,6 +861,8 @@ namespace Iciclecreek.Terminal
             _terminalControl.ShellReady += OnTerminalControlShellReady;
             _terminalControl.OutputReceived += OnTerminalControlOutputReceived;
             _terminalControl.UrlClicked += OnTerminalControlUrlClicked;
+            _terminalControl.HoveredLinkChanged += OnTerminalControlHoveredLinkChanged;
+            _terminalControl.PasteRequested += OnTerminalControlPasteRequested;
             _terminalControl.ClipboardFailed += OnTerminalControlClipboardFailed;
             TerminalView.AddTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
             TerminalView.AddWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
@@ -835,6 +898,10 @@ namespace Iciclecreek.Terminal
             _terminalControl.Bind(TerminalControl.BufferSizeProperty, this.GetObservable(BufferSizeProperty));
             _terminalControl.Bind(TerminalControl.ShowCaretOnClickProperty, this.GetObservable(ShowCaretOnClickProperty));
             _terminalControl.Bind(TerminalControl.ShortcutModeProperty, this.GetObservable(ShortcutModeProperty));
+            _terminalControl.Bind(TerminalControl.ClearSelectionOnTypingProperty, this.GetObservable(ClearSelectionOnTypingProperty));
+            _terminalControl.Bind(TerminalControl.LinkClickModifiersProperty, this.GetObservable(LinkClickModifiersProperty));
+            _terminalControl.Bind(TerminalControl.LinkHighlightRequiresModifierProperty, this.GetObservable(LinkHighlightRequiresModifierProperty));
+            _terminalControl.Bind(TerminalControl.DetectUrlsProperty, this.GetObservable(DetectUrlsProperty));
             _terminalControl.Bind(TerminalControl.SuppressCursorProperty, this.GetObservable(SuppressCursorProperty));
             _terminalControl.Bind(TerminalControl.OutputReceivedOnReadTaskProperty, this.GetObservable(OutputReceivedOnReadTaskProperty));
             _terminalControl.Bind(TerminalControl.AutoScrollToBottomProperty, this.GetObservable(AutoScrollToBottomProperty));
@@ -997,6 +1064,8 @@ namespace Iciclecreek.Terminal
                 _terminalControl.ShellReady -= OnTerminalControlShellReady;
                 _terminalControl.OutputReceived -= OnTerminalControlOutputReceived;
                 _terminalControl.UrlClicked -= OnTerminalControlUrlClicked;
+                _terminalControl.HoveredLinkChanged -= OnTerminalControlHoveredLinkChanged;
+                _terminalControl.PasteRequested -= OnTerminalControlPasteRequested;
                 _terminalControl.ClipboardFailed -= OnTerminalControlClipboardFailed;
                 TerminalView.RemoveTitleChangedHandler(_terminalControl, OnTerminalTitleChanged);
                 TerminalView.RemoveWindowMovedHandler(_terminalControl, OnTerminalWindowMoved);
@@ -1059,6 +1128,16 @@ namespace Iciclecreek.Terminal
         private void OnTerminalControlUrlClicked(object? sender, UrlClickedEventArgs e)
         {
             UrlClicked?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlHoveredLinkChanged(object? sender, HoveredLinkChangedEventArgs e)
+        {
+            HoveredLinkChanged?.Invoke(this, e);
+        }
+
+        private void OnTerminalControlPasteRequested(object? sender, PasteRequestedEventArgs e)
+        {
+            PasteRequested?.Invoke(this, e);
         }
 
         private void OnTerminalControlClipboardFailed(object? sender, ClipboardFailedEventArgs e)
@@ -1247,5 +1326,15 @@ namespace Iciclecreek.Terminal
                 }
             }
         }
+
+        /// <inheritdoc cref="TerminalView.ShellStateChanged"/>
+        public event EventHandler<ShellStateChangedEventArgs> ShellStateChanged
+        {
+            add => AddHandler(TerminalView.ShellStateChangedEvent, value);
+            remove => RemoveHandler(TerminalView.ShellStateChangedEvent, value);
+        }
+
+        /// <inheritdoc cref="TerminalControl.ShellState"/>
+        public XTerm.Common.ShellState ShellState => _terminalControl?.ShellState ?? XTerm.Common.ShellState.Unknown;
     }
 }
