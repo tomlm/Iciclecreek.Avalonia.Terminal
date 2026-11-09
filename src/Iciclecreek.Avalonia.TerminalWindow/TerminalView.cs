@@ -113,6 +113,10 @@ namespace Iciclecreek.Terminal
         private (int Line, int Col)? _lastHoverProbe;
         private HoveredUrl? _pendingUrlClick;
 
+        // The cell the pointer was last over, in viewport rows, so a modifier pressed or released with
+        // the pointer still can re-evaluate the hover without waiting for it to move.
+        private (int Row, int Col)? _lastPointerCell;
+
         // Pointer-shape (OSC 22) override state, kept apart from the hover pair above because the two
         // nest: a shape can arrive during a hover and a hover can start over a shape. This is what the
         // CONTROL's cursor was before the program's first shape took effect, so a reset can put it back
@@ -948,6 +952,101 @@ namespace Iciclecreek.Terminal
             get => GetValue(ShowCaretOnClickProperty);
             set => SetValue(ShowCaretOnClickProperty, value);
         }
+
+        /// <summary>
+        /// Whether typing drops a selection made with the mouse. Defaults to <see langword="true"/>, as
+        /// before; set <see langword="false"/> to keep it highlighted, and copyable, while the user types.
+        /// </summary>
+        /// <remarks>
+        /// Only the drop. A selection made with Shift and the arrow keys over the shell's input is still
+        /// REPLACED by what is typed, since that is editing rather than selecting, and either way the
+        /// keyboard-selection anchor is released.
+        /// </remarks>
+        public static readonly StyledProperty<bool> ClearSelectionOnTypingProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(ClearSelectionOnTyping),
+                defaultValue: true);
+
+        /// <inheritdoc cref="ClearSelectionOnTypingProperty"/>
+        public bool ClearSelectionOnTyping
+        {
+            get => GetValue(ClearSelectionOnTypingProperty);
+            set => SetValue(ClearSelectionOnTypingProperty, value);
+        }
+
+        /// <summary>
+        /// The modifier keys that must be held for a left click on a link to raise
+        /// <see cref="UrlClicked"/>. Defaults to <see cref="KeyModifiers.Control"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>Every key named here must be down; others may be down too, so Ctrl+Shift+Click still
+        /// counts under the default. A macOS host will usually want <see cref="KeyModifiers.Meta"/>
+        /// (Cmd), the platform's own convention for following a link.</para>
+        /// <para><see cref="KeyModifiers.None"/> makes a plain click on a link follow it, at the cost of
+        /// starting a selection there.</para>
+        /// </remarks>
+        public static readonly StyledProperty<KeyModifiers> LinkClickModifiersProperty =
+            AvaloniaProperty.Register<TerminalView, KeyModifiers>(
+                nameof(LinkClickModifiers),
+                defaultValue: KeyModifiers.Control);
+
+        /// <inheritdoc cref="LinkClickModifiersProperty"/>
+        public KeyModifiers LinkClickModifiers
+        {
+            get => GetValue(LinkClickModifiersProperty);
+            set => SetValue(LinkClickModifiersProperty, value);
+        }
+
+        /// <summary>
+        /// When <see langword="true"/>, a link is only underlined, given the hand cursor and reported
+        /// through <see cref="HoveredLink"/> while <see cref="LinkClickModifiers"/> are held. Defaults to
+        /// <see langword="false"/>, where any link under the pointer is highlighted.
+        /// </summary>
+        /// <remarks>
+        /// Pressing or releasing the modifier over a link updates the highlight without the pointer
+        /// moving, so it reads as "this is what a click would open".
+        /// </remarks>
+        public static readonly StyledProperty<bool> LinkHighlightRequiresModifierProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(LinkHighlightRequiresModifier),
+                defaultValue: false);
+
+        /// <inheritdoc cref="LinkHighlightRequiresModifierProperty"/>
+        public bool LinkHighlightRequiresModifier
+        {
+            get => GetValue(LinkHighlightRequiresModifierProperty);
+            set => SetValue(LinkHighlightRequiresModifierProperty, value);
+        }
+
+        /// <summary>
+        /// Whether text that looks like a URL is treated as a link. Defaults to <see langword="true"/>.
+        /// </summary>
+        /// <remarks>
+        /// Only the pattern match. Links a program declares with OSC 8 are unaffected: they are a
+        /// statement from the program rather than a guess about the text, and remain hoverable and
+        /// clickable either way.
+        /// </remarks>
+        public static readonly StyledProperty<bool> DetectUrlsProperty =
+            AvaloniaProperty.Register<TerminalView, bool>(
+                nameof(DetectUrls),
+                defaultValue: true);
+
+        /// <inheritdoc cref="DetectUrlsProperty"/>
+        public bool DetectUrls
+        {
+            get => GetValue(DetectUrlsProperty);
+            set => SetValue(DetectUrlsProperty, value);
+        }
+
+        /// <summary>
+        /// The link currently highlighted under the pointer, or <see langword="null"/> when there is
+        /// none. <see cref="HoveredLinkChanged"/> is raised whenever it changes.
+        /// </summary>
+        /// <remarks>
+        /// Follows the highlight exactly, so with <see cref="LinkHighlightRequiresModifier"/> set it is
+        /// <see langword="null"/> until the modifier is held.
+        /// </remarks>
+        public TerminalLink? HoveredLink => _hoveredLink?.Public;
 
         /// <summary>
         /// Which convention the terminal follows for Ctrl+A, Ctrl+C, Ctrl+V and Ctrl+X. Defaults to
@@ -2409,6 +2508,12 @@ namespace Iciclecreek.Terminal
             if (change.Property == ProcessProperty || change.Property == LaunchBeforeLoadedProperty)
                 QueueLaunchBeforeLoaded();
 
+            // What counts as a link, or when one shows, has changed: drop the current hover rather than
+            // leave a highlight the new rules would not have drawn. The next pointer move re-evaluates.
+            if (change.Property == DetectUrlsProperty || change.Property == LinkClickModifiersProperty ||
+                change.Property == LinkHighlightRequiresModifierProperty)
+                ClearHoveredUrl();
+
             if (change.Property == ForegroundProperty || change.Property == BackgroundProperty)
             {
                 // Re-themed after the emulator was built, so the palette that answers OSC 10/11 has to move
@@ -2914,6 +3019,10 @@ namespace Iciclecreek.Terminal
             // suppress a later IME commit.
             _win32RecordSentForThisStroke = false;
 
+            // Before any early return: the highlight follows the modifier whether or not a process is
+            // attached to send the key to.
+            RefreshHoverForModifierKey(e, pressed: true);
+
             // Only process input if this terminal has focus
             if (!IsFocused)
             {
@@ -3013,7 +3122,7 @@ namespace Iciclecreek.Terminal
                     if (e.Key == Key.V)
                     {
                         e.Handled = true;
-                        await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync);
+                        await TryClipboardGestureAsync(ClipboardOperation.Paste, () => PasteAsync(PasteSource.Keyboard));
                         return;
                     }
                 }
@@ -3075,7 +3184,7 @@ namespace Iciclecreek.Terminal
 
                             case Key.V:
                                 e.Handled = true;
-                                await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync).ConfigureAwait(false);
+                                await TryClipboardGestureAsync(ClipboardOperation.Paste, () => PasteAsync(PasteSource.Keyboard)).ConfigureAwait(false);
                                 return;
 
                             case Key.X:
@@ -3216,7 +3325,7 @@ namespace Iciclecreek.Terminal
                         _kbSelAnchor = null;
                         _kbSelWholeInput = false;
 
-                        if (_terminal.Selection.HasSelection)
+                        if (ClearSelectionOnTyping && _terminal.Selection.HasSelection)
                         {
                             _terminal.Selection.ClearSelection();
                             RequestPaint();
@@ -3230,7 +3339,7 @@ namespace Iciclecreek.Terminal
                 if (shortcuts && TerminalKeyGestures.Paste.Matches(e))
                 {
                     e.Handled = true;
-                    await TryClipboardGestureAsync(ClipboardOperation.Paste, PasteAsync);
+                    await TryClipboardGestureAsync(ClipboardOperation.Paste, () => PasteAsync(PasteSource.Keyboard));
                     return;
                 }
 
@@ -3678,7 +3787,7 @@ namespace Iciclecreek.Terminal
             {
                 _kbSelAnchor = null;
                 _kbSelWholeInput = false;
-                if (_terminal.Selection.HasSelection)
+                if (ClearSelectionOnTyping && _terminal.Selection.HasSelection)
                 {
                     _terminal.Selection.ClearSelection();
                     RequestPaint();
@@ -3858,6 +3967,12 @@ namespace Iciclecreek.Terminal
                    Url == other.Url &&
                    other.Segments.Count == Segments.Count &&
                    other.Segments[0] == Segments[0];
+
+            /// <summary>The host's view of this link, built once so it stays the same object while hovered.</summary>
+            public TerminalLink Public => _public ??= new TerminalLink(Url, FromSequence,
+                Segments.ConvertAll(s => new TerminalLinkSegment(s.Line, s.StartCol, s.EndCol)));
+
+            private TerminalLink? _public;
         }
 
         private static int CountChar(string text, char c)

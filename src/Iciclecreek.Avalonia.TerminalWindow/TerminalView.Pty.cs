@@ -77,15 +77,27 @@ namespace Iciclecreek.Terminal
             // Re-entering begins a new motion stream. Its first position is meaningful even when it
             // happens to be the same edge cell as the final event before the pointer left.
             _lastReportedMotion = null;
+            _lastPointerCell = null;
             ClearHoveredUrl();
         }
 
-        private async Task SendToPtyAsync(string data, CancellationToken ct = default)
+        /// <param name="to">
+        /// The connection the data was meant for, when the caller decided to send it before an await. It is
+        /// written there or nowhere: the check after the semaphore drops it once that connection is not the
+        /// current one, rather than sending it to whatever is attached by then.
+        /// </param>
+        /// <param name="session">
+        /// The <see cref="SessionId"/> it was meant for, checked at the same moment. The connection alone is
+        /// not enough: detaching and attaching the same object again is a new session behind an unchanged
+        /// reference, and a write queued on the semaphore across that would type into it.
+        /// </param>
+        private async Task SendToPtyAsync(string data, CancellationToken ct = default, IPtyConnection? to = null,
+                                          long? session = null)
         {
             InputSent?.Invoke(this, data);
 
             // Capture the connection reference locally to avoid any potential race conditions
-            var ptyConnection = _ptyConnection;
+            var ptyConnection = to ?? _ptyConnection;
             if (ptyConnection == null || string.IsNullOrEmpty(data))
                 return;
 
@@ -103,7 +115,7 @@ namespace Iciclecreek.Terminal
                 // Dropped rather than redirected to the current connection. Input aimed at a process
                 // that is no longer here belongs to nothing: sending it onwards would put half a
                 // command line into whatever replaced it.
-                if (!ReferenceEquals(_ptyConnection, ptyConnection))
+                if (!ReferenceEquals(_ptyConnection, ptyConnection) || (session is { } s && SessionId != s))
                     return;
 
                 var bytes = Utf8NoBom.GetBytes(data);
