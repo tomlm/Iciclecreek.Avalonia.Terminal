@@ -161,6 +161,7 @@ namespace Iciclecreek.Terminal
             // attached connection may already have a live process behind it, so an exit can arrive immediately
             // — subscribing after the reader starts is a window in which it is missed entirely.
             var sessionId = InstallConnection(connection);
+            ForgetShellState();
             connection.ProcessExited += OnPtyProcessExited;
 
             // Bytes a detached reader parked are the EARLIEST undelivered output (see
@@ -400,6 +401,7 @@ namespace Iciclecreek.Terminal
                 }
 
                 var spawnedSessionId = InstallConnection(spawned);
+                ForgetShellState();
 
                 // The emulator can be re-gridded while the spawn is awaited -- for an early launch the first
                 // layout usually lands there -- and ArrangeOverride had no connection then to pass the size

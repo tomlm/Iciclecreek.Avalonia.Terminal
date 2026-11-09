@@ -122,6 +122,7 @@ public partial class MainWindow : Window
 | `HoveredLink` | `TerminalLink?` | Read-only | The link highlighted under the pointer: its `Url`, whether it came from OSC 8 (`FromSequence`), and the cells it covers (`Segments`) |
 | `IsAlternateBuffer` | `bool` | Read-only | True while a full-screen application (vim, htop, less) is using the alternate screen buffer |
 | `IsLive` | `bool` | Read-only | True while a PTY is attached and its process has not exited |
+| `ShellState` | `ShellState` | Read-only | Where the shell is, from its OSC 133 shell integration marks: `Unknown`, `Prompt`, `Input` or `Running`. `Running` means a command owns the terminal, which is when closing it should ask first. A shell without integration stays `Unknown` |
 
 **Methods:**
 
@@ -146,6 +147,7 @@ public partial class MainWindow : Window
 | Event | Description |
 |-------|-------------|
 | `ProcessExited` | Raised when the PTY process exits. The handler receives `ProcessExitedEventArgs` with the process `ExitCode`. |
+| `ShellStateChanged` | Raised on the UI thread when `ShellState` changes. `ShellStateChangedEventArgs` carries `OldState`, `NewState` and, when a `133;D` ended a command, its `ExitCode`. A bubbling routed event, so a handler on `TerminalControl` or `TerminalWindow` sees it too. |
 | `ClipboardFailed` | Raised when a clipboard operation with no caller to throw to failed, which on Windows happens while another process has the clipboard open: a copy, cut or paste from a key press or mouse click, or the running program's own request. Check `Operation` before telling the user, because a program can make requests in the background. `CopyAsync`, `CutAsync` and `PasteAsync` throw to their caller instead. |
 | `UrlClicked` | Raised when a link is clicked with `LinkClickModifiers` held. The terminal never opens it; `UrlClickedEventArgs` carries the `Url` and whether it came from OSC 8, so the host can check the scheme first. |
 | `PasteRequested` | Raised before anything is pasted, from `PasteAsync`, the paste keys and right-click alike. The handler sees the clipboard's text in `PasteRequestedEventArgs` and can replace it, set `Cancel`, or hold the paste with `GetDeferral()` while it asks the user. The terminal does its own bracketing and paste announcement afterwards, so `Text` is the bare text. |

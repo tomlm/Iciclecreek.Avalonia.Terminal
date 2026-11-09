@@ -1326,5 +1326,15 @@ namespace Iciclecreek.Terminal
                 }
             }
         }
+
+        /// <inheritdoc cref="TerminalView.ShellStateChanged"/>
+        public event EventHandler<ShellStateChangedEventArgs> ShellStateChanged
+        {
+            add => AddHandler(TerminalView.ShellStateChangedEvent, value);
+            remove => RemoveHandler(TerminalView.ShellStateChangedEvent, value);
+        }
+
+        /// <inheritdoc cref="TerminalControl.ShellState"/>
+        public XTerm.Common.ShellState ShellState => _terminalControl?.ShellState ?? XTerm.Common.ShellState.Unknown;
     }
 }
