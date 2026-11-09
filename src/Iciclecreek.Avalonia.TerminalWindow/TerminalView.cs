@@ -1752,6 +1752,10 @@ namespace Iciclecreek.Terminal
             // Initialize IME client
             _inputMethodClient = new TerminalInputMethodClient(this);
 
+            // Output can be delivered from here on. A connection attached before this has had its chunks
+            // held rather than painted into an emulator that did not exist; its reader picks them up now.
+            ResumeReaderOnceInitialized();
+
             // Usually where an opted-in launch starts -- but not from HERE. Avalonia raises Initialized
             // straight after this method returns, and a host's Initialized handler is an ordinary place to
             // set StartingDirectory, ProcessArgs or EnvironmentVariables; launching now would build the

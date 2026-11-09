@@ -167,9 +167,13 @@ namespace Iciclecreek.Terminal
             // PendingHandoverBytes), so they are replayed now, through the same pipeline a read would
             // use, rather than waiting for our reader to get the gate. Anything a stale reader parks
             // after this is still earlier than what our reader reads next, and it replays that before
-            // its first read.
+            // its first read. Not before this view can paint, though: then the reader replays them once
+            // it can (see ResumeReaderOnceInitialized). Left to ConsumeOutputChunk to refuse, the bytes
+            // would survive too, but the refusal would mark the session's reader as stopped while it is
+            // still running: initialisation would then replace a reader that may already have delivered,
+            // and the replacement would announce ShellReady a second time.
             var handover = PendingHandoverBytes.For(connection);
-            if (handover.Claim() is { Length: > 0 } parked)
+            if (_emulatorReady && handover.Claim() is { Length: > 0 } parked)
             {
                 var replayLatch = true;   // mid-session bytes; readiness must not re-announce
                 if (!ConsumeOutputChunk(parked, ref replayLatch, _processCts.Token, sessionId))
@@ -515,6 +519,13 @@ namespace Iciclecreek.Terminal
         /// between the answer and the write.</returns>
         private bool ConsumeOutputChunk(ReadOnlyMemory<byte> chunk, ref bool shellReadyPosted, CancellationToken cancellationToken, long sessionId)
         {
+            // A view built in code has no emulator until it joins a tree, and a host can attach a
+            // connection before that -- a tear-off target attached first and shown second. Refused like a
+            // chunk for another session, so the caller keeps it parked rather than lose it to a null
+            // emulator, and the loop ends; OnInitialized starts the session's reader again.
+            if (!_emulatorReady && !EmulatorReadyElseAwait(sessionId, shellReadyPosted))
+                return false;
+
             // Snapshot before write so we can tell whether YBase moved (MaxScrollback is
             // YBase: it grows as output scrolls lines off the top, and drops when the
             // output erases the scrollback; ScrollToBottom only moves ViewportY).
@@ -824,6 +835,75 @@ namespace Iciclecreek.Terminal
         /// <summary>The lease of the loop reading the current session. Guarded by <see cref="_exitGate"/>.</summary>
         private ReaderLease? _readerLease;
 
+        /// <summary>Set once OnInitialized has built everything a chunk is delivered through. Written
+        /// under <see cref="_terminalLock"/>, and never cleared.</summary>
+        private volatile bool _emulatorReady;
+
+        /// <summary>The session whose reader refused a chunk because the view could not paint yet, and so
+        /// ended; 0 for none. Guarded by <see cref="_terminalLock"/>.</summary>
+        private long _readerAwaitsEmulator;
+
+        /// <summary>Whether the chunk that reader refused was still to announce ShellReady -- the
+        /// session's first output, rather than bytes handed over mid-session. Guarded by
+        /// <see cref="_terminalLock"/>.</summary>
+        private bool _heldChunkAnnouncesReady;
+
+        /// <summary>Whether the emulator is ready, asked where OnInitialized answers it. When it is not,
+        /// records that <paramref name="sessionId"/>'s reader is about to stop for it, and whether the
+        /// chunk it holds back still owes the session its readiness.</summary>
+        private bool EmulatorReadyElseAwait(long sessionId, bool shellReadyPosted)
+        {
+            lock (_terminalLock)
+            {
+                if (_emulatorReady)
+                    return true;
+
+                _readerAwaitsEmulator = sessionId;
+                _heldChunkAnnouncesReady = !shellReadyPosted;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Called by OnInitialized once a chunk can be delivered: marks the view ready and, if the current
+        /// session's reader stopped because it could not be, starts it again.
+        /// </summary>
+        /// <remarks>
+        /// Both halves under <see cref="_terminalLock"/>, which is what makes the restart exact. A reader
+        /// that asked before this ran has refused its chunk and is ending, so a new one is needed, and it
+        /// replays that chunk before its first read; one that asks after finds the view ready and goes on
+        /// delivering, so a second reader is never started beside it. A refusal from a session that has
+        /// since been replaced starts nothing: that session's bytes are parked for its next owner.
+        /// </remarks>
+        private void ResumeReaderOnceInitialized()
+        {
+            long awaiting;
+            bool announcesReady;
+            lock (_terminalLock)
+            {
+                _emulatorReady = true;
+                awaiting = _readerAwaitsEmulator;
+                announcesReady = _heldChunkAnnouncesReady;
+                _readerAwaitsEmulator = 0;
+            }
+
+            IPtyConnection? connection;
+            long sessionId;
+            lock (_exitGate)
+            {
+                connection = _ptyConnection;
+                sessionId = _sessionId;
+            }
+
+            if (awaiting == 0 || awaiting != sessionId || connection is null || _processCts is not { } cts)
+                return;
+
+            // A held first chunk is the session's first output, not handover bytes: replayed with the
+            // readiness latch still open, or a shell that printed its prompt and is waiting for input
+            // would never announce ShellReady.
+            _readLoopTask = ReadPtyOutputAsync(connection, sessionId, cts.Token, firstOutputHeld: announcesReady);
+        }
+
         /// <summary>Starts the read loop for <paramref name="connection"/>, on a thread of its own.</summary>
         /// <param name="connection">The connection the loop reads. See <see cref="ReadLoopAsync"/>.</param>
         /// <param name="sessionId">Identity of <paramref name="connection"/>. See <see cref="ReadLoopAsync"/>.</param>
@@ -833,8 +913,12 @@ namespace Iciclecreek.Terminal
         /// loop's frames for as long as it runs, is exactly the reference <see cref="ReaderLease"/>
         /// exists to drop; the caller's thread finishes as soon as this returns.
         /// </remarks>
+        /// <param name="firstOutputHeld">True when what is parked begins with this session's first output,
+        /// held while the view could not paint: its replay announces ShellReady. See
+        /// <see cref="ResumeReaderOnceInitialized"/>.</param>
         private Task ReadPtyOutputAsync(
-            IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up = null)
+            IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up = null,
+            bool firstOutputHeld = false)
         {
             var lease = new ReaderLease(this);
             lock (_exitGate)
@@ -852,13 +936,14 @@ namespace Iciclecreek.Terminal
                 }
             }
 
-            return StartReadLoop(lease, connection, sessionId, cancellationToken, up);
+            return StartReadLoop(lease, connection, sessionId, cancellationToken, up, firstOutputHeld);
         }
 
         private static Task StartReadLoop(
-            ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up)
+            ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up,
+            bool firstOutputHeld)
             => Task.Factory.StartNew(
-                () => ReadLoopAsync(lease, connection, sessionId, cancellationToken, up),
+                () => ReadLoopAsync(lease, connection, sessionId, cancellationToken, up, firstOutputHeld),
                 CancellationToken.None,
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default).Unwrap();
@@ -886,8 +971,10 @@ namespace Iciclecreek.Terminal
         /// </param>
         /// <param name="up">Completed once the loop is running and about to read, for a caller waiting to
         /// know that before it carries on. See the note at the top of the method. Null when nobody is.</param>
+        /// <param name="firstOutputHeld">See <see cref="ReadPtyOutputAsync"/>.</param>
         private static async Task ReadLoopAsync(
-            ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up)
+            ReaderLease lease, IPtyConnection connection, long sessionId, CancellationToken cancellationToken, TaskCompletionSource? up,
+            bool firstOutputHeld)
         {
             // Raised BEFORE the first read, and deliberately not after one. Signalling after a read would
             // make readiness depend on the process PRODUCING output, so a shell that prints nothing on
@@ -935,13 +1022,20 @@ namespace Iciclecreek.Terminal
                         // about to read, so it goes first.
                         if (handover.Claim() is { } parked)
                         {
-                            var replayLatch = true;   // mid-session bytes; readiness must not re-announce
+                            // Mid-session bytes must not re-announce readiness -- unless they are this
+                            // session's own first output, held until the view could paint, which is the
+                            // announcement. The loop's latch then follows, so it is made once.
+                            var replayLatch = !firstOutputHeld;
                             if (!Deliver(lease, parked, ref replayLatch, cancellationToken, sessionId))
                             {
                                 handover.Unclaim(parked);
                                 break;
                             }
+
+                            if (firstOutputHeld)
+                                shellReadyPosted = replayLatch;
                         }
+                        firstOutputHeld = false;
 
                         // SYNCHRONOUS, on the thread StartNew handed this loop. `await ReadAsync` undid the
                         // LongRunning hint entirely: LongRunning owns a dedicated thread only up to the first
