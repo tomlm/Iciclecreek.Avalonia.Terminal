@@ -311,6 +311,108 @@ public class HandoverTests
         finally { window.Close(); pty.Dispose(); }
     }
 
+    /// <summary>
+    /// A chunk parked for the next owner reaches it when that owner is a view not yet in a tree -- a
+    /// tear-off target a host builds, attaches, and only then shows.
+    /// </summary>
+    /// <remarks>
+    /// AttachConnection replays parked bytes at once, and a view has no emulator until it is
+    /// initialised, which for a view built in code is when it joins a tree. The replay threw out of
+    /// AttachConnection having already claimed the bytes, so the host saw an exception and the chunk
+    /// was gone.
+    /// </remarks>
+    [AvaloniaTest]
+    public void A_chunk_parked_for_a_view_not_yet_shown_reaches_it_once_shown()
+    {
+        var (view1, w1) = Realised();
+        var pty = new TurnConnection();
+        Window? w2 = null;
+        try
+        {
+            view1.AttachConnection(pty);
+            Await(() => pty.WaitingReads == 1);
+            Assert.That(pty.WaitingReads, Is.EqualTo(1), "sanity: the first owner's loop is parked in its read");
+
+            view1.DetachConnection();
+            var stolen = pty.Emit("<parked>");
+            Await(() => stolen.Returned && !stolen.Reader.IsAlive);
+            Assert.That(stolen.Reader.IsAlive, Is.False, "sanity: the stale reader took the chunk, parked it and ended");
+
+            var view2 = new TerminalView { Process = "" };
+            var ready = 0;
+            view2.ShellReady += (_, _) => ready++;
+            Assert.That(view2.IsInitialized, Is.False, "sanity: a view built in code has no emulator until it joins a tree");
+            Assert.DoesNotThrow(() => view2.AttachConnection(pty), "attaching a view that is not shown yet is a handover like any other");
+
+            w2 = new Window { Width = 800, Height = 600, Content = view2 };
+            w2.Show();
+            w2.UpdateLayout();
+
+            Await(() => Text(view2).Contains("<parked>"));
+            Assert.That(Text(view2), Does.Contain("<parked>"), "the parked chunk must reach the new owner once it can paint");
+            Assert.That(Text(view1), Does.Not.Contain("<parked>"), "and not the view that gave it up");
+
+            Await(() => pty.WaitingReads == 1);
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(ready, Is.Zero, "handed-over bytes are mid-session output and do not announce ShellReady");
+        }
+        finally { w1.Close(); w2?.Close(); pty.Dispose(); }
+    }
+
+    /// <summary>
+    /// Output a process writes after its connection is attached to a view that is not shown yet is held
+    /// until the view can paint it, and the reader carries on afterwards.
+    /// </summary>
+    /// <remarks>
+    /// The same missing emulator, met by the reader rather than the attach: delivering the chunk threw
+    /// inside the read loop, which took the chunk with it and ended the loop, so the view stayed blank
+    /// for the rest of the session. Staged with <see cref="TurnConnection"/>: the chunk is served to the
+    /// view's reader, and the view is shown only once that reader has stopped.
+    /// <para>The held chunk is the session's first output, so it is also what announces ShellReady. An
+    /// idle shell prints its prompt once and waits for input; replayed as mid-session bytes, the prompt
+    /// was painted and readiness never came.</para>
+    /// </remarks>
+    [AvaloniaTest]
+    public void Output_before_the_view_is_shown_is_painted_once_it_is()
+    {
+        var pty = new TurnConnection();
+        Window? window = null;
+        try
+        {
+            var view = new TerminalView { Process = "" };
+            var ready = 0;
+            view.ShellReady += (_, _) => ready++;
+            view.AttachConnection(pty);
+
+            var early = pty.Emit("<early>");
+            Await(() => early.Returned && !early.Reader.IsAlive);
+            Assert.That(early.Reader.IsAlive, Is.False, "sanity: the reader took the chunk before the view could paint, and stopped");
+
+            window = new Window { Width = 800, Height = 600, Content = view };
+            window.Show();
+            window.UpdateLayout();
+
+            Await(() => Text(view).Contains("<early>"));
+            Assert.That(Text(view), Does.Contain("<early>"), "the held chunk is painted once the view can paint");
+
+            // The replacement reader parked in its next read: nothing more is coming, as at an idle prompt.
+            Await(() => pty.WaitingReads == 1 && ready > 0);
+            Assert.That(pty.WaitingReads, Is.EqualTo(1), "sanity: the replacement reader is waiting for more output");
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(ready, Is.EqualTo(1), "the held first output alone announces ShellReady, once");
+
+            pty.Emit("<later>");
+            Await(() => Text(view).Contains("<later>"));
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(ready, Is.EqualTo(1), "and a later chunk does not announce it again");
+            var shown = Text(view);
+            Assert.That(shown, Does.Contain("<later>"), "and the view goes on reading");
+            Assert.That(shown.IndexOf("<early>", StringComparison.Ordinal),
+                Is.LessThan(shown.IndexOf("<later>", StringComparison.Ordinal)), "in order");
+        }
+        finally { window?.Close(); pty.Dispose(); }
+    }
+
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static WeakReference AttachThenDetach(TurnConnection pty)
     {
