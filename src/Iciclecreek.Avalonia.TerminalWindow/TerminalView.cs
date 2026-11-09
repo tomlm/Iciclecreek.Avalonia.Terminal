@@ -195,6 +195,15 @@ namespace Iciclecreek.Terminal
         /// frame; a permanently frozen terminal looks like the application hung.
         /// </remarks>
         private static readonly TimeSpan AtomicUpdateTimeout = TimeSpan.FromMilliseconds(150);
+
+        /// <summary>The clock the atomic-update deadline is measured on.</summary>
+        /// <remarks>
+        /// <see cref="TimeProvider.System"/> outside tests, whose timestamps ARE
+        /// <see cref="Stopwatch"/>'s. A seam so a test can step past the deadline instead of
+        /// sleeping through it and hoping the machine kept up. Set it before the first update opens:
+        /// the start and the elapsed time must be read off the same clock.
+        /// </remarks>
+        internal TimeProvider AtomicUpdateClock { get; set; } = TimeProvider.System;
         private CancellationTokenSource? _processCts;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         private int _processExitHandled;    // 0=false, 1=true — claimed via TryClaimExit
@@ -2125,7 +2134,7 @@ namespace Iciclecreek.Terminal
         /// </remarks>
         private void BeginAtomicUpdate()
         {
-            _atomicUpdateStartedAt = Stopwatch.GetTimestamp();
+            _atomicUpdateStartedAt = AtomicUpdateClock.GetTimestamp();
             _atomicUpdate = true;
         }
 
